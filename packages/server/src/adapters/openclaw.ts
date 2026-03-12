@@ -1,11 +1,10 @@
 /**
  * OpenClaw Adapter
  * 
- * WebSocket-based control of OpenClaw instances.
- * Connects to OpenClaw gateway, sends tasks via cron API, receives results.
+ * HTTP-based control of OpenClaw instances.
+ * Uses the gateway HTTP API to spawn sessions and get results.
  */
 
-import WebSocket from 'ws';
 import type { 
   AdapterConfig, 
   AdapterState, 
@@ -16,35 +15,33 @@ import type { AdapterContext, AdapterImplementation } from './types';
 
 interface OpenClawConfig extends AdapterConfig {
   options?: {
-    /** Gateway URL (e.g., ws://localhost:3000) */
+    /** Gateway URL (e.g., http://localhost:18789) */
     gatewayUrl: string;
     /** Gateway token for auth */
     gatewayToken: string;
-    /** Model to use */
+    /** Model to use (e.g., anthropic/claude-sonnet-4-20250514) */
     model?: string;
     /** Thinking level */
     thinking?: 'off' | 'low' | 'medium' | 'high';
+    /** Timeout in seconds */
+    timeoutSeconds?: number;
   };
 }
 
 interface PendingTask {
   turnId: string;
   startedAt: Date;
-  resolve: (result: unknown) => void;
-  reject: (error: Error) => void;
+  sessionKey?: string;
+  pollInterval?: ReturnType<typeof setInterval>;
 }
 
 export class OpenClawAdapter implements AdapterImplementation {
   private ctx!: AdapterContext;
   private config: OpenClawConfig;
-  private ws: WebSocket | null = null;
   private state: AdapterState = {
     status: 'disconnected',
   };
   private pendingTasks = new Map<string, PendingTask>();
-  private messageId = 0;
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
 
   constructor(config: OpenClawConfig) {
     this.config = config;
@@ -57,8 +54,8 @@ export class OpenClawAdapter implements AdapterImplementation {
 
   getCapabilities(): AdapterCapabilities {
     return {
-      streaming: true,
-      interruptible: true,
+      streaming: false, // HTTP doesn't stream, we poll
+      interruptible: false, // Can't interrupt spawned sessions easily
       concurrent: true,
       maxConcurrency: 5,
       fileWatch: false,
@@ -83,73 +80,59 @@ export class OpenClawAdapter implements AdapterImplementation {
     this.updateState({ status: 'connecting' });
     this.ctx.log.info(`Connecting to OpenClaw at ${gatewayUrl}...`);
 
-    return new Promise((resolve, reject) => {
-      try {
-        this.ws = new WebSocket(gatewayUrl, {
-          headers: {
-            'Authorization': `Bearer ${gatewayToken}`,
-          },
-        });
+    try {
+      // Test connection with health check
+      const response = await fetch(`${gatewayUrl}/health`, {
+        headers: {
+          'Authorization': `Bearer ${gatewayToken}`,
+        },
+      });
 
-        this.ws.on('open', () => {
-          this.ctx.log.info('OpenClaw WebSocket connected');
-          this.reconnectAttempts = 0;
-          this.updateState({ 
-            status: 'ready',
-            activeThreadId: crypto.randomUUID(),
-          });
-          
-          this.ctx.emitEvent({
-            type: 'session.started',
-            threadId: this.state.activeThreadId!,
-          });
-          
-          resolve();
-        });
-
-        this.ws.on('message', (data) => {
-          this.handleMessage(data.toString());
-        });
-
-        this.ws.on('close', () => {
-          this.ctx.log.warn('OpenClaw WebSocket closed');
-          this.updateState({ status: 'disconnected' });
-          this.attemptReconnect();
-        });
-
-        this.ws.on('error', (error) => {
-          this.ctx.log.error('OpenClaw WebSocket error:', error.message);
-          if (this.state.status === 'connecting') {
-            reject(error);
-          }
-        });
-
-      } catch (error) {
-        this.updateState({ 
-          status: 'error', 
-          lastError: error instanceof Error ? error.message : 'Connection failed' 
-        });
-        reject(error);
+      if (!response.ok) {
+        throw new Error(`Health check failed: ${response.status}`);
       }
-    });
+
+      this.updateState({ 
+        status: 'ready',
+        activeThreadId: crypto.randomUUID(),
+      });
+
+      this.ctx.emitEvent({
+        type: 'session.started',
+        threadId: this.state.activeThreadId!,
+      });
+
+      this.ctx.log.info('OpenClaw connected');
+
+    } catch (error) {
+      this.updateState({ 
+        status: 'error', 
+        lastError: error instanceof Error ? error.message : 'Connection failed' 
+      });
+      throw error;
+    }
   }
 
   async disconnect(): Promise<void> {
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
+    // Clear all pending task polls
+    for (const [, task] of this.pendingTasks) {
+      if (task.pollInterval) {
+        clearInterval(task.pollInterval);
+      }
     }
+    this.pendingTasks.clear();
+    
     this.updateState({ status: 'disconnected' });
     this.ctx.log.info('OpenClaw disconnected');
   }
 
   async send(options: SendOptions): Promise<{ turnId: string }> {
-    if (!this.ws || this.state.status !== 'ready') {
+    if (this.state.status !== 'ready') {
       throw new Error('Not connected');
     }
 
+    const { gatewayUrl, gatewayToken } = this.config.options ?? {};
     const turnId = crypto.randomUUID();
-    const taskId = `task-${turnId.slice(0, 8)}`;
     
     this.ctx.emitEvent({
       type: 'turn.started',
@@ -157,50 +140,70 @@ export class OpenClawAdapter implements AdapterImplementation {
       turnId,
     });
 
-    // Create task via cron API
-    const cronJob = {
-      name: taskId,
-      schedule: { kind: 'at', at: new Date().toISOString() },
-      sessionTarget: 'isolated',
-      deleteAfterRun: true,
-      payload: {
-        kind: 'agentTurn',
-        message: this.formatMessage(options),
-        model: options.model ?? this.config.options?.model,
-        thinking: this.config.options?.thinking ?? 'low',
-        timeoutSeconds: 300,
-      },
-      delivery: {
-        mode: 'announce',
-        channel: 'fleet',
-        to: `default:task:${turnId}`,
-      },
-    };
+    const startedAt = new Date();
 
-    const requestId = this.sendRequest('cron.add', cronJob);
-
-    // Track pending task
-    return new Promise((resolve, reject) => {
-      this.pendingTasks.set(turnId, {
-        turnId,
-        startedAt: new Date(),
-        resolve: () => resolve({ turnId }),
-        reject,
+    try {
+      // Spawn an isolated session via the API
+      const response = await fetch(`${gatewayUrl}/api/sessions/spawn`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${gatewayToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          task: this.formatMessage(options),
+          label: `acc-${turnId.slice(0, 8)}`,
+          model: options.model ?? this.config.options?.model,
+          thinking: this.config.options?.thinking ?? 'low',
+          runTimeoutSeconds: this.config.options?.timeoutSeconds ?? 300,
+        }),
       });
 
-      // Set timeout
-      setTimeout(() => {
-        if (this.pendingTasks.has(turnId)) {
-          this.pendingTasks.delete(turnId);
-          reject(new Error('Task timeout'));
-        }
-      }, 300000); // 5 min timeout
-    });
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`Spawn failed: ${error}`);
+      }
+
+      const result = await response.json() as { 
+        status: string; 
+        childSessionKey?: string;
+        runId?: string;
+      };
+
+      this.ctx.log.info(`Spawned session: ${result.childSessionKey}`);
+
+      // Track the pending task
+      const task: PendingTask = {
+        turnId,
+        startedAt,
+        sessionKey: result.childSessionKey,
+      };
+      this.pendingTasks.set(turnId, task);
+
+      // Start polling for completion
+      this.pollForCompletion(turnId, result.childSessionKey!);
+
+      return { turnId };
+
+    } catch (error) {
+      this.ctx.emitEvent({
+        type: 'turn.completed',
+        threadId: this.state.activeThreadId!,
+        turnId,
+        status: 'failed',
+        reason: error instanceof Error ? error.message : 'Unknown error',
+        durationMs: Date.now() - startedAt.getTime(),
+      });
+      throw error;
+    }
   }
 
   async interrupt(): Promise<void> {
-    // Cancel all pending tasks
+    // Clear all polls - sessions will continue but we stop tracking
     for (const [turnId, task] of this.pendingTasks) {
+      if (task.pollInterval) {
+        clearInterval(task.pollInterval);
+      }
       this.ctx.emitEvent({
         type: 'turn.completed',
         threadId: this.state.activeThreadId!,
@@ -208,7 +211,6 @@ export class OpenClawAdapter implements AdapterImplementation {
         status: 'interrupted',
         durationMs: Date.now() - task.startedAt.getTime(),
       });
-      task.reject(new Error('Interrupted'));
     }
     this.pendingTasks.clear();
     this.ctx.log.info('OpenClaw tasks interrupted');
@@ -229,13 +231,6 @@ export class OpenClawAdapter implements AdapterImplementation {
     });
   }
 
-  private sendRequest(method: string, params: unknown): number {
-    const id = ++this.messageId;
-    const message = JSON.stringify({ id, method, params });
-    this.ws?.send(message);
-    return id;
-  }
-
   private formatMessage(options: SendOptions): string {
     let message = options.message;
     
@@ -246,98 +241,80 @@ export class OpenClawAdapter implements AdapterImplementation {
     return message;
   }
 
-  private handleMessage(data: string): void {
-    try {
-      const msg = JSON.parse(data);
+  private pollForCompletion(turnId: string, sessionKey: string): void {
+    const { gatewayUrl, gatewayToken } = this.config.options ?? {};
+    const task = this.pendingTasks.get(turnId);
+    if (!task) return;
 
-      // Handle RPC responses
-      if (msg.id && msg.result) {
-        this.ctx.log.info(`RPC response ${msg.id}:`, msg.result);
+    let pollCount = 0;
+    const maxPolls = 60; // 5 minutes at 5s intervals
+
+    task.pollInterval = setInterval(async () => {
+      pollCount++;
+      
+      if (pollCount > maxPolls) {
+        clearInterval(task.pollInterval);
+        this.pendingTasks.delete(turnId);
+        this.ctx.emitEvent({
+          type: 'turn.completed',
+          threadId: this.state.activeThreadId!,
+          turnId,
+          status: 'failed',
+          reason: 'Polling timeout',
+          durationMs: Date.now() - task.startedAt.getTime(),
+        });
         return;
       }
 
-      // Handle events
-      if (msg.type === 'event') {
-        this.handleEvent(msg);
-        return;
+      try {
+        // Check session status via history endpoint
+        const response = await fetch(
+          `${gatewayUrl}/api/sessions/${encodeURIComponent(sessionKey)}/history?limit=1`,
+          {
+            headers: {
+              'Authorization': `Bearer ${gatewayToken}`,
+            },
+          }
+        );
+
+        if (!response.ok) {
+          this.ctx.log.warn(`Poll failed: ${response.status}`);
+          return;
+        }
+
+        const data = await response.json() as { 
+          messages?: Array<{ role: string; content: string }>;
+          status?: string;
+        };
+
+        // Check if session has completed (look for assistant message)
+        const assistantMessage = data.messages?.find(m => m.role === 'assistant');
+        if (assistantMessage) {
+          clearInterval(task.pollInterval);
+          this.pendingTasks.delete(turnId);
+
+          this.ctx.emitEvent({
+            type: 'content.delta',
+            threadId: this.state.activeThreadId!,
+            turnId,
+            payload: {
+              streamKind: 'assistant_text',
+              delta: assistantMessage.content,
+            },
+          });
+
+          this.ctx.emitEvent({
+            type: 'turn.completed',
+            threadId: this.state.activeThreadId!,
+            turnId,
+            status: 'completed',
+            durationMs: Date.now() - task.startedAt.getTime(),
+          });
+        }
+      } catch (error) {
+        this.ctx.log.warn(`Poll error: ${error}`);
       }
-
-      // Handle fleet callbacks (task results)
-      if (msg.type === 'result' || msg.taskId) {
-        this.handleTaskResult(msg);
-        return;
-      }
-
-    } catch (error) {
-      this.ctx.log.error('Failed to parse message:', error);
-    }
-  }
-
-  private handleEvent(msg: { event: string; data: unknown }): void {
-    this.ctx.log.info(`OpenClaw event: ${msg.event}`);
-    
-    // Map OpenClaw events to our event types
-    // This is a simplified mapping - expand as needed
-    this.ctx.emitEvent({
-      type: 'content.delta',
-      threadId: this.state.activeThreadId!,
-      payload: {
-        streamKind: 'assistant_text',
-        delta: JSON.stringify(msg.data),
-      },
-    });
-  }
-
-  private handleTaskResult(msg: { taskId?: string; turnId?: string; result?: string; status?: string }): void {
-    const turnId = msg.turnId ?? msg.taskId?.replace('task-', '');
-    if (!turnId) return;
-
-    const pending = this.pendingTasks.get(turnId);
-    if (!pending) return;
-
-    const durationMs = Date.now() - pending.startedAt.getTime();
-    
-    this.ctx.emitEvent({
-      type: 'turn.completed',
-      threadId: this.state.activeThreadId!,
-      turnId,
-      status: msg.status === 'error' ? 'failed' : 'completed',
-      durationMs,
-    });
-
-    if (msg.result) {
-      this.ctx.emitEvent({
-        type: 'content.delta',
-        threadId: this.state.activeThreadId!,
-        turnId,
-        payload: {
-          streamKind: 'assistant_text',
-          delta: msg.result,
-        },
-      });
-    }
-
-    this.pendingTasks.delete(turnId);
-    pending.resolve(msg);
-  }
-
-  private attemptReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.ctx.log.error('Max reconnect attempts reached');
-      this.updateState({ status: 'error', lastError: 'Connection lost' });
-      return;
-    }
-
-    this.reconnectAttempts++;
-    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-    
-    this.ctx.log.info(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})...`);
-    
-    setTimeout(() => {
-      this.connect().catch((error) => {
-        this.ctx.log.error('Reconnect failed:', error);
-      });
-    }, delay);
+    }, 5000); // Poll every 5 seconds
   }
 }
 
