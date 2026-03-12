@@ -1,0 +1,26 @@
+{
+  "name": "@acc/channel",
+  "version": "0.1.0",
+  "description": "OpenClaw channel plugin for Agent Command Center",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts",
+    "dev": "tsup src/index.ts --format esm --dts --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["openclaw", "channel", "agent-command-center"],
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  }
+}

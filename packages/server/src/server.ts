@@ -19,12 +19,21 @@ interface ManagedAdapter {
   config: AdapterConfig;
 }
 
+interface ConnectedAgent {
+  ws: WebSocket;
+  name: string;
+  capabilities: string[];
+  connectedAt: Date;
+  pendingTasks: Map<string, { resolve: (result: string) => void; reject: (error: Error) => void }>;
+}
+
 export class CommandCenterServer {
   private app: Hono;
   private httpServer: Server | null = null;
   private wss: WebSocketServer | null = null;
   private adapters = new Map<string, ManagedAdapter>();
   private clients = new Set<WebSocket>();
+  private connectedAgents = new Map<string, ConnectedAgent>();
   private port: number;
 
   constructor(port = 3333) {
@@ -150,6 +159,33 @@ export class CommandCenterServer {
       return c.json({ ok: true });
     });
 
+    // ============ Agent Channel Routes ============
+
+    // List connected agents
+    this.app.get('/agents', (c) => {
+      const agents = this.getConnectedAgents();
+      return c.json({ agents });
+    });
+
+    // Send task to agent
+    this.app.post('/agents/:name/task', async (c) => {
+      const name = c.req.param('name');
+      const { message } = await c.req.json<{ message: string }>();
+      const taskId = crypto.randomUUID();
+      
+      try {
+        const result = await this.sendTaskToAgent(name, taskId, message);
+        return c.json({ ok: true, taskId, result });
+      } catch (error) {
+        return c.json({ 
+          ok: false, 
+          error: error instanceof Error ? error.message : 'Task failed' 
+        }, 500);
+      }
+    });
+
+    // ============ Integration Routes ============
+
     // CodeRabbit review
     this.app.post('/coderabbit/review', async (c) => {
       const { cwd } = await c.req.json<{ cwd: string }>();
@@ -238,6 +274,198 @@ export class CommandCenterServer {
     }
   }
 
+  // ============ Agent Channel Methods ============
+
+  private handleAgentConnection(ws: WebSocket, req: import('http').IncomingMessage): void {
+    const agentName = req.headers['x-agent-name'] as string ?? `agent-${Date.now()}`;
+    const token = req.headers['authorization']?.replace('Bearer ', '');
+    
+    console.log(`Agent connecting: ${agentName}`);
+    
+    // TODO: Validate token
+    
+    const agent: ConnectedAgent = {
+      ws,
+      name: agentName,
+      capabilities: [],
+      connectedAt: new Date(),
+      pendingTasks: new Map(),
+    };
+    
+    ws.on('message', (data) => {
+      this.handleAgentMessage(agentName, data.toString());
+    });
+    
+    ws.on('close', () => {
+      console.log(`Agent disconnected: ${agentName}`);
+      this.connectedAgents.delete(agentName);
+      this.broadcastEvent({
+        type: 'agent.disconnected',
+        adapterId: agentName,
+        timestamp: new Date(),
+        payload: { agentName },
+      });
+    });
+    
+    // Don't add to connectedAgents until registered
+    // Store temporarily for registration
+    (ws as any)._pendingAgent = agent;
+  }
+
+  private handleAgentMessage(agentName: string, data: string): void {
+    try {
+      const msg = JSON.parse(data);
+      
+      switch (msg.type) {
+        case 'register': {
+          const ws = this.connectedAgents.get(agentName)?.ws ?? 
+            Array.from(this.wss?.clients ?? []).find((c: any) => c._pendingAgent?.name === agentName);
+          if (ws) {
+            const agent = (ws as any)._pendingAgent as ConnectedAgent;
+            agent.capabilities = msg.metadata?.capabilities ?? [];
+            this.connectedAgents.set(agentName, agent);
+            delete (ws as any)._pendingAgent;
+            
+            console.log(`Agent registered: ${agentName} with capabilities:`, agent.capabilities);
+            
+            this.broadcastEvent({
+              type: 'agent.connected',
+              adapterId: agentName,
+              timestamp: new Date(),
+              payload: { agentName, capabilities: agent.capabilities },
+            });
+          }
+          break;
+        }
+        
+        case 'task.started': {
+          console.log(`Task started on ${agentName}: ${msg.taskId}`);
+          this.broadcastEvent({
+            type: 'turn.started',
+            adapterId: agentName,
+            timestamp: new Date(),
+            threadId: agentName,
+            turnId: msg.taskId,
+          });
+          break;
+        }
+        
+        case 'content.delta': {
+          this.broadcastEvent({
+            type: 'content.delta',
+            adapterId: agentName,
+            timestamp: new Date(),
+            threadId: agentName,
+            turnId: msg.taskId,
+            payload: {
+              streamKind: 'assistant_text',
+              delta: msg.content,
+            },
+          });
+          break;
+        }
+        
+        case 'task.completed': {
+          console.log(`Task completed on ${agentName}: ${msg.taskId}`);
+          
+          const agent = this.connectedAgents.get(agentName);
+          const pending = agent?.pendingTasks.get(msg.taskId);
+          if (pending) {
+            pending.resolve(msg.content ?? '');
+            agent?.pendingTasks.delete(msg.taskId);
+          }
+          
+          this.broadcastEvent({
+            type: 'turn.completed',
+            adapterId: agentName,
+            timestamp: new Date(),
+            threadId: agentName,
+            turnId: msg.taskId,
+            status: msg.status ?? 'completed',
+            payload: { result: msg.content },
+          });
+          break;
+        }
+        
+        case 'task.error': {
+          console.error(`Task error on ${agentName}: ${msg.taskId} - ${msg.error}`);
+          
+          const agent = this.connectedAgents.get(agentName);
+          const pending = agent?.pendingTasks.get(msg.taskId);
+          if (pending) {
+            pending.reject(new Error(msg.error));
+            agent?.pendingTasks.delete(msg.taskId);
+          }
+          
+          this.broadcastEvent({
+            type: 'turn.completed',
+            adapterId: agentName,
+            timestamp: new Date(),
+            threadId: agentName,
+            turnId: msg.taskId,
+            status: 'failed',
+            reason: msg.error,
+          });
+          break;
+        }
+        
+        case 'pong':
+          // Heartbeat response, ignore
+          break;
+        
+        default:
+          console.warn(`Unknown agent message type: ${msg.type}`);
+      }
+    } catch (error) {
+      console.error('Failed to handle agent message:', error);
+    }
+  }
+
+  /** Send a task to a connected agent */
+  async sendTaskToAgent(agentName: string, taskId: string, message: string): Promise<string> {
+    const agent = this.connectedAgents.get(agentName);
+    if (!agent) {
+      throw new Error(`Agent not connected: ${agentName}`);
+    }
+    
+    return new Promise((resolve, reject) => {
+      agent.pendingTasks.set(taskId, { resolve, reject });
+      
+      agent.ws.send(JSON.stringify({
+        type: 'task.send',
+        taskId,
+        message,
+      }));
+      
+      // Timeout after 5 minutes
+      setTimeout(() => {
+        if (agent.pendingTasks.has(taskId)) {
+          agent.pendingTasks.delete(taskId);
+          reject(new Error('Task timeout'));
+        }
+      }, 300000);
+    });
+  }
+
+  /** List connected agents */
+  getConnectedAgents(): Array<{ name: string; capabilities: string[]; connectedAt: Date }> {
+    return Array.from(this.connectedAgents.values()).map(a => ({
+      name: a.name,
+      capabilities: a.capabilities,
+      connectedAt: a.connectedAt,
+    }));
+  }
+
+  private handleUIMessage(ws: WebSocket, data: string): void {
+    try {
+      const msg = JSON.parse(data);
+      console.log('UI message:', msg);
+      // Handle UI commands if needed
+    } catch (error) {
+      console.error('Failed to handle UI message:', error);
+    }
+  }
+
   async start(): Promise<void> {
     return new Promise((resolve) => {
       // Create HTTP server with Hono handler
@@ -277,18 +505,27 @@ export class CommandCenterServer {
       // Setup WebSocket server on same http server
       this.wss = new WebSocketServer({ server: this.httpServer });
       
-      this.wss.on('connection', (ws) => {
-        console.log('Client connected');
-        this.clients.add(ws);
+      this.wss.on('connection', (ws, req) => {
+        const url = new URL(req.url ?? '/', `http://localhost:${this.port}`);
+        const isChannel = url.pathname === '/channel';
         
-        ws.on('close', () => {
-          console.log('Client disconnected');
-          this.clients.delete(ws);
-        });
-        
-        ws.on('message', (data) => {
-          console.log('Received:', data.toString());
-        });
+        if (isChannel) {
+          // Agent channel connection
+          this.handleAgentConnection(ws, req);
+        } else {
+          // UI client connection
+          console.log('UI client connected');
+          this.clients.add(ws);
+          
+          ws.on('close', () => {
+            console.log('UI client disconnected');
+            this.clients.delete(ws);
+          });
+          
+          ws.on('message', (data) => {
+            this.handleUIMessage(ws, data.toString());
+          });
+        }
       });
       
       this.httpServer.listen(this.port, () => {
