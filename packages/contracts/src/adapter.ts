@@ -90,7 +90,11 @@ export interface AdapterEvent {
   threadId?: string;
   turnId?: string;
   timestamp: Date;
-  payload: unknown;
+  payload?: unknown;
+  // Common event fields (optional, depends on event type)
+  status?: string;
+  reason?: string;
+  durationMs?: number;
 }
 
 /**

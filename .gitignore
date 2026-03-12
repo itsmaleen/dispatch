@@ -1,44 +1,34 @@
 # Dependencies
 node_modules/
+.bun/
 
-# Build / output
+# Build outputs
 dist/
-build/
 out/
 *.tsbuildinfo
 
-# Environment and secrets
-.env
-.env.local
-.env.*.local
-*.pem
+# Electron
+release/
 
-# Logs and debug
-logs/
+# Logs
 *.log
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
 
-# OS files
+# OS
 .DS_Store
 Thumbs.db
 
-# Editor / IDE
-.idea/
+# IDE
 .vscode/
+.idea/
 *.swp
-*.swo
-*~
 
-# Testing and coverage
-coverage/
-.nyc_output/
-*.lcov
+# Environment
+.env
+.env.local
+.env.*.local
 
-# Misc
-.cache/
-.temp/
-tmp/
-temp/
+# Lock files (keep bun.lock)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml

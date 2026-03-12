@@ -5,10 +5,10 @@
  * Manages adapters, streams events, handles integrations.
  */
 
+import { createServer, type Server } from 'http';
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { WebSocketServer, WebSocket } from 'ws';
-import type { Server } from 'http';
 import type { AdapterConfig, AdapterEvent } from '@acc/contracts';
 import type { AdapterImplementation, AdapterContext } from './adapters/types';
 import { createClaudeCodeAdapter } from './adapters/claude-code';
@@ -21,13 +21,13 @@ interface ManagedAdapter {
 
 export class CommandCenterServer {
   private app: Hono;
-  private server: Server | null = null;
+  private httpServer: Server | null = null;
   private wss: WebSocketServer | null = null;
   private adapters = new Map<string, ManagedAdapter>();
   private clients = new Set<WebSocket>();
   private port: number;
 
-  constructor(port = 3001) {
+  constructor(port = 3333) {
     this.port = port;
     this.app = new Hono();
     this.setupRoutes();
@@ -240,30 +240,59 @@ export class CommandCenterServer {
 
   async start(): Promise<void> {
     return new Promise((resolve) => {
-      this.server = serve({
-        fetch: this.app.fetch,
-        port: this.port,
-      }, () => {
-        console.log(`Command Center server running on http://localhost:${this.port}`);
+      // Create HTTP server with Hono handler
+      this.httpServer = createServer(async (req, res) => {
+        const url = new URL(req.url ?? '/', `http://localhost:${this.port}`);
         
-        // Setup WebSocket server
-        this.wss = new WebSocketServer({ server: this.server! });
+        // Read body for POST requests
+        let body: string | undefined;
+        if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
+          body = await new Promise<string>((resolve) => {
+            let data = '';
+            req.on('data', chunk => data += chunk);
+            req.on('end', () => resolve(data));
+          });
+        }
         
-        this.wss.on('connection', (ws) => {
-          console.log('Client connected');
-          this.clients.add(ws);
-          
-          ws.on('close', () => {
-            console.log('Client disconnected');
-            this.clients.delete(ws);
-          });
-          
-          ws.on('message', (data) => {
-            // Handle incoming messages if needed
-            console.log('Received:', data.toString());
-          });
+        const request = new Request(url.toString(), {
+          method: req.method,
+          headers: req.headers as HeadersInit,
+          body: body,
         });
         
+        try {
+          const response = await this.app.fetch(request);
+          res.statusCode = response.status;
+          response.headers.forEach((value: string, key: string) => {
+            res.setHeader(key, value);
+          });
+          const responseBody = await response.text();
+          res.end(responseBody);
+        } catch (err: unknown) {
+          res.statusCode = 500;
+          res.end(err instanceof Error ? err.message : 'Internal error');
+        }
+      });
+      
+      // Setup WebSocket server on same http server
+      this.wss = new WebSocketServer({ server: this.httpServer });
+      
+      this.wss.on('connection', (ws) => {
+        console.log('Client connected');
+        this.clients.add(ws);
+        
+        ws.on('close', () => {
+          console.log('Client disconnected');
+          this.clients.delete(ws);
+        });
+        
+        ws.on('message', (data) => {
+          console.log('Received:', data.toString());
+        });
+      });
+      
+      this.httpServer.listen(this.port, () => {
+        console.log(`Command Center server running on http://localhost:${this.port}`);
         resolve();
       });
     });
@@ -271,7 +300,7 @@ export class CommandCenterServer {
 
   async stop(): Promise<void> {
     // Cleanup adapters
-    for (const [id, managed] of this.adapters) {
+    for (const [, managed] of this.adapters) {
       await managed.implementation.destroy();
     }
     this.adapters.clear();
@@ -284,7 +313,7 @@ export class CommandCenterServer {
 
     // Close servers
     this.wss?.close();
-    this.server?.close();
+    this.httpServer?.close();
   }
 }
 
