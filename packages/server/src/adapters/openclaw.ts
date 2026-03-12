@@ -143,8 +143,9 @@ export class OpenClawAdapter implements AdapterImplementation {
     const startedAt = new Date();
 
     try {
-      // Spawn an isolated session via the API
-      const response = await fetch(`${gatewayUrl}/api/sessions/spawn`, {
+      // Send task via config-receiver /task endpoint
+      // This is used by docker/EC2 agents with config-receiver installed
+      const response = await fetch(`${gatewayUrl}/task`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${gatewayToken}`,
@@ -152,10 +153,9 @@ export class OpenClawAdapter implements AdapterImplementation {
         },
         body: JSON.stringify({
           task: this.formatMessage(options),
-          label: `acc-${turnId.slice(0, 8)}`,
+          taskId: turnId,
           model: options.model ?? this.config.options?.model,
-          thinking: this.config.options?.thinking ?? 'low',
-          runTimeoutSeconds: this.config.options?.timeoutSeconds ?? 300,
+          callback: this.config.options?.callbackUrl, // Optional webhook for results
         }),
       });
 

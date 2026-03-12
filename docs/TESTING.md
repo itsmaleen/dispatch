@@ -59,10 +59,18 @@ Check `/tmp/acc-server.log` for Claude Code output.
 
 ## Test OpenClaw Adapter
 
-### 1. Get Gateway Info
-Your OpenClaw config is at `~/.openclaw/openclaw.json`. Find:
-- `gateway.port` (default: 18789)
-- `gateway.auth.token`
+The OpenClaw adapter uses the config-receiver `/task` endpoint, which is installed on docker/EC2 agents.
+
+### Prerequisites
+- A running OpenClaw instance with config-receiver (docker or EC2)
+- The instance's tunnel URL (e.g., `https://agent-name.viewholly.com`)
+- The gateway token
+
+### 1. Check Instance Status
+```bash
+curl https://YOUR-AGENT.viewholly.com/status
+# Should return {"status":"idle","busy":false}
+```
 
 ### 2. Create Adapter
 ```bash
@@ -71,11 +79,11 @@ curl -X POST http://localhost:3333/adapters \
   -d '{
     "id": "oc1",
     "kind": "openclaw",
-    "name": "OpenClaw Local",
+    "name": "Remote Agent",
     "options": {
-      "gatewayUrl": "http://localhost:18789",
-      "gatewayToken": "YOUR_TOKEN_HERE",
-      "model": "groq/llama-3.3-70b-versatile"
+      "gatewayUrl": "https://YOUR-AGENT.viewholly.com",
+      "gatewayToken": "YOUR_GATEWAY_TOKEN",
+      "model": "moonshot/kimi-k2.5"
     }
   }'
 ```
@@ -85,7 +93,7 @@ curl -X POST http://localhost:3333/adapters \
 curl -X POST http://localhost:3333/adapters/oc1/connect
 ```
 
-### 4. Send Message
+### 4. Send Task
 ```bash
 curl -X POST http://localhost:3333/adapters/oc1/send \
   -H "Content-Type: application/json" \
@@ -93,9 +101,9 @@ curl -X POST http://localhost:3333/adapters/oc1/send \
 ```
 
 ### Notes
-- Spawns an isolated session via `/api/sessions/spawn`
-- Polls for completion every 5 seconds
-- Results arrive via polling (no streaming)
+- Uses config-receiver `/task` endpoint
+- Agent runs task in isolated session
+- Results retrieved via polling (config-receiver v2.17+ supports callbacks)
 
 ## Test with Remote OpenClaw (EC2)
 
