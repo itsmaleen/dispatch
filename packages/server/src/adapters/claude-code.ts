@@ -20,10 +20,15 @@ interface ClaudeCodeConfig extends AdapterConfig {
     binaryPath?: string;
     /** Model to use */
     model?: string;
-    /** Enable auto-accept for safe operations */
+    /**
+     * Enable auto-accept for safe operations (--dangerously-skip-permissions).
+     * Set to true for headless/non-TTY use to avoid approval prompts that can hang.
+     */
     autoAccept?: boolean;
     /** Use --print mode for single-shot execution */
     printMode?: boolean;
+    /** Per-turn timeout in ms; no timeout if unset. Prevents adapter staying "running" forever. */
+    turnTimeoutMs?: number;
   };
 }
 
@@ -37,6 +42,8 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
   private outputBuffer = '';
   private currentTurnId: string | null = null;
   private turnStartTime: number = 0;
+  private turnTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private hasReceivedOutputThisTurn = false;
 
   constructor(config: ClaudeCodeConfig) {
     this.config = config;
@@ -104,10 +111,12 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
   }
 
   async disconnect(): Promise<void> {
+    this.clearTurnTimeout();
     if (this.process) {
       this.process.kill('SIGTERM');
       this.process = null;
     }
+    this.currentTurnId = null;
     this.updateState({ status: 'disconnected' });
     this.ctx.log.info('Claude Code disconnected');
   }
@@ -121,6 +130,7 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
     this.currentTurnId = turnId;
     this.turnStartTime = Date.now();
     this.outputBuffer = '';
+    this.hasReceivedOutputThisTurn = false;
     this.updateState({ status: 'running', activeTurnId: turnId });
 
     this.ctx.emitEvent({
@@ -158,6 +168,10 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
+    // Close stdin so CLI gets EOF and does not block waiting for input (e.g. approval prompts)
+    this.process.stdin?.end();
+    this.ctx.log.info('Claude Code process spawned, stdin closed');
+
     // Stream stdout
     this.process.stdout?.on('data', (chunk: Buffer) => {
       const data = chunk.toString('utf-8');
@@ -172,31 +186,59 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       this.handleOutput(data);
     });
 
+    // Per-turn timeout so we eventually complete and do not stay "running" forever
+    const turnTimeoutMs = this.config.options?.turnTimeoutMs;
+    if (turnTimeoutMs != null && turnTimeoutMs > 0) {
+      this.turnTimeoutId = setTimeout(() => {
+        this.turnTimeoutId = null;
+        if (!this.process || !this.currentTurnId) return;
+        this.ctx.log.warn(`Claude Code turn timed out after ${turnTimeoutMs}ms`);
+        this.process.kill('SIGTERM');
+        this.ctx.emitEvent({
+          type: 'turn.completed',
+          threadId: this.state.activeThreadId!,
+          turnId: this.currentTurnId,
+          status: 'failed',
+          reason: 'Turn timed out',
+          durationMs: Date.now() - this.turnStartTime,
+        });
+        this.updateState({ status: 'ready', activeTurnId: undefined });
+        this.currentTurnId = null;
+        this.process = null;
+      }, turnTimeoutMs);
+    }
+
     // Handle completion
     this.process.on('close', (code) => {
+      this.clearTurnTimeout();
+      const turnId = this.currentTurnId;
+      if (turnId == null) return; // Already completed (e.g. by timeout)
       const durationMs = Date.now() - this.turnStartTime;
-      
+
       this.ctx.log.info(`Claude Code exited with code ${code} (${durationMs}ms)`);
-      
+
       this.ctx.emitEvent({
         type: 'turn.completed',
         threadId: this.state.activeThreadId!,
-        turnId: this.currentTurnId!,
+        turnId,
         status: code === 0 ? 'completed' : 'failed',
         durationMs,
       });
-      
+
       this.updateState({ status: 'ready', activeTurnId: undefined });
       this.currentTurnId = null;
       this.process = null;
     });
 
     this.process.on('error', (err) => {
+      this.clearTurnTimeout();
+      const turnId = this.currentTurnId;
+      if (turnId == null) return;
       this.ctx.log.error(`Claude Code process error: ${err.message}`);
       this.ctx.emitEvent({
         type: 'turn.completed',
         threadId: this.state.activeThreadId!,
-        turnId: this.currentTurnId!,
+        turnId,
         status: 'failed',
         reason: err.message,
         durationMs: Date.now() - this.turnStartTime,
@@ -234,6 +276,13 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
 
   // ============ Private Methods ============
 
+  private clearTurnTimeout(): void {
+    if (this.turnTimeoutId != null) {
+      clearTimeout(this.turnTimeoutId);
+      this.turnTimeoutId = null;
+    }
+  }
+
   private updateState(partial: Partial<AdapterState>): void {
     this.state = { ...this.state, ...partial };
     this.ctx.emitEvent({
@@ -244,8 +293,12 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
   }
 
   private handleOutput(data: string): void {
+    if (data.length > 0 && !this.hasReceivedOutputThisTurn) {
+      this.hasReceivedOutputThisTurn = true;
+      this.ctx.log.info('Claude Code first output received');
+    }
     this.outputBuffer += data;
-    
+
     // Stream content delta
     this.ctx.emitEvent({
       type: 'content.delta',

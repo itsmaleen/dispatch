@@ -89,6 +89,10 @@ ws://localhost:3333                 # Real-time event stream
 | OpenClaw | ✅ Working | WebSocket + cron API dispatch |
 | Codex | 📋 Planned | Subprocess-based |
 
+### Claude Code (headless / non-TTY)
+
+When running the server without a TTY (e.g. in the background or from another process), set **`options.autoAccept: true`** so the adapter passes `--dangerously-skip-permissions` to the CLI. Otherwise approval prompts can hang and you may never get results. Optional **`options.turnTimeoutMs`** (e.g. `300000` for 5 minutes) ensures the adapter eventually emits `turn.completed` and returns to `ready` if the subprocess does not exit.
+
 ## Event Types
 
 Events stream over WebSocket to the UI:

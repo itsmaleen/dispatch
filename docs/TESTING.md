@@ -18,6 +18,8 @@ bun run.ts
 ## Test Claude Code Adapter
 
 ### 1. Create Adapter
+Use `autoAccept: true` for headless/non-TTY so the CLI does not hang on approval prompts. Optional `turnTimeoutMs` ensures the adapter eventually completes.
+
 ```bash
 curl -X POST http://localhost:3333/adapters \
   -H "Content-Type: application/json" \
@@ -27,7 +29,9 @@ curl -X POST http://localhost:3333/adapters \
     "name": "Claude Code",
     "cwd": "/tmp",
     "options": {
-      "model": "sonnet"
+      "model": "sonnet",
+      "autoAccept": true,
+      "turnTimeoutMs": 300000
     }
   }'
 ```
@@ -37,20 +41,39 @@ curl -X POST http://localhost:3333/adapters \
 curl -X POST http://localhost:3333/adapters/cc1/connect
 ```
 
-### 3. Send Message
+### 3. View the result (run in a second terminal)
+Output is streamed over the WebSocket only. Run the watch script, then send a message from another terminal to see the reply.
+
+**Terminal A** (watch output):
+```bash
+cd packages/server
+bun run watch-output
+```
+
+**Terminal B** (send message):
 ```bash
 curl -X POST http://localhost:3333/adapters/cc1/send \
   -H "Content-Type: application/json" \
   -d '{"message": "What is 2+2? Reply with just the number."}'
 ```
 
+**Expected in Terminal A:**
+```
+Connected to ws://localhost:3333 - send a message to an adapter to see output.
+
+2+2 equals 4.
+
+--- turn.completed: completed ---
+```
+
 ### 4. Check State
 ```bash
 curl http://localhost:3333/adapters | jq '.adapters[0].state'
 ```
+After a turn finishes, `status` should be `ready` and `activeTurnId` should be absent.
 
-### 5. View Server Logs
-Check `/tmp/acc-server.log` for Claude Code output.
+### 5. Server logs
+Server stdout shows adapter lifecycle: `Claude Code process spawned, stdin closed`, `Claude Code first output received`, `Claude Code exited with code 0 (...ms)`.
 
 ### Notes
 - Uses `claude -p` (print mode) for single-shot execution

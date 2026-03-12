@@ -8,7 +8,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsup src/index.ts --format esm --dts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "watch-output": "node scripts/watch-output.mjs"
   },
   "dependencies": {
     "@acc/contracts": "workspace:*",
