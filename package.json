@@ -1,0 +1,23 @@
+{
+  "name": "agent-command-center",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Orchestrate AI coding agents from a unified interface",
+  "author": "Marlin & Molty",
+  "license": "MIT",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "clean": "turbo clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0",
+    "typescript": "^5.8.0"
+  },
+  "packageManager": "bun@1.2.0"
+}
