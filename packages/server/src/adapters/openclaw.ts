@@ -28,12 +28,8 @@ interface OpenClawConfig extends AdapterConfig {
   };
 }
 
-interface PendingTask {
-  turnId: string;
-  startedAt: Date;
-  sessionKey?: string;
-  pollInterval?: ReturnType<typeof setInterval>;
-}
+// Note: Config-receiver runs tasks synchronously
+// Results come via callback webhook if configured
 
 export class OpenClawAdapter implements AdapterImplementation {
   private ctx!: AdapterContext;
@@ -41,7 +37,6 @@ export class OpenClawAdapter implements AdapterImplementation {
   private state: AdapterState = {
     status: 'disconnected',
   };
-  private pendingTasks = new Map<string, PendingTask>();
 
   constructor(config: OpenClawConfig) {
     this.config = config;
@@ -114,14 +109,6 @@ export class OpenClawAdapter implements AdapterImplementation {
   }
 
   async disconnect(): Promise<void> {
-    // Clear all pending task polls
-    for (const [, task] of this.pendingTasks) {
-      if (task.pollInterval) {
-        clearInterval(task.pollInterval);
-      }
-    }
-    this.pendingTasks.clear();
-    
     this.updateState({ status: 'disconnected' });
     this.ctx.log.info('OpenClaw disconnected');
   }
@@ -165,23 +152,30 @@ export class OpenClawAdapter implements AdapterImplementation {
       }
 
       const result = await response.json() as { 
-        status: string; 
-        childSessionKey?: string;
-        runId?: string;
+        ok: boolean;
+        taskId?: string;
+        jobId?: string;
+        message?: string;
+        error?: string;
       };
 
-      this.ctx.log.info(`Spawned session: ${result.childSessionKey}`);
+      if (!result.ok) {
+        throw new Error(result.error ?? 'Task injection failed');
+      }
 
-      // Track the pending task
-      const task: PendingTask = {
+      this.ctx.log.info(`Task injected: ${result.taskId ?? result.jobId}`);
+
+      // Config-receiver runs tasks synchronously in main session
+      // Mark as completed immediately (results come via callback if configured)
+      const durationMs = Date.now() - startedAt.getTime();
+      
+      this.ctx.emitEvent({
+        type: 'turn.completed',
+        threadId: this.state.activeThreadId!,
         turnId,
-        startedAt,
-        sessionKey: result.childSessionKey,
-      };
-      this.pendingTasks.set(turnId, task);
-
-      // Start polling for completion
-      this.pollForCompletion(turnId, result.childSessionKey!);
+        status: 'completed',
+        durationMs,
+      });
 
       return { turnId };
 
@@ -199,21 +193,8 @@ export class OpenClawAdapter implements AdapterImplementation {
   }
 
   async interrupt(): Promise<void> {
-    // Clear all polls - sessions will continue but we stop tracking
-    for (const [turnId, task] of this.pendingTasks) {
-      if (task.pollInterval) {
-        clearInterval(task.pollInterval);
-      }
-      this.ctx.emitEvent({
-        type: 'turn.completed',
-        threadId: this.state.activeThreadId!,
-        turnId,
-        status: 'interrupted',
-        durationMs: Date.now() - task.startedAt.getTime(),
-      });
-    }
-    this.pendingTasks.clear();
-    this.ctx.log.info('OpenClaw tasks interrupted');
+    // Config-receiver tasks run synchronously, can't interrupt
+    this.ctx.log.info('OpenClaw interrupt called (no-op for config-receiver)');
   }
 
   async destroy(): Promise<void> {
@@ -239,82 +220,6 @@ export class OpenClawAdapter implements AdapterImplementation {
     }
     
     return message;
-  }
-
-  private pollForCompletion(turnId: string, sessionKey: string): void {
-    const { gatewayUrl, gatewayToken } = this.config.options ?? {};
-    const task = this.pendingTasks.get(turnId);
-    if (!task) return;
-
-    let pollCount = 0;
-    const maxPolls = 60; // 5 minutes at 5s intervals
-
-    task.pollInterval = setInterval(async () => {
-      pollCount++;
-      
-      if (pollCount > maxPolls) {
-        clearInterval(task.pollInterval);
-        this.pendingTasks.delete(turnId);
-        this.ctx.emitEvent({
-          type: 'turn.completed',
-          threadId: this.state.activeThreadId!,
-          turnId,
-          status: 'failed',
-          reason: 'Polling timeout',
-          durationMs: Date.now() - task.startedAt.getTime(),
-        });
-        return;
-      }
-
-      try {
-        // Check session status via history endpoint
-        const response = await fetch(
-          `${gatewayUrl}/api/sessions/${encodeURIComponent(sessionKey)}/history?limit=1`,
-          {
-            headers: {
-              'Authorization': `Bearer ${gatewayToken}`,
-            },
-          }
-        );
-
-        if (!response.ok) {
-          this.ctx.log.warn(`Poll failed: ${response.status}`);
-          return;
-        }
-
-        const data = await response.json() as { 
-          messages?: Array<{ role: string; content: string }>;
-          status?: string;
-        };
-
-        // Check if session has completed (look for assistant message)
-        const assistantMessage = data.messages?.find(m => m.role === 'assistant');
-        if (assistantMessage) {
-          clearInterval(task.pollInterval);
-          this.pendingTasks.delete(turnId);
-
-          this.ctx.emitEvent({
-            type: 'content.delta',
-            threadId: this.state.activeThreadId!,
-            turnId,
-            payload: {
-              streamKind: 'assistant_text',
-              delta: assistantMessage.content,
-            },
-          });
-
-          this.ctx.emitEvent({
-            type: 'turn.completed',
-            threadId: this.state.activeThreadId!,
-            turnId,
-            status: 'completed',
-            durationMs: Date.now() - task.startedAt.getTime(),
-          });
-        }
-      } catch (error) {
-        this.ctx.log.warn(`Poll error: ${error}`);
-      }
-    }, 5000); // Poll every 5 seconds
   }
 }
 
