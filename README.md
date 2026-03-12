@@ -4,12 +4,12 @@ Orchestrate AI coding agents from a unified interface. Built around four pillars
 
 ## Vision
 
-An open-source local app that lets you orchestrate multiple AI coding agents (Claude Code, OpenClaw, etc.) with:
+An open-source Electron app that lets you orchestrate multiple AI coding agents (Claude Code, OpenClaw, etc.) with:
 
 - **Planning View**: Describe tasks, see breakdown, confirm before execution
 - **Execution View**: TMux-style widget grid for real-time visibility
-- **Memory System**: Org-level knowledge that syncs to agent-native formats
-- **Integrations**: GitHub, CodeRabbit, Cursor launcher
+- **Memory System**: Org-level + project-level knowledge (markdown files)
+- **Integrations**: GitHub, CodeRabbit CLI
 
 ## Quick Start
 
@@ -17,61 +17,109 @@ An open-source local app that lets you orchestrate multiple AI coding agents (Cl
 # Install dependencies
 bun install
 
-# Start development
-bun dev
+# Build contracts
+cd packages/contracts && bun run build
+
+# Start server (port 3333)
+cd packages/server && bun run.ts
+
+# Start UI (separate terminal)
+cd packages/ui && bun dev
 ```
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────┐
-│          Browser/Tauri UI           │
-│  (React + Tailwind + shadcn/ui)     │
+│         Electron App (UI)           │
+│  React 19 + Tailwind + Vite         │
 └────────────────┬────────────────────┘
-                 │ WebSocket
+                 │ IPC / WebSocket
                  ▼
 ┌─────────────────────────────────────┐
 │       Local Companion Server        │
-│  - Claude Code PTY management       │
-│  - OpenClaw WebSocket bridge        │
-│  - GitHub CLI wrapper               │
-│  - Memory sync                      │
+│  Hono HTTP + WebSocket (port 3333)  │
+├─────────────────────────────────────┤
+│  Adapters:                          │
+│  - Claude Code (subprocess, -p)     │
+│  - OpenClaw (WebSocket + cron API)  │
+├─────────────────────────────────────┤
+│  Integrations:                      │
+│  - GitHub CLI (gh pr, gh issue)     │
+│  - CodeRabbit CLI (cr --prompt-only)│
 └─────────────────────────────────────┘
 ```
 
 ## Packages
 
-- `packages/ui` - React frontend with widget system
-- `packages/server` - Node.js companion server
-- `packages/contracts` - Shared TypeScript types
+| Package | Description |
+|---------|-------------|
+| `packages/contracts` | Shared TypeScript types (adapter, events, task, memory, widget) |
+| `packages/server` | Hono HTTP server + adapters + WebSocket event streaming |
+| `packages/ui` | Electron main/preload + React components |
+
+## Server API
+
+```bash
+# Health check
+GET /health
+
+# Adapter management
+GET    /adapters                    # List all adapters
+POST   /adapters                    # Create adapter
+POST   /adapters/:id/connect        # Connect to agent
+POST   /adapters/:id/disconnect     # Disconnect
+POST   /adapters/:id/send           # Send message
+POST   /adapters/:id/interrupt      # Interrupt current task
+DELETE /adapters/:id                # Remove adapter
+
+# Integrations
+POST /coderabbit/review             # Run CodeRabbit CLI
+POST /github/pr                     # Create GitHub PR
+
+# WebSocket
+ws://localhost:3333                 # Real-time event stream
+```
 
 ## Adapters
 
 | Adapter | Status | Description |
 |---------|--------|-------------|
-| Claude Code | 🚧 In Progress | PTY-based control |
-| OpenClaw | 🚧 In Progress | WebSocket channel |
-| Cursor | 📋 Planned | Launcher only |
-| Codex | 📋 Planned | PTY-based (T3 Code pattern) |
+| Claude Code | ✅ Working | Subprocess with `-p` (print mode) |
+| OpenClaw | ✅ Working | WebSocket + cron API dispatch |
+| Codex | 📋 Planned | Subprocess-based |
 
-## Integrations
+## Event Types
 
-| Integration | Status | Description |
-|-------------|--------|-------------|
-| GitHub | 🚧 In Progress | Issues, PRs, worktrees |
-| CodeRabbit | 📋 Planned | CLI-based code review |
-| Browser | 📋 Planned | URL launcher |
+Events stream over WebSocket to the UI:
 
-## Widgets
+- `session.started` / `session.ended` - Adapter lifecycle
+- `session.state.changed` - Status updates
+- `turn.started` / `turn.completed` - Task execution
+- `content.delta` - Streaming text output
+- `file.changed` - File create/modify/delete
+- `item.started` - Tool/command execution
 
-| Widget | Description |
-|--------|-------------|
-| Log Stream | Real-time stdout/stderr |
-| File Diff | Code changes as they happen |
-| Terminal | Raw PTY access |
-| Chat | Direct agent conversation |
-| Status | Agent state indicator |
-| Cost Meter | Token usage tracking |
+## Development
+
+```bash
+# Typecheck all packages
+bun run typecheck
+
+# Run server in watch mode
+cd packages/server && bun run dev
+
+# Run Electron app
+cd packages/ui && bun run electron:dev
+```
+
+## Stack
+
+- **Runtime**: Bun + Node.js
+- **UI**: Electron + React 19 + Tailwind + Vite
+- **Server**: Hono + WebSocket (ws)
+- **Types**: TypeScript + Zod
+- **Monorepo**: Turborepo
 
 ## License
 
