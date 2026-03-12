@@ -1,17 +1,16 @@
 /**
  * Claude Code Adapter
  * 
- * PTY-based control of Claude Code CLI.
- * Spawns claude-code process, streams output, handles interactions.
+ * Subprocess-based control of Claude Code CLI.
+ * Uses child_process.spawn instead of PTY for Node 24 compatibility.
  */
 
-import type { IPty } from 'node-pty';
+import { spawn, type ChildProcess } from 'child_process';
 import type { 
   AdapterConfig, 
   AdapterState, 
   AdapterCapabilities,
   SendOptions,
-  RuntimeEvent 
 } from '@acc/contracts';
 import type { AdapterContext, AdapterImplementation } from './types';
 
@@ -23,18 +22,21 @@ interface ClaudeCodeConfig extends AdapterConfig {
     model?: string;
     /** Enable auto-accept for safe operations */
     autoAccept?: boolean;
+    /** Use --print mode for single-shot execution */
+    printMode?: boolean;
   };
 }
 
 export class ClaudeCodeAdapter implements AdapterImplementation {
   private ctx!: AdapterContext;
   private config: ClaudeCodeConfig;
-  private pty: IPty | null = null;
+  private process: ChildProcess | null = null;
   private state: AdapterState = {
     status: 'disconnected',
   };
   private outputBuffer = '';
   private currentTurnId: string | null = null;
+  private turnStartTime: number = 0;
 
   constructor(config: ClaudeCodeConfig) {
     this.config = config;
@@ -68,45 +70,18 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
     this.ctx.log.info('Connecting to Claude Code...');
 
     try {
-      // Dynamic import node-pty (native module)
-      const pty = await import('node-pty');
-      
       const binaryPath = this.config.options?.binaryPath ?? 'claude';
-      const args: string[] = [];
       
-      if (this.config.cwd) {
-        args.push('--project', this.config.cwd);
+      // Verify binary exists
+      const { execSync } = await import('child_process');
+      try {
+        execSync(`which ${binaryPath}`, { encoding: 'utf-8' });
+      } catch {
+        throw new Error(`Claude Code binary not found: ${binaryPath}`);
       }
-      
-      if (this.config.options?.model) {
-        args.push('--model', this.config.options.model);
-      }
 
-      this.pty = pty.spawn(binaryPath, args, {
-        name: 'xterm-256color',
-        cols: 120,
-        rows: 40,
-        cwd: this.config.cwd ?? process.cwd(),
-        env: process.env as Record<string, string>,
-      });
-
-      this.pty.onData((data) => {
-        this.handleOutput(data);
-      });
-
-      this.pty.onExit(({ exitCode }) => {
-        this.ctx.log.info(`Claude Code exited with code ${exitCode}`);
-        this.updateState({ status: 'disconnected' });
-        this.ctx.emitEvent({
-          type: 'session.ended',
-          threadId: this.state.activeThreadId,
-          reason: `Process exited with code ${exitCode}`,
-        });
-      });
-
-      // Wait for ready signal
-      await this.waitForReady();
-      
+      // We're ready - actual process spawns per-message in print mode
+      // or as interactive session
       this.updateState({ 
         status: 'ready',
         activeThreadId: crypto.randomUUID(),
@@ -117,7 +92,7 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
         threadId: this.state.activeThreadId!,
       });
 
-      this.ctx.log.info('Claude Code connected and ready');
+      this.ctx.log.info('Claude Code adapter ready');
 
     } catch (error) {
       this.updateState({ 
@@ -129,21 +104,23 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
   }
 
   async disconnect(): Promise<void> {
-    if (this.pty) {
-      this.pty.kill();
-      this.pty = null;
+    if (this.process) {
+      this.process.kill('SIGTERM');
+      this.process = null;
     }
     this.updateState({ status: 'disconnected' });
     this.ctx.log.info('Claude Code disconnected');
   }
 
   async send(options: SendOptions): Promise<{ turnId: string }> {
-    if (!this.pty || this.state.status !== 'ready') {
-      throw new Error('Not connected');
+    if (this.state.status !== 'ready') {
+      throw new Error('Not ready - call connect() first');
     }
 
     const turnId = crypto.randomUUID();
     this.currentTurnId = turnId;
+    this.turnStartTime = Date.now();
+    this.outputBuffer = '';
     this.updateState({ status: 'running', activeTurnId: turnId });
 
     this.ctx.emitEvent({
@@ -152,25 +129,89 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       turnId,
     });
 
-    // Inject context if provided
+    // Build command args
+    const binaryPath = this.config.options?.binaryPath ?? 'claude';
+    const args: string[] = ['-p']; // --print mode for single-shot
+    
+    if (this.config.options?.model) {
+      args.push('--model', this.config.options.model);
+    }
+
+    if (this.config.options?.autoAccept) {
+      args.push('--dangerously-skip-permissions');
+    }
+
+    // Build the full message with context
     let message = options.message;
     if (options.context) {
       message = `Context:\n${options.context}\n\nTask:\n${message}`;
     }
 
-    // Send to PTY
-    this.pty.write(message + '\n');
-    
-    this.ctx.log.info(`Sent message to Claude Code (turn: ${turnId})`);
+    args.push(message);
+
+    this.ctx.log.info(`Spawning Claude Code: ${binaryPath} ${args.slice(0, 2).join(' ')} ...`);
+
+    // Spawn the process
+    this.process = spawn(binaryPath, args, {
+      cwd: this.config.cwd ?? process.cwd(),
+      env: { ...process.env, FORCE_COLOR: '0' }, // Disable colors for cleaner parsing
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    // Stream stdout
+    this.process.stdout?.on('data', (chunk: Buffer) => {
+      const data = chunk.toString('utf-8');
+      this.handleOutput(data);
+    });
+
+    // Stream stderr
+    this.process.stderr?.on('data', (chunk: Buffer) => {
+      const data = chunk.toString('utf-8');
+      this.ctx.log.warn(`Claude Code stderr: ${data}`);
+      // Still emit as content (some tools write to stderr)
+      this.handleOutput(data);
+    });
+
+    // Handle completion
+    this.process.on('close', (code) => {
+      const durationMs = Date.now() - this.turnStartTime;
+      
+      this.ctx.log.info(`Claude Code exited with code ${code} (${durationMs}ms)`);
+      
+      this.ctx.emitEvent({
+        type: 'turn.completed',
+        threadId: this.state.activeThreadId!,
+        turnId: this.currentTurnId!,
+        status: code === 0 ? 'completed' : 'failed',
+        durationMs,
+      });
+      
+      this.updateState({ status: 'ready', activeTurnId: undefined });
+      this.currentTurnId = null;
+      this.process = null;
+    });
+
+    this.process.on('error', (err) => {
+      this.ctx.log.error(`Claude Code process error: ${err.message}`);
+      this.ctx.emitEvent({
+        type: 'turn.completed',
+        threadId: this.state.activeThreadId!,
+        turnId: this.currentTurnId!,
+        status: 'failed',
+        reason: err.message,
+        durationMs: Date.now() - this.turnStartTime,
+      });
+      this.updateState({ status: 'error', lastError: err.message });
+    });
 
     return { turnId };
   }
 
   async interrupt(): Promise<void> {
-    if (!this.pty) return;
+    if (!this.process) return;
     
-    // Send Ctrl+C
-    this.pty.write('\x03');
+    // Send SIGINT (Ctrl+C equivalent)
+    this.process.kill('SIGINT');
     
     if (this.currentTurnId) {
       this.ctx.emitEvent({
@@ -178,7 +219,7 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
         threadId: this.state.activeThreadId!,
         turnId: this.currentTurnId,
         status: 'interrupted',
-        durationMs: 0,
+        durationMs: Date.now() - this.turnStartTime,
       });
     }
     
@@ -221,22 +262,6 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
   }
 
   private parseOutput(data: string): void {
-    // Detect completion
-    if (data.includes('╭─') || data.includes('❯')) {
-      // Claude Code shows prompt when ready for input
-      if (this.state.status === 'running' && this.currentTurnId) {
-        this.ctx.emitEvent({
-          type: 'turn.completed',
-          threadId: this.state.activeThreadId!,
-          turnId: this.currentTurnId,
-          status: 'completed',
-          durationMs: 0, // TODO: track actual duration
-        });
-        this.updateState({ status: 'ready', activeTurnId: undefined });
-        this.currentTurnId = null;
-      }
-    }
-
     // Detect file changes
     const fileChangeMatch = data.match(/(?:Created|Modified|Deleted):\s+(.+)/);
     if (fileChangeMatch) {
@@ -252,22 +277,8 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       });
     }
 
-    // Detect approval requests
-    if (data.includes('Allow?') || data.includes('[y/N]')) {
-      this.ctx.emitEvent({
-        type: 'approval.requested',
-        threadId: this.state.activeThreadId!,
-        turnId: this.currentTurnId!,
-        payload: {
-          requestId: crypto.randomUUID(),
-          requestType: 'command_execution',
-          detail: data,
-        },
-      });
-    }
-
     // Detect tool usage
-    const toolMatch = data.match(/Running:\s+(.+)/);
+    const toolMatch = data.match(/(?:Running|Executing):\s+(.+)/);
     if (toolMatch) {
       this.ctx.emitEvent({
         type: 'item.started',
@@ -280,30 +291,19 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
         },
       });
     }
-  }
 
-  private waitForReady(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Timeout waiting for Claude Code to be ready'));
-      }, 30000);
-
-      const checkReady = (data: string) => {
-        // Look for ready indicators
-        if (data.includes('╭─') || data.includes('❯') || data.includes('Claude')) {
-          clearTimeout(timeout);
-          resolve();
-        }
-      };
-
-      // Temporary listener
-      const onData = this.pty!.onData(checkReady);
-      
-      // Cleanup after resolved
-      setTimeout(() => {
-        onData.dispose();
-      }, 30000);
-    });
+    // Detect thinking/reasoning
+    if (data.includes('Thinking...') || data.includes('reasoning')) {
+      this.ctx.emitEvent({
+        type: 'content.delta',
+        threadId: this.state.activeThreadId!,
+        turnId: this.currentTurnId!,
+        payload: {
+          streamKind: 'reasoning',
+          delta: data,
+        },
+      });
+    }
   }
 }
 
