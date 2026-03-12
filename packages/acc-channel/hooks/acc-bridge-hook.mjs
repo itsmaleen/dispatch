@@ -181,12 +181,13 @@ async function handleTaskSend(msg) {
 function executeWithCLI(message, taskId) {
   return new Promise((resolve, reject) => {
     const args = [
-      '-p', // Print mode (non-interactive)
-      '--model', CONFIG.model,
-      message,
+      'agent',
+      '--local',
+      '--json',
+      '--message', message,
     ];
 
-    log.debug(`Executing: openclaw ${args.slice(0, 3).join(' ')}...`);
+    log.debug(`Executing: openclaw agent --local --json --message "..."`);
 
     const proc = spawn('openclaw', args, {
       cwd: process.env.HOME,
@@ -215,7 +216,13 @@ function executeWithCLI(message, taskId) {
 
     proc.on('close', (code) => {
       if (code === 0) {
-        resolve(stdout.trim() || 'Task completed');
+        // Try to parse JSON output
+        try {
+          const result = JSON.parse(stdout);
+          resolve(result.reply || result.content || result.message || stdout.trim());
+        } catch {
+          resolve(stdout.trim() || 'Task completed');
+        }
       } else {
         reject(new Error(stderr || `Process exited with code ${code}`));
       }
