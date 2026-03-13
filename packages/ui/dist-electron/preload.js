@@ -35,4 +35,6 @@ electron_1.contextBridge.exposeInMainWorld('electronAPI', {
     },
     // System
     platform: process.platform,
+    // Project
+    openFolder: () => electron_1.ipcRenderer.invoke('dialog:openFolder'),
 });

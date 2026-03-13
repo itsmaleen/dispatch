@@ -144,3 +144,14 @@ electron_1.ipcMain.handle('github:createPr', async (_event, options) => {
         });
     });
 });
+// Dialog: Open Folder
+electron_1.ipcMain.handle('dialog:openFolder', async () => {
+    const result = await electron_1.dialog.showOpenDialog(mainWindow, {
+        properties: ['openDirectory'],
+        title: 'Select Project Folder',
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+        return null;
+    }
+    return result.filePaths[0];
+});

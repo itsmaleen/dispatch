@@ -6,7 +6,9 @@
   "author": "Marlin & Molty",
   "license": "MIT",
   "workspaces": [
-    "packages/*"
+    "packages/contracts",
+    "packages/server",
+    "packages/ui"
   ],
   "scripts": {
     "dev": "turbo dev",

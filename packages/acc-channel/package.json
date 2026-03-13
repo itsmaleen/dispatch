@@ -6,7 +6,9 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "openclaw": {
-    "extensions": ["./dist/index.js"],
+    "extensions": [
+      "./dist/index.js"
+    ],
     "channel": {
       "id": "acc",
       "label": "Agent Command Center",
@@ -15,7 +17,10 @@
       "docsLabel": "acc-channel",
       "blurb": "Connect OpenClaw to Agent Command Center via WebSocket.",
       "order": 100,
-      "aliases": ["acc", "command-center"]
+      "aliases": [
+        "acc",
+        "command-center"
+      ]
     },
     "install": {
       "npmSpec": "@acc/channel-plugin",
