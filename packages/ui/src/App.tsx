@@ -11,35 +11,28 @@ type View = 'home' | 'planning' | 'execution';
 const ACC_SERVER_URL = 'localhost:3333';
 
 export function App() {
-  const { currentProject, setProject, agents, setAgents, addTask, updateTask, tasks } = useAppStore();
+  const { 
+    currentProject, 
+    setProject, 
+    agents, 
+    claudeCodeAvailable,
+    addTask, 
+    updateTask, 
+    tasks,
+    refreshAgentStatus,
+  } = useAppStore();
   const [view, setView] = useState<View>('home');
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [currentTaskMessage, setCurrentTaskMessage] = useState<string>('');
   const [showAgentsPanel, setShowAgentsPanel] = useState(false);
   const currentTask = currentTaskId ? tasks.find((t) => t.id === currentTaskId) ?? null : null;
 
-  // Fetch agents from server
+  // Refresh agent status on mount and periodically
   useEffect(() => {
-    const fetchAgents = async () => {
-      try {
-        const agentsList = await api.getAgents();
-        setAgents(
-          agentsList.map((a: any) => ({
-            name: a.name ?? 'Unknown',
-            capabilities: a.capabilities ?? [],
-            connectedAt: a.connectedAt,
-            status: 'idle' as const,
-          }))
-        );
-      } catch (err) {
-        console.error('Failed to fetch agents:', err);
-      }
-    };
-
-    fetchAgents();
-    const interval = setInterval(fetchAgents, 3000);
+    refreshAgentStatus();
+    const interval = setInterval(refreshAgentStatus, 5000);
     return () => clearInterval(interval);
-  }, [setAgents]);
+  }, [refreshAgentStatus]);
 
   const handleStartTask = async (message: string) => {
     try {
@@ -102,6 +95,9 @@ export function App() {
     }
   };
 
+  // Count total available agents (Claude Code + OpenClaw agents)
+  const totalAgents = (claudeCodeAvailable ? 1 : 0) + agents.length;
+
   return (
     <div className="h-screen w-screen bg-zinc-950 text-zinc-100 flex flex-col">
       {/* Title bar area */}
@@ -135,9 +131,9 @@ export function App() {
           >
             <Users className="w-4 h-4" />
             <span>Agents</span>
-            {agents.length > 0 && (
+            {totalAgents > 0 && (
               <span className="bg-green-600 text-white text-xs px-1.5 py-0.5 rounded-full">
-                {agents.length}
+                {totalAgents}
               </span>
             )}
           </button>
@@ -171,6 +167,7 @@ export function App() {
                 : undefined
             }
             initialResult={currentTask?.result}
+            initialAgent={currentTask?.agent}
             onBack={handleBackToHome}
             onComplete={handleComplete}
           />
@@ -189,12 +186,20 @@ export function App() {
           )}
         </div>
         <div className="flex items-center gap-4">
+          {/* Claude Code status */}
+          {claudeCodeAvailable ? (
+            <span className="text-indigo-400">🟣 Claude Code</span>
+          ) : (
+            <span className="text-zinc-600">⚫ Claude Code</span>
+          )}
+          
+          {/* OpenClaw agents status */}
           {agents.length > 0 ? (
             <span className="text-green-500">
-              🟢 {agents.length} agent{agents.length !== 1 ? 's' : ''} connected
+              🟢 {agents.length} OpenClaw
             </span>
           ) : (
-            <span>⚫ No agents connected</span>
+            <span className="text-zinc-600">⚫ OpenClaw</span>
           )}
         </div>
       </div>

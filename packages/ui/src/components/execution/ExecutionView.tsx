@@ -7,12 +7,14 @@ interface ExecutionViewProps {
   /** When reopening a task, pass its status so we show existing result instead of re-executing */
   initialStatus?: 'executing' | 'completed' | 'failed';
   initialResult?: string;
+  initialAgent?: string;
   onBack: () => void;
   onComplete: () => void;
 }
 
-export function ExecutionView({ taskId, initialStatus, initialResult, onBack, onComplete }: ExecutionViewProps) {
+export function ExecutionView({ taskId, initialStatus, initialResult, initialAgent, onBack, onComplete }: ExecutionViewProps) {
   const { updateTask } = useAppStore();
+  const [agent] = useState<string | undefined>(initialAgent);
   const isAlreadyDone = initialStatus === 'completed' || initialStatus === 'failed';
   const [status, setStatus] = useState<'executing' | 'completed' | 'failed'>(() =>
     isAlreadyDone ? initialStatus : 'executing'
@@ -50,11 +52,12 @@ export function ExecutionView({ taskId, initialStatus, initialResult, onBack, on
     }
     const execute = async () => {
       try {
-        setOutput(prev => [...prev, '> Starting execution...']);
+        const agentLabel = agent === 'claude-code' ? 'Claude Code' : agent || 'agent';
+        setOutput(prev => [...prev, `> Starting execution with ${agentLabel}...`]);
         
         // TODO: Use WebSocket for streaming
         // For now, just poll or wait for result
-        const { result } = await api.executeTask(taskId);
+        const { result } = await api.executeTask(taskId, agent);
         
         setOutput(prev => [...prev, '', '--- Output ---', result]);
         setResult(result);

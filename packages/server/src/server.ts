@@ -293,12 +293,41 @@ export class CommandCenterServer {
         return c.json({ ok: false, error: 'Task not found' }, 404);
       }
 
-      // Priority: 1) Claude Code adapter, 2) OpenClaw agents
+      // Get requested agent from body (if any)
+      let requestedAgent: string | undefined;
+      try {
+        const body = await c.req.json<{ agent?: string }>();
+        requestedAgent = body.agent;
+      } catch {
+        // No body or invalid JSON, use defaults
+      }
+
+      // Determine which agent to use
       const claudeAdapter = Array.from(this.adapters.values()).find(a => a.config.kind === 'claude-code');
       const agents = this.getConnectedAgents();
       
-      const useClaudeCode = claudeAdapter && claudeAdapter.implementation.getState().status === 'ready';
-      const agentName = useClaudeCode ? 'claude-code' : (task.agent || agents[0]?.name);
+      let useClaudeCode = false;
+      let agentName: string | undefined;
+      
+      if (requestedAgent === 'claude-code') {
+        // User explicitly requested Claude Code
+        useClaudeCode = claudeAdapter?.implementation.getState().status === 'ready';
+        if (!useClaudeCode) {
+          return c.json({ ok: false, error: 'Claude Code is not available' }, 400);
+        }
+        agentName = 'claude-code';
+      } else if (requestedAgent) {
+        // User requested a specific OpenClaw agent
+        const found = agents.find(a => a.name === requestedAgent);
+        if (!found) {
+          return c.json({ ok: false, error: `Agent "${requestedAgent}" is not connected` }, 400);
+        }
+        agentName = requestedAgent;
+      } else {
+        // No preference - use Claude Code if available, otherwise first OpenClaw agent
+        useClaudeCode = claudeAdapter?.implementation.getState().status === 'ready';
+        agentName = useClaudeCode ? 'claude-code' : (task.agent || agents[0]?.name);
+      }
       
       if (!useClaudeCode && !agentName) {
         return c.json({ ok: false, error: 'No agents available. Connect Claude Code or an OpenClaw instance.' }, 400);
@@ -351,6 +380,15 @@ Format your response as plain text only:
         return c.json({ ok: false, error: 'Task not found' }, 404);
       }
 
+      // Get requested agent from body (if any)
+      let requestedAgent: string | undefined;
+      try {
+        const body = await c.req.json<{ agent?: string }>();
+        requestedAgent = body.agent;
+      } catch {
+        // No body or invalid JSON, use task's assigned agent
+      }
+
       task.status = 'executing';
 
       // Send the actual task to execute
@@ -358,27 +396,33 @@ Format your response as plain text only:
         ? `Execute this task according to the plan:\n\nTask: ${task.message}\n\nPlan:\n${task.plan}`
         : task.message;
 
-      // Priority: 1) Claude Code adapter, 2) OpenClaw agents
+      // Determine which agent to use
       const claudeAdapter = Array.from(this.adapters.values()).find(a => a.config.kind === 'claude-code');
-      const useClaudeCode = task.agent === 'claude-code' || 
-        (claudeAdapter && claudeAdapter.implementation.getState().status === 'ready');
+      const agents = this.getConnectedAgents();
+      
+      // Use: 1) requested agent, 2) task's assigned agent, 3) Claude Code if available
+      const agentToUse = requestedAgent || task.agent;
+      const useClaudeCode = agentToUse === 'claude-code' || 
+        (!agentToUse && claudeAdapter?.implementation.getState().status === 'ready');
 
       try {
         let result: string;
         
         if (useClaudeCode && claudeAdapter) {
           // Use Claude Code adapter
+          task.agent = 'claude-code';
           const { turnId } = await claudeAdapter.implementation.send({ message: executePrompt });
           result = await this.waitForAdapterResult(claudeAdapter.config.id, turnId);
-        } else if (task.agent && task.agent !== 'claude-code') {
-          // Use OpenClaw agent
-          result = await this.sendTaskToAgent(task.agent, `exec-${id}`, executePrompt);
+        } else if (agentToUse && agentToUse !== 'claude-code') {
+          // Use specified OpenClaw agent
+          task.agent = agentToUse;
+          result = await this.sendTaskToAgent(agentToUse, `exec-${id}`, executePrompt);
         } else {
-          // Fallback to first available agent
-          const agents = this.getConnectedAgents();
+          // Fallback to first available OpenClaw agent
           if (agents.length === 0) {
             throw new Error('No agents available');
           }
+          task.agent = agents[0].name;
           result = await this.sendTaskToAgent(agents[0].name, `exec-${id}`, executePrompt);
         }
         

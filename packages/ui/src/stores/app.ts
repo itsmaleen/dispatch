@@ -31,6 +31,26 @@ export interface Task {
 
 // API functions
 export const api = {
+  async checkClaudeCode(): Promise<{ available: boolean; version?: string }> {
+    try {
+      const res = await fetch(`${API_URL}/check/claude-code`);
+      const data = await res.json();
+      return { available: data.available, version: data.version };
+    } catch {
+      return { available: false };
+    }
+  },
+
+  async initClaudeCode(): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${API_URL}/adapters/claude-code/init`, { method: 'POST' });
+      const data = await res.json();
+      return { ok: data.ok, error: data.error };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : 'Failed to init' };
+    }
+  },
+
   async createTask(message: string, agent?: string): Promise<{ taskId: string }> {
     const res = await fetch(`${API_URL}/tasks`, {
       method: 'POST',
@@ -49,15 +69,24 @@ export const api = {
     return data.task;
   },
 
-  async planTask(taskId: string): Promise<{ plan: string; agent: string }> {
-    const res = await fetch(`${API_URL}/tasks/${taskId}/plan`, { method: 'POST' });
+  async planTask(taskId: string, agent?: string): Promise<{ plan: string; agent: string }> {
+    const url = new URL(`${API_URL}/tasks/${taskId}/plan`);
+    const res = await fetch(url.toString(), { 
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent }),
+    });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error);
     return { plan: data.plan, agent: data.agent };
   },
 
-  async executeTask(taskId: string): Promise<{ result: string }> {
-    const res = await fetch(`${API_URL}/tasks/${taskId}/execute`, { method: 'POST' });
+  async executeTask(taskId: string, agent?: string): Promise<{ result: string }> {
+    const res = await fetch(`${API_URL}/tasks/${taskId}/execute`, { 
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent }),
+    });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error);
     return { result: data.result };
@@ -68,6 +97,16 @@ export const api = {
     const data = await res.json();
     return data.agents || [];
   },
+
+  async getAdapters(): Promise<Array<{ id: string; kind: string; state: { status: string } }>> {
+    try {
+      const res = await fetch(`${API_URL}/adapters`);
+      const data = await res.json();
+      return data.adapters || [];
+    } catch {
+      return [];
+    }
+  },
 };
 
 interface AppState {
@@ -77,6 +116,8 @@ interface AppState {
   
   // Agents
   agents: Agent[];
+  claudeCodeAvailable: boolean;
+  claudeCodeVersion: string | null;
   
   // Tasks
   tasks: Task[];
@@ -90,10 +131,14 @@ interface AppState {
   addRecentProject: (project: Project) => void;
   setAgents: (agents: Agent[]) => void;
   updateAgent: (name: string, update: Partial<Agent>) => void;
+  setClaudeCodeStatus: (available: boolean, version?: string) => void;
   addTask: (task: Task) => void;
   updateTask: (id: string, update: Partial<Task>) => void;
   setActiveTask: (id: string | null) => void;
   setWidgetLayout: (projectPath: string, layout: any) => void;
+  
+  // Async actions
+  refreshAgentStatus: () => Promise<void>;
 }
 
 export const useAppStore = create<AppState>()(
@@ -102,6 +147,8 @@ export const useAppStore = create<AppState>()(
       currentProject: null,
       recentProjects: [],
       agents: [],
+      claudeCodeAvailable: false,
+      claudeCodeVersion: null,
       tasks: [],
       activeTaskId: null,
       widgetLayouts: {},
@@ -120,7 +167,7 @@ export const useAppStore = create<AppState>()(
             recentProjects: [
               { ...project, lastOpened: Date.now() },
               ...filtered,
-            ].slice(0, 10), // Keep last 10
+            ].slice(0, 10),
           };
         });
       },
@@ -133,6 +180,10 @@ export const useAppStore = create<AppState>()(
             a.name === name ? { ...a, ...update } : a
           ),
         }));
+      },
+
+      setClaudeCodeStatus: (available, version) => {
+        set({ claudeCodeAvailable: available, claudeCodeVersion: version ?? null });
       },
 
       addTask: (task) => {
@@ -158,6 +209,31 @@ export const useAppStore = create<AppState>()(
             [projectPath]: layout,
           },
         }));
+      },
+
+      refreshAgentStatus: async () => {
+        // Check Claude Code
+        const ccStatus = await api.checkClaudeCode();
+        set({ 
+          claudeCodeAvailable: ccStatus.available, 
+          claudeCodeVersion: ccStatus.version ?? null 
+        });
+
+        // If available, ensure adapter is initialized
+        if (ccStatus.available) {
+          await api.initClaudeCode();
+        }
+
+        // Fetch OpenClaw agents
+        const agents = await api.getAgents();
+        set({
+          agents: agents.map((a: any) => ({
+            name: a.name ?? 'Unknown',
+            capabilities: a.capabilities ?? [],
+            connectedAt: a.connectedAt,
+            status: 'idle' as const,
+          })),
+        });
       },
     }),
     {
