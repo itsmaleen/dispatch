@@ -4,8 +4,8 @@
   "private": true,
   "main": "dist-electron/main.js",
   "scripts": {
-    "dev": "bun run --parallel dev:bundle dev:electron",
-    "dev:bundle": "vite build --watch",
+    "dev": "bun run --parallel dev:vite dev:electron",
+    "dev:vite": "vite",
     "dev:electron": "bun run scripts/dev-electron.mjs",
     "build": "vite build && bun run build:electron",
     "build:electron": "electron-builder",

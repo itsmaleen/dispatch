@@ -10,6 +10,26 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..');
 
+// Wait for vite dev server to be ready
+const waitForVite = async (url, maxAttempts = 30) => {
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) return true;
+    } catch {}
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return false;
+};
+
+console.log('⏳ Waiting for Vite dev server...');
+const viteReady = await waitForVite('http://localhost:5173');
+if (!viteReady) {
+  console.error('❌ Vite dev server not responding at localhost:5173');
+  process.exit(1);
+}
+console.log('✅ Vite dev server ready');
+
 // Build electron main and preload with tsc (clean CJS for Electron)
 execSync('bunx tsc -p tsconfig.electron.json', {
   stdio: 'inherit',
