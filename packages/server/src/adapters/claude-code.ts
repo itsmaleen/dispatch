@@ -167,9 +167,11 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       message = `Context:\n${options.context}\n\nTask:\n${message}`;
     }
 
-    args.push(message);
+    // NOTE: We pass message via stdin (piped), not as CLI arg
+    // CLI args have length limits and escaping issues
+    // claude -p reads from stdin when no message arg provided
 
-    this.ctx.log.info(`Spawning Claude Code: ${binaryPath} ${args.slice(0, 2).join(' ')} ...`);
+    this.ctx.log.info(`Spawning Claude Code: ${binaryPath} ${args.join(' ')} (message via stdin, ${message.length} chars)`);
 
     // Spawn the process
     this.process = spawn(binaryPath, args, {
@@ -178,9 +180,10 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
-    // Close stdin so CLI gets EOF and does not block waiting for input (e.g. approval prompts)
+    // Write message to stdin, then close to signal EOF
+    this.process.stdin?.write(message);
     this.process.stdin?.end();
-    this.ctx.log.info('Claude Code process spawned, stdin closed');
+    this.ctx.log.info('Claude Code process spawned, message written to stdin');
 
     // Stream stdout
     this.process.stdout?.on('data', (chunk: Buffer) => {
