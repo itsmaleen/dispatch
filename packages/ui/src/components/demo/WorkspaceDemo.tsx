@@ -16,6 +16,8 @@ import {
   LayoutPanelLeft,
   Bot,
   User,
+  Minus,
+  Maximize2,
 } from 'lucide-react';
 
 // ============================================================================
@@ -62,6 +64,14 @@ interface ChatMessage {
   timestamp: string;
   plan?: PlanStep[];
   isStreaming?: boolean;
+}
+
+interface MinimizedWidget {
+  id: string;
+  type: 'terminal' | 'planning' | 'chat';
+  title: string;
+  icon: string;
+  data?: TerminalState; // For restoring terminals
   currentTask?: string;
 }
 
@@ -247,10 +257,12 @@ function TerminalLineItem({ line }: { line: TerminalLine }) {
 function TerminalWidget({
   terminal,
   onClose,
+  onMinimize,
   onSendMessage,
 }: {
   terminal: TerminalState;
   onClose?: () => void;
+  onMinimize?: () => void;
   onSendMessage: (terminalId: string, message: string) => void;
 }) {
   const outputRef = useRef<HTMLDivElement>(null);
@@ -291,7 +303,13 @@ function TerminalWidget({
             >
               <X className="w-2 h-2 text-red-900 opacity-0 group-hover:opacity-100" />
             </button>
-            <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
+            <button
+              onClick={onMinimize}
+              className="group w-3 h-3 rounded-full bg-yellow-500/80 hover:bg-yellow-500 transition-colors flex items-center justify-center"
+              title="Minimize"
+            >
+              <Minus className="w-2 h-2 text-yellow-900 opacity-0 group-hover:opacity-100" />
+            </button>
             <div className="w-3 h-3 rounded-full bg-green-500/80" />
           </div>
           <div className={`w-2 h-2 rounded-full ${
@@ -401,6 +419,7 @@ function PlanningWidget({
   onStepAgentChange,
   onAddStep,
   onSendStepToTerminal,
+  onMinimize,
 }: {
   steps: PlanStep[];
   agents: Agent[];
@@ -409,6 +428,7 @@ function PlanningWidget({
   onStepAgentChange: (stepId: string, agentId: string) => void;
   onAddStep: (text: string, agentId: string) => void;
   onSendStepToTerminal: (step: PlanStep) => void;
+  onMinimize?: () => void;
 }) {
   const [editingStep, setEditingStep] = useState<string | null>(null);
   const [showAddInput, setShowAddInput] = useState(false);
@@ -444,14 +464,25 @@ function PlanningWidget({
           <span className="text-sm font-medium">Planning</span>
           <span className="text-xs text-zinc-600">({steps.length} tasks)</span>
         </div>
-        <button
-          onClick={() => setShowAddInput(true)}
-          className="flex items-center gap-1 px-2 py-1 text-xs text-zinc-400 hover:text-violet-400 hover:bg-zinc-800 rounded transition-colors"
-          title="Add task"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>Add</span>
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setShowAddInput(true)}
+            className="flex items-center gap-1 px-2 py-1 text-xs text-zinc-400 hover:text-violet-400 hover:bg-zinc-800 rounded transition-colors"
+            title="Add task"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add</span>
+          </button>
+          {onMinimize && (
+            <button
+              onClick={onMinimize}
+              className="p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 rounded transition-colors"
+              title="Minimize"
+            >
+              <Minus className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Plan Steps */}
@@ -643,11 +674,13 @@ function OrchestratorChat({
   messages,
   onSendMessage,
   onExecutePlan,
+  onMinimize,
   isStreaming,
 }: {
   messages: ChatMessage[];
   onSendMessage: (text: string) => void;
   onExecutePlan: (plan: PlanStep[]) => void;
+  onMinimize?: () => void;
   isStreaming: boolean;
 }) {
   const [input, setInput] = useState('');
@@ -669,10 +702,21 @@ function OrchestratorChat({
   return (
     <div className="h-full bg-zinc-900 rounded-lg border border-zinc-800 flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="flex-shrink-0 px-3 py-2 border-b border-zinc-800 flex items-center gap-2">
-        <Bot className="w-4 h-4 text-violet-400" />
-        <span className="text-xs font-medium text-zinc-300">Orchestrator</span>
-        <span className="text-[10px] text-zinc-600">Claude Code</span>
+      <div className="flex-shrink-0 px-3 py-2 border-b border-zinc-800 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Bot className="w-4 h-4 text-violet-400" />
+          <span className="text-xs font-medium text-zinc-300">Orchestrator</span>
+          <span className="text-[10px] text-zinc-600">Claude Code</span>
+        </div>
+        {onMinimize && (
+          <button
+            onClick={onMinimize}
+            className="p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 rounded transition-colors"
+            title="Minimize"
+          >
+            <Minus className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
 
       {/* Messages */}
@@ -797,6 +841,7 @@ export function WorkspaceDemo() {
   const [planSteps, setPlanSteps] = useState<PlanStep[]>(FAKE_PLAN_STEPS);
   const [isExecuting, setIsExecuting] = useState(false);
   const [rightPanelMode, setRightPanelMode] = useState<'planning' | 'chat'>('planning');
+  const [minimizedWidgets, setMinimizedWidgets] = useState<MinimizedWidget[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [isChatStreaming, setIsChatStreaming] = useState(false);
   const [terminals, setTerminals] = useState<TerminalState[]>([
@@ -974,6 +1019,54 @@ export function WorkspaceDemo() {
   // Count terminals per agent for status display
   const getTerminalCount = (agentId: string) => terminals.filter(t => t.agent.id === agentId).length;
 
+  // Minimize/restore handlers
+  const handleMinimizeTerminal = (terminal: TerminalState) => {
+    setMinimizedWidgets(prev => [...prev, {
+      id: terminal.id,
+      type: 'terminal',
+      title: terminal.agent.name,
+      icon: terminal.agent.icon,
+      data: terminal,
+    }]);
+    setTerminals(prev => prev.filter(t => t.id !== terminal.id));
+  };
+
+  const handleMinimizeChat = () => {
+    setMinimizedWidgets(prev => [...prev, {
+      id: 'chat',
+      type: 'chat',
+      title: 'Orchestrator',
+      icon: '🤖',
+    }]);
+    setRightPanelMode('planning');
+  };
+
+  const handleMinimizePlanning = () => {
+    setMinimizedWidgets(prev => [...prev, {
+      id: 'planning',
+      type: 'planning',
+      title: 'Planning',
+      icon: '📋',
+    }]);
+    setRightPanelMode('chat');
+  };
+
+  const handleRestoreWidget = (widget: MinimizedWidget) => {
+    setMinimizedWidgets(prev => prev.filter(w => w.id !== widget.id));
+    
+    if (widget.type === 'terminal' && widget.data) {
+      setTerminals(prev => [...prev, widget.data!]);
+    } else if (widget.type === 'chat') {
+      setRightPanelMode('chat');
+    } else if (widget.type === 'planning') {
+      setRightPanelMode('planning');
+    }
+  };
+
+  const handleCloseMinimized = (widgetId: string) => {
+    setMinimizedWidgets(prev => prev.filter(w => w.id !== widgetId));
+  };
+
   // Chat handlers
   const handleChatMessage = (text: string) => {
     const userMessage: ChatMessage = {
@@ -1150,7 +1243,8 @@ export function WorkspaceDemo() {
                   <div className="h-full p-1">
                     <TerminalWidget
                       terminal={terminal}
-                      onClose={terminals.length > 1 ? () => handleCloseTerminal(terminal.id) : undefined}
+                      onClose={() => handleCloseTerminal(terminal.id)}
+                      onMinimize={() => handleMinimizeTerminal(terminal)}
                       onSendMessage={handleTerminalMessage}
                     />
                   </div>
@@ -1195,6 +1289,7 @@ export function WorkspaceDemo() {
                       onStepAgentChange={handleStepAgentChange}
                       onAddStep={handleAddStep}
                       onSendStepToTerminal={handleSendStepToTerminal}
+                      onMinimize={handleMinimizePlanning}
                     />
                   </div>
                 </Panel>
@@ -1205,6 +1300,7 @@ export function WorkspaceDemo() {
                   messages={chatMessages}
                   onSendMessage={handleChatMessage}
                   onExecutePlan={handleExecutePlanFromChat}
+                  onMinimize={handleMinimizeChat}
                   isStreaming={isChatStreaming}
                 />
               </div>
@@ -1212,6 +1308,33 @@ export function WorkspaceDemo() {
           </Panel>
         </PanelGroup>
       </div>
+
+      {/* Minimized Widgets Tab Bar */}
+      {minimizedWidgets.length > 0 && (
+        <div className="flex-shrink-0 h-9 bg-zinc-900 border-t border-zinc-800 px-2 flex items-center gap-1 overflow-x-auto">
+          {minimizedWidgets.map((widget) => (
+            <div
+              key={widget.id}
+              className="flex items-center gap-1 px-2 py-1 bg-zinc-800 hover:bg-zinc-700 rounded text-xs group transition-colors cursor-pointer"
+              onClick={() => handleRestoreWidget(widget)}
+            >
+              <span>{widget.icon}</span>
+              <span className="text-zinc-300 max-w-[100px] truncate">{widget.title}</span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCloseMinimized(widget.id);
+                }}
+                className="ml-1 p-0.5 text-zinc-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Close"
+              >
+                <X className="w-3 h-3" />
+              </button>
+              <Maximize2 className="w-3 h-3 text-zinc-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
