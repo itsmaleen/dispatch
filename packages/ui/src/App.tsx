@@ -5,10 +5,11 @@ import { ExecutionView } from './components/execution/ExecutionView';
 import { AgentsPanel } from './components/agents/AgentsPanel';
 import { WidgetDemo } from './components/demo/WidgetDemo';
 import { WorkspaceDemo } from './components/demo/WorkspaceDemo';
+import { Workspace } from './components/workspace/Workspace';
 import { useAppStore, api, type Task } from './stores/app';
 import { Settings, FolderOpen, Users, Layout } from 'lucide-react';
 
-type View = 'home' | 'planning' | 'execution' | 'demo' | 'workspace';
+type View = 'home' | 'planning' | 'execution' | 'demo' | 'workspace' | 'workspace-real';
 
 const ACC_SERVER_URL = 'localhost:3333';
 
@@ -23,7 +24,7 @@ export function App() {
     tasks,
     refreshAgentStatus,
   } = useAppStore();
-  const [view, setView] = useState<View>('home');
+  const [view, setView] = useState<View>('workspace-real');
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [currentTaskMessage, setCurrentTaskMessage] = useState<string>('');
   const [showAgentsPanel, setShowAgentsPanel] = useState(false);
@@ -111,6 +112,15 @@ export function App() {
 
   // Count total available agents (Claude Code + OpenClaw agents)
   const totalAgents = (claudeCodeAvailable ? 1 : 0) + agents.length;
+
+  // Workspace-real is full screen, no chrome
+  if (view === 'workspace-real') {
+    return (
+      <div className="h-screen w-screen bg-zinc-950 text-zinc-100">
+        <Workspace />
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen w-screen bg-zinc-950 text-zinc-100 flex flex-col">
@@ -210,6 +220,7 @@ export function App() {
       </div>
 
       {/* Status bar */}
+      {(
       <div className="h-6 flex-shrink-0 bg-zinc-900 border-t border-zinc-800 px-4 flex items-center justify-between text-xs text-zinc-500">
         <div className="flex items-center gap-4">
           <span>ACC v0.1.0</span>
@@ -238,6 +249,7 @@ export function App() {
           )}
         </div>
       </div>
+      )}
 
       {/* Agents Panel Modal */}
       <AgentsPanel
