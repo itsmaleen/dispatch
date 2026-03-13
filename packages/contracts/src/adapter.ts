@@ -82,6 +82,8 @@ export interface SendOptions {
   mode?: 'default' | 'plan';
   /** Context to inject */
   context?: string;
+  /** Adapter-specific task options (e.g. Claude Code: effort, thinking, maxTurns) */
+  taskOptions?: Record<string, unknown>;
 }
 
 export interface AdapterEvent {
