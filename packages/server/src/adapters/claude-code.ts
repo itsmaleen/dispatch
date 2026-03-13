@@ -320,15 +320,25 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
 
     switch (event.type) {
       case 'assistant': {
-        // Full assistant message (after streaming) - extract text content
-        // Don't emit activity here - we already streamed the content
+        // Full assistant message - may come without streaming for fast tasks
         const content = (event.message as any)?.content;
         if (Array.isArray(content)) {
           for (const block of content) {
             if (block?.type === 'text' && typeof block.text === 'string') {
-              // Only add if not already in buffer (fallback for non-streaming)
+              // Only emit if not already streamed (check if text is new)
               if (!this.outputBuffer.includes(block.text)) {
                 this.outputBuffer += block.text;
+                
+                // Emit content.delta so waitForAdapterResult picks it up
+                this.ctx.emitEvent({
+                  type: 'content.delta',
+                  threadId: this.state.activeThreadId!,
+                  turnId,
+                  payload: {
+                    streamKind: 'assistant_text',
+                    delta: block.text,
+                  },
+                });
               }
             }
           }
