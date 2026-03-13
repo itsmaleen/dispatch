@@ -359,7 +359,15 @@ Format your response as plain text only:
         
         if (useClaudeCode) {
           // Use Claude Code adapter
-          const { turnId } = await claudeAdapter!.implementation.send({ message: planPrompt });
+          const { turnId } = await claudeAdapter!.implementation.send({ 
+            message: planPrompt,
+            taskOptions: {
+              taskType: 'planning',
+              effort: 'low',
+              thinking: { type: 'disabled' },
+              maxTurns: 1,
+            },
+          });
           result = await this.waitForAdapterResult(claudeAdapter!.config.id, turnId);
         } else {
           // Use OpenClaw agent
@@ -423,7 +431,15 @@ Format your response as plain text only:
         if (useClaudeCode && claudeAdapter) {
           // Use Claude Code adapter
           task.agent = 'claude-code';
-          const { turnId } = await claudeAdapter.implementation.send({ message: executePrompt });
+          const { turnId } = await claudeAdapter.implementation.send({ 
+            message: executePrompt,
+            taskOptions: {
+              taskType: 'execution',
+              effort: 'high',
+              thinking: { type: 'adaptive' },
+              // No maxTurns limit for execution - let it work through the task
+            },
+          });
           result = await this.waitForAdapterResult(claudeAdapter.config.id, turnId);
         } else if (agentToUse && agentToUse !== 'claude-code') {
           // Use specified OpenClaw agent

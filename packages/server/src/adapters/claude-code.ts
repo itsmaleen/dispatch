@@ -19,7 +19,7 @@ interface ClaudeCodeConfig extends AdapterConfig {
   options?: {
     /** Path to claude binary (default: 'claude') */
     binaryPath?: string;
-    /** Model to use */
+    /** Model to use (e.g., 'sonnet', 'opus', 'haiku') */
     model?: string;
     /** Permission mode */
     permissionMode?: PermissionMode;
@@ -28,11 +28,45 @@ interface ClaudeCodeConfig extends AdapterConfig {
   };
 }
 
+/** Task-specific options for optimization */
+export interface TaskOptions {
+  /** Task type - affects default optimization settings */
+  taskType?: 'planning' | 'execution' | 'research';
+  /** Effort level: 'low' (fastest), 'medium', 'high' (default), 'max' */
+  effort?: 'low' | 'medium' | 'high' | 'max';
+  /** Thinking mode */
+  thinking?: { type: 'adaptive' } | { type: 'enabled'; budgetTokens?: number } | { type: 'disabled' };
+  /** Max turns (1 = single response, no agentic loops) */
+  maxTurns?: number;
+  /** Override model for this task */
+  model?: string;
+}
+
+/** Default options per task type */
+const TASK_DEFAULTS: Record<string, Partial<TaskOptions>> = {
+  planning: {
+    effort: 'low',
+    thinking: { type: 'disabled' },
+    maxTurns: 1,
+  },
+  execution: {
+    effort: 'high',
+    thinking: { type: 'adaptive' },
+    // No maxTurns limit - let it work
+  },
+  research: {
+    effort: 'medium',
+    thinking: { type: 'adaptive' },
+    maxTurns: 5,
+  },
+};
+
 interface QueuedMessage {
   message: string;
   resolve: (result: string) => void;
   reject: (error: Error) => void;
   turnId: string;
+  taskOptions?: TaskOptions;
 }
 
 export class ClaudeCodeAdapter implements AdapterImplementation {
@@ -126,7 +160,7 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
     this.ctx.log.info('Claude Code disconnected');
   }
 
-  async send(options: SendOptions): Promise<{ turnId: string }> {
+  async send(options: SendOptions & { taskOptions?: TaskOptions }): Promise<{ turnId: string }> {
     if (this.state.status !== 'ready' && this.state.status !== 'running') {
       throw new Error(`Not ready - current status: ${this.state.status}`);
     }
@@ -139,9 +173,23 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       message = `Context:\n${options.context}\n\nTask:\n${message}`;
     }
 
+    // Merge task options with defaults
+    const taskType = options.taskOptions?.taskType ?? 'execution';
+    const defaults = TASK_DEFAULTS[taskType] ?? {};
+    const taskOptions: TaskOptions = {
+      ...defaults,
+      ...options.taskOptions,
+    };
+
     // Create a promise that will resolve when this turn completes
     const turnPromise = new Promise<string>((resolve, reject) => {
-      const queuedMessage: QueuedMessage = { message, resolve, reject, turnId };
+      const queuedMessage: QueuedMessage = { 
+        message, 
+        resolve, 
+        reject, 
+        turnId,
+        taskOptions,
+      };
       this.messageQueue.push(queuedMessage);
     });
 
@@ -195,16 +243,34 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
     this.updateState({ status: 'running', activeTurnId: queuedMessage.turnId });
 
     try {
-      this.ctx.log.info(`Starting Claude Code query (${queuedMessage.message.length} chars)`);
+      const taskOpts = queuedMessage.taskOptions ?? {};
+      this.ctx.log.info(`Starting Claude Code query (${queuedMessage.message.length} chars, type=${taskOpts.taskType ?? 'execution'}, effort=${taskOpts.effort ?? 'default'})`);
 
-      // Build SDK options
+      // Build SDK options with task-specific optimizations
       const sdkOptions: Options = {
         cwd: this.config.cwd ?? process.cwd(),
         permissionMode: this.config.options?.permissionMode ?? 'bypassPermissions',
       };
 
-      if (this.config.options?.model) {
-        sdkOptions.model = this.config.options.model;
+      // Model: task override > config override > default
+      const model = taskOpts.model ?? this.config.options?.model;
+      if (model) {
+        sdkOptions.model = model;
+      }
+
+      // Effort level for speed optimization
+      if (taskOpts.effort) {
+        sdkOptions.effort = taskOpts.effort;
+      }
+
+      // Thinking mode
+      if (taskOpts.thinking) {
+        sdkOptions.thinking = taskOpts.thinking;
+      }
+
+      // Max turns (1 = single response)
+      if (taskOpts.maxTurns) {
+        sdkOptions.maxTurns = taskOpts.maxTurns;
       }
 
       // Create query with the message
