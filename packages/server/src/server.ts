@@ -96,13 +96,13 @@ export class CommandCenterServer {
           return c.json({ ok: false, error: 'Claude Code CLI not installed' }, 400);
         }
 
-        // Create adapter with autoAccept to avoid hanging on permission prompts
+        // Create adapter with bypassPermissions to avoid hanging on prompts
         const config = {
           id: 'claude-code-local',
           kind: 'claude-code' as const,
           name: 'Claude Code (Local)',
           options: {
-            autoAccept: true,  // Use --dangerously-skip-permissions to avoid stdin hangs
+            permissionMode: 'bypassPermissions' as const,
             turnTimeoutMs: 300000,  // 5 min timeout
           },
         };
