@@ -21,6 +21,8 @@ import {
   RefreshCw,
   Wifi,
   WifiOff,
+  FolderOpen,
+  Pencil,
 } from 'lucide-react';
 import { api } from '../../stores/app';
 
@@ -63,6 +65,7 @@ interface TerminalState {
   lines: TerminalLine[];
   isStreaming: boolean;
   currentTask?: string;
+  path?: string; // Override workspace path
 }
 
 interface ChatMessage {
@@ -496,6 +499,12 @@ function OrchestratorChat({
 // ============================================================================
 
 export function Workspace() {
+  // Workspace state
+  const [workspacePath, setWorkspacePath] = useState<string | null>(null);
+  const [isEditingPath, setIsEditingPath] = useState(false);
+  const [pathInput, setPathInput] = useState('');
+  const pathInputRef = useRef<HTMLInputElement>(null);
+
   // Agents state
   const [agents, setAgents] = useState<Agent[]>([]);
   const [isLoadingAgents, setIsLoadingAgents] = useState(true);
@@ -701,11 +710,12 @@ export function Workspace() {
     ));
 
     try {
-      // Send to adapter
+      // Send to adapter with workspace path
+      const cwd = terminal.path || workspacePath || undefined;
       const res = await fetch(`${API_URL}/adapters/${terminal.agent.id}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, cwd }),
       });
       const data = await res.json();
 
@@ -913,7 +923,58 @@ export function Workspace() {
       <div className="h-11 flex-shrink-0 bg-zinc-900 border-b border-zinc-800 px-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <span className="text-lg">🦞</span>
-          <span className="text-sm font-medium text-zinc-200">Agent Command Center</span>
+          <span className="text-sm font-medium text-zinc-200">ACC</span>
+          <span className="text-zinc-700">|</span>
+          
+          {/* Workspace Path */}
+          {isEditingPath ? (
+            <form 
+              onSubmit={(e) => {
+                e.preventDefault();
+                setWorkspacePath(pathInput.trim() || null);
+                setIsEditingPath(false);
+              }}
+              className="flex items-center gap-1"
+            >
+              <FolderOpen className="w-3.5 h-3.5 text-zinc-500" />
+              <input
+                ref={pathInputRef}
+                type="text"
+                value={pathInput}
+                onChange={(e) => setPathInput(e.target.value)}
+                onBlur={() => {
+                  setWorkspacePath(pathInput.trim() || null);
+                  setIsEditingPath(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    setIsEditingPath(false);
+                    setPathInput(workspacePath || '');
+                  }
+                }}
+                placeholder="/path/to/project"
+                className="w-64 px-2 py-0.5 text-xs bg-zinc-800 border border-zinc-600 rounded text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-violet-500"
+                autoFocus
+              />
+              <button type="submit" className="text-xs text-violet-400 hover:text-violet-300 px-1">
+                Save
+              </button>
+            </form>
+          ) : (
+            <button
+              onClick={() => {
+                setPathInput(workspacePath || '');
+                setIsEditingPath(true);
+              }}
+              className="flex items-center gap-1.5 px-2 py-0.5 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 rounded transition-colors group"
+            >
+              <FolderOpen className="w-3.5 h-3.5" />
+              <span className="max-w-[200px] truncate">
+                {workspacePath || 'No folder selected'}
+              </span>
+              <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button onClick={fetchAgents} disabled={isLoadingAgents} className="p-1.5 text-zinc-400 hover:text-zinc-200 rounded">

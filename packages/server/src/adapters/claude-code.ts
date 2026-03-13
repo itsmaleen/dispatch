@@ -63,6 +63,7 @@ const TASK_DEFAULTS: Record<string, Partial<TaskOptions>> = {
 
 interface QueuedMessage {
   message: string;
+  cwd?: string;
   resolve: (result: string) => void;
   reject: (error: Error) => void;
   turnId: string;
@@ -196,7 +197,8 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
     // Create a promise that will resolve when this turn completes
     const turnPromise = new Promise<string>((resolve, reject) => {
       const queuedMessage: QueuedMessage = { 
-        message, 
+        message,
+        cwd: options.cwd,
         resolve, 
         reject, 
         turnId,
@@ -259,8 +261,9 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       this.ctx.log.info(`Starting Claude Code query (${queuedMessage.message.length} chars, type=${taskOpts.taskType ?? 'execution'}, effort=${taskOpts.effort ?? 'default'})`);
 
       // Build SDK options with task-specific optimizations
+      // cwd priority: message option > config > process.cwd()
       const sdkOptions: Options = {
-        cwd: this.config.cwd ?? process.cwd(),
+        cwd: queuedMessage.cwd ?? this.config.cwd ?? process.cwd(),
         permissionMode: this.config.options?.permissionMode ?? 'bypassPermissions',
         includePartialMessages: true, // Enable streaming events for activity tracking
       };

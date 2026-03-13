@@ -70,6 +70,8 @@ export interface AdapterState {
 export interface SendOptions {
   /** Message content */
   message: string;
+  /** Working directory override */
+  cwd?: string;
   /** Attachments (images, files) */
   attachments?: Array<{
     type: 'image' | 'file';
