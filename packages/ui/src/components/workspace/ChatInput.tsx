@@ -223,15 +223,15 @@ export function ChatInput({
       )}
 
       {/* Input area */}
-      <div 
+      <div
         className={`
-          flex items-end gap-2 bg-zinc-900 rounded-lg px-3 py-2 transition-colors
+          flex items-center gap-2 bg-zinc-900 rounded-lg px-3 py-2 transition-colors
           ${isDragging ? 'ring-2 ring-violet-500/50 bg-violet-500/5' : ''}
           ${disabled ? 'opacity-50' : ''}
         `}
       >
         {showPrompt && (
-          <span className="text-violet-400 text-sm pb-1">{promptIcon}</span>
+          <span className="text-violet-400 text-sm">{promptIcon}</span>
         )}
         
         <textarea
@@ -246,7 +246,7 @@ export function ChatInput({
           style={{ height: 'auto' }}
         />
 
-        <div className="flex items-center gap-1 pb-0.5">
+        <div className="flex items-center gap-1">
           <input
             ref={fileInputRef}
             type="file"
