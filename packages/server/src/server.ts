@@ -291,24 +291,15 @@ export class CommandCenterServer {
 
     // List all threads
     this.app.get('/threads', async (c) => {
+      const limit = parseInt(c.req.query('limit') ?? '50');
+      const offset = parseInt(c.req.query('offset') ?? '0');
+      
       const manager = getSessionManager();
-      const threads = manager.listThreads();
-      return c.json({ 
-        ok: true, 
-        threads: threads.map(t => ({
-          id: t.id,
-          name: t.name,
-          projectPath: t.projectPath,
-          worktreePath: t.worktreePath,
-          createdAt: t.createdAt,
-          lastActiveAt: t.lastActiveAt,
-          messageCount: t.history.length,
-          hasSession: !!manager.getSession(t.id),
-        })),
-      });
+      const threads = manager.listThreads({ limit, offset });
+      return c.json({ ok: true, threads });
     });
 
-    // Get thread details (including history)
+    // Get thread details
     this.app.get('/threads/:id', async (c) => {
       const id = c.req.param('id');
       const manager = getSessionManager();
@@ -327,6 +318,23 @@ export class CommandCenterServer {
           currentTurnId: session.currentTurnId,
         } : null,
       });
+    });
+
+    // Get thread messages (paginated)
+    this.app.get('/threads/:id/messages', async (c) => {
+      const id = c.req.param('id');
+      const limit = parseInt(c.req.query('limit') ?? '100');
+      const beforeId = c.req.query('before') ? parseInt(c.req.query('before')!) : undefined;
+      
+      const manager = getSessionManager();
+      const thread = manager.getThread(id);
+      
+      if (!thread) {
+        return c.json({ ok: false, error: 'Thread not found' }, 404);
+      }
+
+      const messages = manager.getMessages(id, { limit, beforeId });
+      return c.json({ ok: true, messages });
     });
 
     // Create session for thread (or resume existing)
@@ -418,15 +426,15 @@ export class CommandCenterServer {
     // Fork a thread
     this.app.post('/threads/:id/fork', async (c) => {
       const id = c.req.param('id');
-      const { name, fromTurnId } = await c.req.json<{
+      const { name, fromMessageId } = await c.req.json<{
         name?: string;
-        fromTurnId?: string;
+        fromMessageId?: number;
       }>();
 
       const manager = getSessionManager();
       
       try {
-        const forked = await manager.forkThread(id, { name, fromTurnId });
+        const forked = await manager.forkThread(id, { name, fromMessageId });
         return c.json({ ok: true, thread: forked });
       } catch (error) {
         return c.json({ 

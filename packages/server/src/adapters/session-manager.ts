@@ -2,44 +2,22 @@
  * Session Manager for Claude Code
  * 
  * Manages persistent sessions per terminal/thread.
- * Each session owns a Claude Code query iterator and maintains conversation state.
+ * Uses SQLite for thread/message persistence (inspired by T3 Code).
  */
 
 import { query, type Query, type SDKMessage, type Options } from '@anthropic-ai/claude-agent-sdk';
 import { EventEmitter } from 'events';
-import * as fs from 'fs/promises';
-import * as path from 'path';
-
-/** Message in conversation history */
-export interface HistoryMessage {
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: Date;
-  turnId: string;
-  usage?: {
-    inputTokens: number;
-    outputTokens: number;
-    costUsd?: number;
-  };
-}
-
-/** Thread represents a persistent conversation context */
-export interface Thread {
-  id: string;
-  name?: string;
-  projectPath: string;       // Workspace root (cwd for session)
-  worktreePath?: string;     // Git worktree path (optional)
-  createdAt: Date;
-  lastActiveAt: Date;
-  history: HistoryMessage[];
-  sessionId?: string;        // SDK session ID for resume
-  metadata?: Record<string, unknown>;
-}
+import { 
+  getThreadStore, 
+  type Thread, 
+  type Message,
+  type SqliteThreadStore,
+} from '../persistence/sqlite-store';
 
 /** Active session bound to a thread */
 export interface Session {
   threadId: string;
-  query: Query | null;       // Active query iterator
+  query: Query | null;
   cwd: string;
   status: 'idle' | 'running' | 'error';
   currentTurnId?: string;
@@ -62,7 +40,7 @@ export interface CreateSessionOptions {
   cwd: string;
   name?: string;
   worktreePath?: string;
-  resume?: boolean;          // Try to resume from saved sessionId
+  resume?: boolean;
 }
 
 /** Options for sending a message */
@@ -74,56 +52,57 @@ export interface SendMessageOptions {
   model?: string;
 }
 
-const THREADS_DIR = path.join(process.env.HOME || '~', '.acc', 'threads');
+/** Thread summary for listing */
+export interface ThreadSummary {
+  id: string;
+  name?: string;
+  projectPath: string;
+  worktreePath?: string;
+  createdAt: Date;
+  lastActiveAt: Date;
+  messageCount: number;
+  hasSession: boolean;
+}
 
 export class SessionManager extends EventEmitter {
-  private threads = new Map<string, Thread>();
+  private store: SqliteThreadStore;
   private sessions = new Map<string, Session>();
   private sdkOptions: Partial<Options>;
 
   constructor(sdkOptions: Partial<Options> = {}) {
     super();
+    this.store = getThreadStore();
     this.sdkOptions = sdkOptions;
   }
 
-  /** Initialize - load saved threads from disk */
+  /** Initialize - no-op now since SQLite handles persistence */
   async init(): Promise<void> {
-    await fs.mkdir(THREADS_DIR, { recursive: true });
-    
-    try {
-      const files = await fs.readdir(THREADS_DIR);
-      for (const file of files) {
-        if (file.endsWith('.json')) {
-          try {
-            const data = await fs.readFile(path.join(THREADS_DIR, file), 'utf-8');
-            const thread = JSON.parse(data) as Thread;
-            thread.createdAt = new Date(thread.createdAt);
-            thread.lastActiveAt = new Date(thread.lastActiveAt);
-            thread.history = thread.history.map(m => ({
-              ...m,
-              timestamp: new Date(m.timestamp),
-            }));
-            this.threads.set(thread.id, thread);
-          } catch (e) {
-            console.error(`Failed to load thread ${file}:`, e);
-          }
-        }
-      }
-      console.log(`[SessionManager] Loaded ${this.threads.size} threads from disk`);
-    } catch (e) {
-      console.log('[SessionManager] No existing threads found');
-    }
+    console.log('[SessionManager] Initialized with SQLite store');
   }
 
-  /** List all threads */
-  listThreads(): Thread[] {
-    return Array.from(this.threads.values())
-      .sort((a, b) => b.lastActiveAt.getTime() - a.lastActiveAt.getTime());
+  /** List all threads with summaries */
+  listThreads(options: { limit?: number; offset?: number } = {}): ThreadSummary[] {
+    const threads = this.store.listThreads(options);
+    return threads.map(t => ({
+      id: t.id,
+      name: t.name,
+      projectPath: t.projectPath,
+      worktreePath: t.worktreePath,
+      createdAt: t.createdAt,
+      lastActiveAt: t.lastActiveAt,
+      messageCount: this.store.getMessageCount(t.id),
+      hasSession: this.sessions.has(t.id),
+    }));
   }
 
   /** Get thread by ID */
-  getThread(threadId: string): Thread | undefined {
-    return this.threads.get(threadId);
+  getThread(threadId: string): Thread | null {
+    return this.store.getThread(threadId);
+  }
+
+  /** Get thread messages with pagination */
+  getMessages(threadId: string, options: { limit?: number; beforeId?: number } = {}): Message[] {
+    return this.store.getMessages(threadId, options);
   }
 
   /** Get session for thread */
@@ -142,20 +121,16 @@ export class SessionManager extends EventEmitter {
       return existing;
     }
 
-    // Get or create thread
-    let thread = this.threads.get(threadId);
+    // Get or create thread in SQLite
+    let thread = this.store.getThread(threadId);
     if (!thread) {
-      thread = {
+      thread = this.store.createThread({
         id: threadId,
-        name: name || `Thread ${threadId.slice(0, 8)}`,
+        name: name ?? `Thread ${threadId.slice(0, 8)}`,
         projectPath: cwd,
         worktreePath,
-        createdAt: new Date(),
-        lastActiveAt: new Date(),
-        history: [],
-      };
-      this.threads.set(threadId, thread);
-      await this.saveThread(thread);
+      });
+      console.log(`[SessionManager] Created new thread ${threadId}`);
     }
 
     // Create session (query created lazily on first message)
@@ -184,7 +159,7 @@ export class SessionManager extends EventEmitter {
       throw new Error(`No session for thread ${threadId}`);
     }
 
-    const thread = this.threads.get(threadId);
+    const thread = this.store.getThread(threadId);
     if (!thread) {
       throw new Error(`Thread ${threadId} not found`);
     }
@@ -194,14 +169,13 @@ export class SessionManager extends EventEmitter {
     session.status = 'running';
     session.outputBuffer = '';
 
-    // Add user message to history
-    thread.history.push({
+    // Store user message
+    this.store.appendMessage({
+      threadId,
+      turnId,
       role: 'user',
       content: options.message,
-      timestamp: new Date(),
-      turnId,
     });
-    thread.lastActiveAt = new Date();
 
     this.emit('turn.started', threadId, turnId);
 
@@ -223,7 +197,7 @@ export class SessionManager extends EventEmitter {
       console.log(`[SessionManager] Resuming session ${thread.sessionId}`);
     }
 
-    // Create query and process
+    // Process query in background
     this.processQuery(session, thread, options.message, sdkOpts, turnId);
 
     return { turnId };
@@ -237,6 +211,9 @@ export class SessionManager extends EventEmitter {
     sdkOpts: Options,
     turnId: string
   ): Promise<void> {
+    let capturedSessionId: string | undefined;
+    let usage: { inputTokens: number; outputTokens: number; costUsd?: number } | undefined;
+
     try {
       const queryIter = query({
         prompt: message,
@@ -249,43 +226,49 @@ export class SessionManager extends EventEmitter {
       session.query = queryIter;
 
       for await (const event of queryIter) {
-        this.handleSDKMessage(session, thread, event, turnId);
+        const result = this.handleSDKMessage(session, event, turnId);
+        if (result.sessionId) capturedSessionId = result.sessionId;
+        if (result.usage) usage = result.usage;
       }
 
-      // Query completed successfully
-      const result = session.outputBuffer;
-      
-      // Add assistant message to history
-      thread.history.push({
-        role: 'assistant',
-        content: result,
-        timestamp: new Date(),
+      // Store assistant message
+      this.store.appendMessage({
+        threadId: thread.id,
         turnId,
+        role: 'assistant',
+        content: session.outputBuffer,
+        usage,
       });
+
+      // Update thread with session ID for resume
+      if (capturedSessionId && capturedSessionId !== thread.sessionId) {
+        this.store.updateThread(thread.id, { sessionId: capturedSessionId });
+      }
 
       session.status = 'idle';
       session.currentTurnId = undefined;
       
-      await this.saveThread(thread);
-      this.emit('turn.completed', threadId, turnId, result);
+      this.emit('turn.completed', thread.id, turnId, session.outputBuffer);
 
     } catch (error) {
       // Handle SDK exit code quirk - if we have output, treat as success
       if (session.outputBuffer.length > 0) {
-        const result = session.outputBuffer;
-        
-        thread.history.push({
-          role: 'assistant',
-          content: result,
-          timestamp: new Date(),
+        this.store.appendMessage({
+          threadId: thread.id,
           turnId,
+          role: 'assistant',
+          content: session.outputBuffer,
+          usage,
         });
+
+        if (capturedSessionId && capturedSessionId !== thread.sessionId) {
+          this.store.updateThread(thread.id, { sessionId: capturedSessionId });
+        }
 
         session.status = 'idle';
         session.currentTurnId = undefined;
         
-        await this.saveThread(thread);
-        this.emit('turn.completed', thread.id, turnId, result);
+        this.emit('turn.completed', thread.id, turnId, session.outputBuffer);
       } else {
         session.status = 'error';
         this.emit('turn.error', thread.id, turnId, error instanceof Error ? error : new Error(String(error)));
@@ -295,23 +278,23 @@ export class SessionManager extends EventEmitter {
     }
   }
 
-  /** Handle SDK message */
+  /** Handle SDK message - returns captured metadata */
   private handleSDKMessage(
     session: Session,
-    thread: Thread,
     event: SDKMessage,
     turnId: string
-  ): void {
+  ): { sessionId?: string; usage?: { inputTokens: number; outputTokens: number; costUsd?: number } } {
+    const result: { sessionId?: string; usage?: { inputTokens: number; outputTokens: number; costUsd?: number } } = {};
+
     // Emit raw message for UI streaming
-    this.emit('message', thread.id, event);
+    this.emit('message', session.threadId, event);
 
     switch (event.type) {
       case 'system': {
         const sysEvent = event as any;
         if (sysEvent.subtype === 'init' && sysEvent.session_id) {
-          // Capture session ID for resume
-          thread.sessionId = sysEvent.session_id;
-          console.log(`[SessionManager] Got session ID: ${thread.sessionId}`);
+          result.sessionId = sysEvent.session_id;
+          console.log(`[SessionManager] Got session ID: ${result.sessionId}`);
         }
         break;
       }
@@ -342,19 +325,19 @@ export class SessionManager extends EventEmitter {
       }
 
       case 'result': {
-        const result = event as any;
-        // Update last history message with usage
-        const lastMsg = thread.history[thread.history.length - 1];
-        if (lastMsg && result.usage) {
-          lastMsg.usage = {
-            inputTokens: result.usage.input_tokens || 0,
-            outputTokens: result.usage.output_tokens || 0,
-            costUsd: result.total_cost_usd,
+        const resultEvent = event as any;
+        if (resultEvent.usage) {
+          result.usage = {
+            inputTokens: resultEvent.usage.input_tokens || 0,
+            outputTokens: resultEvent.usage.output_tokens || 0,
+            costUsd: resultEvent.total_cost_usd,
           };
         }
         break;
       }
     }
+
+    return result;
   }
 
   /** Close a session */
@@ -378,58 +361,20 @@ export class SessionManager extends EventEmitter {
   /** Delete a thread and its session */
   async deleteThread(threadId: string): Promise<void> {
     await this.closeSession(threadId);
-    this.threads.delete(threadId);
-    
-    try {
-      await fs.unlink(path.join(THREADS_DIR, `${threadId}.json`));
-    } catch {
-      // File may not exist
-    }
-    
+    this.store.deleteThread(threadId);
     console.log(`[SessionManager] Deleted thread ${threadId}`);
   }
 
-  /** Save thread to disk */
-  private async saveThread(thread: Thread): Promise<void> {
-    const filepath = path.join(THREADS_DIR, `${thread.id}.json`);
-    await fs.writeFile(filepath, JSON.stringify(thread, null, 2));
-  }
-
-  /** Fork a thread (create new thread from existing history) */
+  /** Fork a thread */
   async forkThread(
     sourceThreadId: string, 
-    options: { name?: string; fromTurnId?: string }
+    options: { name?: string; fromMessageId?: number }
   ): Promise<Thread> {
-    const source = this.threads.get(sourceThreadId);
-    if (!source) {
-      throw new Error(`Thread ${sourceThreadId} not found`);
-    }
-
     const newId = crypto.randomUUID();
-    let history = [...source.history];
-    
-    // Optionally truncate history at a specific turn
-    if (options.fromTurnId) {
-      const idx = history.findIndex(m => m.turnId === options.fromTurnId);
-      if (idx >= 0) {
-        history = history.slice(0, idx + 1);
-      }
-    }
-
-    const forked: Thread = {
-      id: newId,
-      name: options.name || `Fork of ${source.name}`,
-      projectPath: source.projectPath,
-      worktreePath: source.worktreePath,
-      createdAt: new Date(),
-      lastActiveAt: new Date(),
-      history: history.map(m => ({ ...m })),
-      // Don't copy sessionId - new session will be created
-    };
-
-    this.threads.set(newId, forked);
-    await this.saveThread(forked);
-
+    const forked = this.store.forkThread(sourceThreadId, newId, {
+      name: options.name,
+      upToMessageId: options.fromMessageId,
+    });
     console.log(`[SessionManager] Forked thread ${sourceThreadId} → ${newId}`);
     return forked;
   }
@@ -439,6 +384,7 @@ export class SessionManager extends EventEmitter {
     for (const threadId of this.sessions.keys()) {
       await this.closeSession(threadId);
     }
+    this.store.close();
     console.log('[SessionManager] Shutdown complete');
   }
 }
@@ -454,3 +400,6 @@ export function getSessionManager(): SessionManager {
   }
   return _instance;
 }
+
+// Re-export types for convenience
+export type { Thread, Message } from '../persistence/sqlite-store';
