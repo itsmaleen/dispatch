@@ -1,0 +1,17 @@
+{
+  "id": "acc-channel",
+  "name": "Agent Command Center Channel",
+  "description": "Native channel plugin for Agent Command Center integration",
+  "version": "0.1.0",
+  "channels": ["acc"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "uiHints": {
+    "serverUrl": { "label": "ACC Server URL", "placeholder": "ws://localhost:3333/channel" },
+    "agentName": { "label": "Agent Name", "placeholder": "my-agent" },
+    "token": { "label": "Auth Token", "sensitive": true }
+  }
+}

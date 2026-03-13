@@ -1,26 +1,41 @@
 {
-  "name": "@acc/channel",
+  "name": "@acc/channel-plugin",
   "version": "0.1.0",
   "description": "OpenClaw channel plugin for Agent Command Center",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "scripts": {
-    "build": "tsup src/index.ts --format esm --dts",
-    "dev": "tsup src/index.ts --format esm --dts --watch",
-    "typecheck": "tsc --noEmit"
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "openclaw": {
+    "extensions": ["./dist/index.js"],
+    "channel": {
+      "id": "acc",
+      "label": "Agent Command Center",
+      "selectionLabel": "ACC (WebSocket)",
+      "docsPath": "/channels/acc",
+      "docsLabel": "acc-channel",
+      "blurb": "Connect OpenClaw to Agent Command Center via WebSocket.",
+      "order": 100,
+      "aliases": ["acc", "command-center"]
+    },
+    "install": {
+      "npmSpec": "@acc/channel-plugin",
+      "localPath": "packages/acc-channel",
+      "defaultChoice": "local"
+    }
   },
-  "keywords": ["openclaw", "channel", "agent-command-center"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
   "dependencies": {
-    "ws": "^8.19.0"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "@types/ws": "^8.5.0",
-    "tsup": "^8.4.0",
-    "typescript": "^5.8.0"
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.4.0"
   },
   "peerDependencies": {
-    "openclaw": "*"
+    "openclaw": ">=2.6.0"
   }
 }
