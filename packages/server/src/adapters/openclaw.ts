@@ -25,6 +25,8 @@ interface OpenClawConfig extends AdapterConfig {
     thinking?: 'off' | 'low' | 'medium' | 'high';
     /** Timeout in seconds */
     timeoutSeconds?: number;
+    /** Optional callback URL for task results */
+    callbackUrl?: string;
   };
 }
 

@@ -69,6 +69,17 @@ interface QueuedMessage {
   taskOptions?: TaskOptions;
 }
 
+/** Tracks an active content block during streaming */
+interface ActiveBlock {
+  id: string;
+  type: 'tool_use' | 'server_tool_use' | 'thinking' | 'text';
+  name?: string;           // Tool name (e.g., "Read", "Bash")
+  activityType: string;    // Our activity type (file_read, command, etc.)
+  label: string;           // Human-readable label
+  inputJson: string;       // Accumulated JSON input
+  detail?: string;         // Extracted detail (file path, command)
+}
+
 export class ClaudeCodeAdapter implements AdapterImplementation {
   private ctx!: AdapterContext;
   private config: ClaudeCodeConfig;
@@ -80,6 +91,7 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
   private currentTurn: QueuedMessage | null = null;
   private outputBuffer = '';
   private turnStartTime = 0;
+  private activeBlocks: Map<string, ActiveBlock> = new Map();
 
   constructor(config: ClaudeCodeConfig) {
     this.config = config;
@@ -303,36 +315,21 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
     const turnId = this.currentTurn?.turnId;
     if (!turnId) return;
 
-    // Log ALL SDK events for debugging
+    // Log SDK events for debugging
     this.ctx.log.info(`[SDK] ${event.type}${(event as any).subtype ? `:${(event as any).subtype}` : ''}`);
 
     switch (event.type) {
       case 'assistant': {
-        // Full assistant message - emit activity for visibility
-        this.ctx.emitEvent({
-          type: 'activity',
-          threadId: this.state.activeThreadId!,
-          turnId,
-          payload: {
-            activityType: 'info',
-            label: 'Processing response...',
-          },
-        });
-        
+        // Full assistant message (after streaming) - extract text content
+        // Don't emit activity here - we already streamed the content
         const content = (event.message as any)?.content;
         if (Array.isArray(content)) {
           for (const block of content) {
             if (block?.type === 'text' && typeof block.text === 'string') {
-              this.outputBuffer += block.text;
-              this.ctx.emitEvent({
-                type: 'content.delta',
-                threadId: this.state.activeThreadId!,
-                turnId,
-                payload: {
-                  streamKind: 'assistant_text',
-                  delta: block.text,
-                },
-              });
+              // Only add if not already in buffer (fallback for non-streaming)
+              if (!this.outputBuffer.includes(block.text)) {
+                this.outputBuffer += block.text;
+              }
             }
           }
         }
@@ -340,179 +337,14 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       }
 
       case 'stream_event': {
-        const streamEvent = event.event as any;
-        const streamType = streamEvent?.type;
-        this.ctx.log.info(`[SDK] stream_event/${streamType}`);
-        
-        if (streamType === 'content_block_delta') {
-          const delta = streamEvent.delta;
-          const deltaType = delta?.type;
-          this.ctx.log.info(`[SDK] delta type: ${deltaType}`);
-          
-          if (deltaType === 'text_delta' && delta.text) {
-            this.outputBuffer += delta.text;
-            
-            // Emit content delta
-            this.ctx.emitEvent({
-              type: 'content.delta',
-              threadId: this.state.activeThreadId!,
-              turnId,
-              payload: {
-                streamKind: 'assistant_text',
-                delta: delta.text,
-              },
-            });
-          } else if (deltaType === 'thinking_delta' && delta.thinking) {
-            // Emit thinking activity
-            this.ctx.emitEvent({
-              type: 'activity',
-              threadId: this.state.activeThreadId!,
-              turnId,
-              payload: {
-                activityType: 'thinking',
-                label: 'Thinking...',
-                detail: delta.thinking.slice(0, 100),
-              },
-            });
-
-            this.ctx.emitEvent({
-              type: 'content.delta',
-              threadId: this.state.activeThreadId!,
-              turnId,
-              payload: {
-                streamKind: 'reasoning',
-                delta: delta.thinking,
-              },
-            });
-          } else if (deltaType === 'input_json_delta') {
-            // Tool input streaming - show as activity
-            this.ctx.emitEvent({
-              type: 'activity',
-              threadId: this.state.activeThreadId!,
-              turnId,
-              payload: {
-                activityType: 'tool_started',
-                label: 'Building tool input...',
-                status: 'running',
-              },
-            });
-          }
-        } else if (streamType === 'content_block_start') {
-          const block = streamEvent.content_block;
-          const blockType = block?.type;
-          this.ctx.log.info(`[SDK] content_block_start: ${blockType} - ${block?.name || 'no name'}`);
-
-          if (blockType === 'tool_use' || blockType === 'server_tool_use') {
-            const toolType = this.classifyTool(block.name);
-            const activityType = toolType === 'file_read' ? 'file_read' :
-                                 toolType === 'file_change' ? 'file_write' :
-                                 toolType === 'command_execution' ? 'command' : 'tool_started';
-            const detail = this.summarizeToolInput(block.name, block.input);
-            
-            this.ctx.emitEvent({
-              type: 'activity',
-              threadId: this.state.activeThreadId!,
-              turnId,
-              payload: {
-                activityType,
-                label: this.toolLabel(block.name),
-                detail,
-                status: 'running',
-              },
-            });
-            
-            this.ctx.emitEvent({
-              type: 'item.started',
-              threadId: this.state.activeThreadId!,
-              turnId,
-              payload: {
-                itemId: block.id,
-                itemType: toolType,
-                title: block.name,
-                detail,
-              },
-            });
-          } else if (blockType === 'thinking') {
-            this.ctx.emitEvent({
-              type: 'activity',
-              threadId: this.state.activeThreadId!,
-              turnId,
-              payload: {
-                activityType: 'thinking',
-                label: 'Thinking...',
-                status: 'running',
-              },
-            });
-          } else if (blockType === 'text') {
-            this.ctx.emitEvent({
-              type: 'activity',
-              threadId: this.state.activeThreadId!,
-              turnId,
-              payload: {
-                activityType: 'info',
-                label: 'Writing response...',
-              },
-            });
-          }
-        } else if (streamType === 'content_block_stop') {
-          this.ctx.emitEvent({
-            type: 'activity',
-            threadId: this.state.activeThreadId!,
-            turnId,
-            payload: {
-              activityType: 'info',
-              label: 'Block completed',
-              status: 'completed',
-            },
-          });
-          
-          this.ctx.emitEvent({
-            type: 'activity',
-            threadId: this.state.activeThreadId!,
-            turnId,
-            payload: {
-              activityType: 'tool_completed',
-              label: 'Tool completed',
-              status: 'completed',
-            },
-          });
-          
-          this.ctx.emitEvent({
-            type: 'item.completed',
-            threadId: this.state.activeThreadId!,
-            turnId,
-            payload: {
-              itemType: 'tool_call',
-              status: 'completed',
-            },
-          });
-        } else if (streamType === 'message_start') {
-          this.ctx.emitEvent({
-            type: 'activity',
-            threadId: this.state.activeThreadId!,
-            turnId,
-            payload: {
-              activityType: 'info',
-              label: 'Starting response...',
-            },
-          });
-        } else if (streamType === 'message_stop') {
-          this.ctx.emitEvent({
-            type: 'activity',
-            threadId: this.state.activeThreadId!,
-            turnId,
-            payload: {
-              activityType: 'info',
-              label: 'Response complete',
-              status: 'completed',
-            },
-          });
-        }
+        this.handleStreamEvent(event.event as any, turnId);
         break;
       }
 
       case 'result': {
         const result = event as any;
+        // Clear active blocks on completion
+        this.activeBlocks.clear();
 
         // Emit usage/cost as activity
         if (result.usage || typeof result.total_cost_usd === 'number') {
@@ -532,6 +364,7 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
               activityType: 'info',
               label: 'Completed',
               detail: parts.join(' • '),
+              status: 'completed',
             },
           });
 
@@ -543,15 +376,6 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       case 'system': {
         const sysEvent = event as any;
         if (sysEvent.subtype === 'status') {
-          this.ctx.emitEvent({
-            type: 'activity',
-            threadId: this.state.activeThreadId!,
-            turnId,
-            payload: {
-              activityType: 'info',
-              label: `Status: ${sysEvent.status}`,
-            },
-          });
           this.ctx.log.info(`Claude Code status: ${sysEvent.status}`);
         }
         break;
@@ -559,25 +383,299 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
 
       case 'tool_progress': {
         const toolEvent = event as any;
+        // Update existing activity if we have the tool tracked
         this.ctx.emitEvent({
           type: 'activity',
           threadId: this.state.activeThreadId!,
           turnId,
           payload: {
-            activityType: 'tool_started',
-            label: toolEvent.tool_name || 'Tool',
+            activityType: 'tool',
+            label: toolEvent.tool_name || 'Tool running',
             detail: `${toolEvent.elapsed_time_seconds}s elapsed`,
             status: 'running',
           },
         });
-        this.ctx.log.info(`Tool progress: ${toolEvent.tool_name} (${toolEvent.elapsed_time_seconds}s)`);
         break;
       }
 
       default: {
-        // Still log but don't emit activity for unknown types
         this.ctx.log.info(`[SDK] Unhandled: ${event.type}`);
       }
+    }
+  }
+
+  /** Handle stream_event from the SDK */
+  private handleStreamEvent(streamEvent: any, turnId: string): void {
+    const streamType = streamEvent?.type;
+    const blockIndex = streamEvent?.index;
+    
+    switch (streamType) {
+      case 'content_block_start': {
+        const block = streamEvent.content_block;
+        const blockType = block?.type;
+        const blockId = block?.id || `block_${blockIndex}`;
+        
+        this.ctx.log.info(`[SDK] content_block_start: ${blockType} (${block?.name || 'no name'}) id=${blockId}`);
+
+        if (blockType === 'tool_use' || blockType === 'server_tool_use') {
+          const toolName = block.name || 'Tool';
+          const toolType = this.classifyTool(toolName);
+          const activityType = this.toolToActivityType(toolType);
+          const label = this.toolLabel(toolName);
+          
+          // Track this block
+          this.activeBlocks.set(blockId, {
+            id: blockId,
+            type: blockType,
+            name: toolName,
+            activityType,
+            label,
+            inputJson: '',
+            detail: undefined,
+          });
+
+          // Emit activity with status: running
+          this.ctx.emitEvent({
+            type: 'activity',
+            threadId: this.state.activeThreadId!,
+            turnId,
+            payload: {
+              activityType,
+              label,
+              status: 'running',
+            },
+          });
+
+          // Emit item.started for UI tracking
+          this.ctx.emitEvent({
+            type: 'item.started',
+            threadId: this.state.activeThreadId!,
+            turnId,
+            payload: {
+              itemId: blockId,
+              itemType: toolType,
+              title: toolName,
+            },
+          });
+          
+        } else if (blockType === 'thinking') {
+          const blockId = `thinking_${blockIndex}`;
+          this.activeBlocks.set(blockId, {
+            id: blockId,
+            type: 'thinking',
+            activityType: 'thinking',
+            label: 'Thinking...',
+            inputJson: '',
+          });
+
+          this.ctx.emitEvent({
+            type: 'activity',
+            threadId: this.state.activeThreadId!,
+            turnId,
+            payload: {
+              activityType: 'thinking',
+              label: 'Thinking...',
+              status: 'running',
+            },
+          });
+          
+        } else if (blockType === 'text') {
+          // Don't emit activity for text blocks - they're just the response
+          const blockId = `text_${blockIndex}`;
+          this.activeBlocks.set(blockId, {
+            id: blockId,
+            type: 'text',
+            activityType: 'info',
+            label: 'Writing response...',
+            inputJson: '',
+          });
+        }
+        break;
+      }
+
+      case 'content_block_delta': {
+        const delta = streamEvent.delta;
+        const deltaType = delta?.type;
+        const blockId = this.findBlockByIndex(blockIndex);
+        
+        if (deltaType === 'text_delta' && delta.text) {
+          this.outputBuffer += delta.text;
+          
+          this.ctx.emitEvent({
+            type: 'content.delta',
+            threadId: this.state.activeThreadId!,
+            turnId,
+            payload: {
+              streamKind: 'assistant_text',
+              delta: delta.text,
+            },
+          });
+          
+        } else if (deltaType === 'thinking_delta' && delta.thinking) {
+          this.ctx.emitEvent({
+            type: 'content.delta',
+            threadId: this.state.activeThreadId!,
+            turnId,
+            payload: {
+              streamKind: 'reasoning',
+              delta: delta.thinking,
+            },
+          });
+          
+        } else if (deltaType === 'input_json_delta' && delta.partial_json) {
+          // Accumulate JSON input for the tool
+          if (blockId) {
+            const block = this.activeBlocks.get(blockId);
+            if (block) {
+              block.inputJson += delta.partial_json;
+              
+              // Try to extract detail from accumulated JSON
+              const detail = this.tryExtractDetail(block.inputJson);
+              if (detail && detail !== block.detail) {
+                block.detail = detail;
+                
+                // Update activity with detail
+                this.ctx.emitEvent({
+                  type: 'activity',
+                  threadId: this.state.activeThreadId!,
+                  turnId,
+                  payload: {
+                    activityType: block.activityType,
+                    label: block.label,
+                    detail,
+                    status: 'running',
+                  },
+                });
+              }
+            }
+          }
+        }
+        break;
+      }
+
+      case 'content_block_stop': {
+        const blockId = this.findBlockByIndex(blockIndex);
+        if (blockId) {
+          const block = this.activeBlocks.get(blockId);
+          if (block) {
+            // Try final detail extraction
+            if (!block.detail && block.inputJson) {
+              block.detail = this.tryExtractDetail(block.inputJson);
+            }
+
+            // Only emit completion for tool blocks
+            if (block.type === 'tool_use' || block.type === 'server_tool_use') {
+              this.ctx.emitEvent({
+                type: 'activity',
+                threadId: this.state.activeThreadId!,
+                turnId,
+                payload: {
+                  activityType: block.activityType,
+                  label: block.label,
+                  detail: block.detail,
+                  status: 'completed',
+                },
+              });
+
+              this.ctx.emitEvent({
+                type: 'item.completed',
+                threadId: this.state.activeThreadId!,
+                turnId,
+                payload: {
+                  itemId: blockId,
+                  itemType: this.classifyTool(block.name || ''),
+                  status: 'completed',
+                },
+              });
+            } else if (block.type === 'thinking') {
+              this.ctx.emitEvent({
+                type: 'activity',
+                threadId: this.state.activeThreadId!,
+                turnId,
+                payload: {
+                  activityType: 'thinking',
+                  label: 'Thinking complete',
+                  status: 'completed',
+                },
+              });
+            }
+
+            this.activeBlocks.delete(blockId);
+          }
+        }
+        break;
+      }
+
+      case 'message_start': {
+        // Message starting - clear any stale blocks
+        this.activeBlocks.clear();
+        break;
+      }
+
+      case 'message_stop': {
+        // Message complete - clear blocks
+        this.activeBlocks.clear();
+        break;
+      }
+    }
+  }
+
+  /** Find block ID by stream index */
+  private findBlockByIndex(index: number): string | undefined {
+    // Blocks are stored with index-based fallback IDs
+    const entries = Array.from(this.activeBlocks.entries());
+    for (let i = 0; i < entries.length; i++) {
+      const [id, block] = entries[i];
+      if (id.endsWith(`_${index}`) || block.id.endsWith(`_${index}`)) {
+        return id;
+      }
+    }
+    // Return the most recently added block if index doesn't match
+    return entries[entries.length - 1]?.[0];
+  }
+
+  /** Try to extract detail (file path, command) from accumulated JSON */
+  private tryExtractDetail(json: string): string | undefined {
+    try {
+      // Try to parse - may fail if still accumulating
+      const input = JSON.parse(json);
+      
+      // File operations
+      if (input.path) return input.path;
+      if (input.file_path) return input.file_path;
+      if (input.file) return input.file;
+      
+      // Commands
+      if (input.command) {
+        const cmd = String(input.command);
+        return cmd.length > 60 ? cmd.slice(0, 57) + '...' : cmd;
+      }
+      
+      // Search patterns
+      if (input.pattern) return input.pattern;
+      if (input.query) return input.query;
+      if (input.regex) return input.regex;
+      
+      return undefined;
+    } catch {
+      // JSON not complete yet - try partial extraction
+      const pathMatch = json.match(/"(?:path|file_path|file)"\s*:\s*"([^"]+)"/);
+      if (pathMatch) return pathMatch[1];
+      
+      const cmdMatch = json.match(/"command"\s*:\s*"([^"]{1,60})/);
+      if (cmdMatch) return cmdMatch[1] + (json.includes(cmdMatch[0] + '"') ? '' : '...');
+      
+      return undefined;
+    }
+  }
+
+  /** Convert tool type to activity type */
+  private toolToActivityType(toolType: string): string {
+    switch (toolType) {
+      case 'file_read': return 'file_read';
+      case 'file_change': return 'file_write';
+      case 'command_execution': return 'command';
+      default: return 'tool';
     }
   }
   
