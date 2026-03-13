@@ -107,7 +107,7 @@ function resolveAccAccount(params: {
 // Channel Plugin
 // ============================================================================
 
-export const accChannelPlugin: ChannelPlugin<ResolvedAccAccount, AccProbe> = {
+export const accChannelPlugin: ChannelPlugin = {
   id: "acc",
   
   meta: {
@@ -132,7 +132,7 @@ export const accChannelPlugin: ChannelPlugin<ResolvedAccAccount, AccProbe> = {
 
   config: {
     listAccountIds: (cfg) => listAccAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveAccAccount({ cfg, accountId }),
+    resolveAccount: (cfg, accountId) => resolveAccAccount({ cfg, accountId: accountId ?? undefined }),
     defaultAccountId: (cfg) => getAccConfig(cfg)?.defaultAccount ?? DEFAULT_ACCOUNT_ID,
     
     setAccountEnabled: ({ cfg, accountId, enabled }) => {
@@ -183,7 +183,7 @@ export const accChannelPlugin: ChannelPlugin<ResolvedAccAccount, AccProbe> = {
       // Outbound is handled via WebSocket task.completed messages
       // This is a fallback for any direct send attempts
       console.log(`[acc] sendText called: to=${to}, accountId=${accountId}`);
-      return { ok: true, channel: "acc" };
+      return { ok: true, channel: "acc", messageId: `acc-${Date.now()}` };
     },
   },
 
@@ -192,69 +192,66 @@ export const accChannelPlugin: ChannelPlugin<ResolvedAccAccount, AccProbe> = {
       accountId: DEFAULT_ACCOUNT_ID,
       running: false,
       connected: false,
-      registered: false,
-      lastStartAt: null,
-      lastStopAt: null,
-      lastError: null,
+      lastStartAt: undefined,
+      lastStopAt: undefined,
+      lastError: undefined,
     },
     
-    collectStatusIssues: ({ account, runtime }) => {
-      const issues: string[] = [];
+    collectStatusIssues: (accounts: any[]) => {
+      const issues: any[] = [];
       
-      if (!account.serverUrl) {
-        issues.push("ACC server URL not configured");
-      }
-      if (!account.token) {
-        issues.push("ACC token not configured (set ACC_TOKEN env var or config)");
-      }
-      if (runtime && !runtime.connected) {
-        issues.push("Not connected to ACC server");
+      for (const snap of accounts) {
+        const account = snap.account ?? snap;
+        const runtime = snap.runtime;
+        if (!account?.serverUrl) {
+          issues.push({ channel: "acc", accountId: account?.accountId ?? "default", kind: "error", level: "error", message: "ACC server URL not configured" });
+        }
+        if (runtime && !runtime.connected) {
+          issues.push({ channel: "acc", accountId: account?.accountId ?? "default", kind: "warning", level: "warning", message: "Not connected to ACC server" });
+        }
       }
       
       return issues;
     },
     
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      running: snapshot.running ?? false,
-      connected: snapshot.connected ?? false,
-      registered: snapshot.registered ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-    }),
-    
-    probeAccount: async ({ account, timeoutMs }) => {
-      // TODO: Implement actual probe (test WebSocket connection)
+    buildChannelSummary: (params: any) => {
+      const snapshot = params?.snapshot ?? params;
       return {
-        ok: Boolean(account.serverUrl && account.token),
-        connected: false,
-        registered: false,
+        configured: snapshot?.configured ?? false,
+        running: snapshot?.running ?? false,
+        connected: snapshot?.connected ?? false,
       };
     },
     
-    buildAccountSnapshot: ({ account, runtime }) => ({
+    probeAccount: async ({ account, timeoutMs }: any) => {
+      // TODO: Implement actual probe (test WebSocket connection)
+      return {
+        ok: Boolean((account as any)?.serverUrl),
+        connected: false,
+      };
+    },
+    
+    buildAccountSnapshot: ({ account, runtime }: any) => ({
       accountId: account.accountId,
       name: account.agentName,
       enabled: account.enabled,
       configured: Boolean(account.serverUrl?.trim()),
-      serverUrl: account.serverUrl,
       running: runtime?.running ?? false,
       connected: runtime?.connected ?? false,
-      registered: runtime?.registered ?? false,
-      lastStartAt: runtime?.lastStartAt ?? null,
-      lastStopAt: runtime?.lastStopAt ?? null,
-      lastError: runtime?.lastError ?? null,
+      lastStartAt: runtime?.lastStartAt ?? undefined,
+      lastStopAt: runtime?.lastStopAt ?? undefined,
+      lastError: runtime?.lastError ?? undefined,
     }),
   },
 
   gateway: {
-    startAccount: async (ctx) => {
-      const { account, cfg, runtime, abortSignal, log } = ctx;
+    startAccount: async (ctx: any) => {
+      const { account, cfg, runtime, abortSignal, log: _log } = ctx;
+      const log = _log ?? { info: console.log, warn: console.warn, error: console.error, debug: console.log };
       
-      log?.info(`[acc:${account.accountId}] Starting ACC channel...`);
-      log?.info(`[acc:${account.accountId}] Server: ${account.serverUrl}`);
-      log?.info(`[acc:${account.accountId}] Agent: ${account.agentName}`);
+      log.info(`[acc:${account.accountId}] Starting ACC channel...`);
+      log.info(`[acc:${account.accountId}] Server: ${account.serverUrl}`);
+      log.info(`[acc:${account.accountId}] Agent: ${account.agentName}`);
       
       // Import WebSocket dynamically
       const { default: WebSocket } = await import("ws");
@@ -275,7 +272,7 @@ export const accChannelPlugin: ChannelPlugin<ResolvedAccAccount, AccProbe> = {
       const connect = () => {
         if (abortSignal?.aborted) return;
         
-        log?.debug(`[acc:${account.accountId}] Connecting to ${account.serverUrl}`);
+        log.debug(`[acc:${account.accountId}] Connecting to ${account.serverUrl}`);
         
         ws = new WebSocket(account.serverUrl, {
           headers: {
@@ -285,7 +282,7 @@ export const accChannelPlugin: ChannelPlugin<ResolvedAccAccount, AccProbe> = {
         });
         
         ws.on("open", () => {
-          log?.info(`[acc:${account.accountId}] Connected to ACC server`);
+          log.info(`[acc:${account.accountId}] Connected to ACC server`);
           updateRuntime({ connected: true, lastError: null });
           
           // Register with ACC
@@ -294,19 +291,19 @@ export const accChannelPlugin: ChannelPlugin<ResolvedAccAccount, AccProbe> = {
             metadata: {
               agentName: account.agentName,
               capabilities: ["streaming", "tools", "spawn"],
-              model: account.model ?? cfg.agent?.model ?? "anthropic/claude-sonnet-4-20250514",
+              model: account.model ?? (cfg.agents as any)?.defaults?.model ?? "anthropic/claude-sonnet-4-20250514",
               version: "1.0.0",
             },
           }));
           
           updateRuntime({ registered: true });
-          log?.info(`[acc:${account.accountId}] Registered as ${account.agentName}`);
+          log.info(`[acc:${account.accountId}] Registered as ${account.agentName}`);
         });
         
         ws.on("message", async (data) => {
           try {
             const msg = JSON.parse(data.toString());
-            log?.debug(`[acc:${account.accountId}] Received: ${msg.type}`);
+            log.debug(`[acc:${account.accountId}] Received: ${msg.type}`);
             
             switch (msg.type) {
               case "task.send":
@@ -320,18 +317,18 @@ export const accChannelPlugin: ChannelPlugin<ResolvedAccAccount, AccProbe> = {
                 break;
             }
           } catch (err) {
-            log?.error(`[acc:${account.accountId}] Message handling error: ${err}`);
+            log.error(`[acc:${account.accountId}] Message handling error: ${err}`);
           }
         });
         
         ws.on("close", (code) => {
-          log?.info(`[acc:${account.accountId}] Disconnected (code: ${code})`);
+          log.info(`[acc:${account.accountId}] Disconnected (code: ${code})`);
           updateRuntime({ connected: false, registered: false });
           scheduleReconnect();
         });
         
         ws.on("error", (err) => {
-          log?.error(`[acc:${account.accountId}] WebSocket error: ${err.message}`);
+          log.error(`[acc:${account.accountId}] WebSocket error: ${err.message}`);
           updateRuntime({ lastError: err.message });
         });
       };
@@ -340,7 +337,7 @@ export const accChannelPlugin: ChannelPlugin<ResolvedAccAccount, AccProbe> = {
       const scheduleReconnect = () => {
         if (abortSignal?.aborted || reconnectTimer) return;
         
-        log?.debug(`[acc:${account.accountId}] Reconnecting in ${account.reconnectInterval}ms`);
+        log.debug(`[acc:${account.accountId}] Reconnecting in ${account.reconnectInterval}ms`);
         reconnectTimer = setTimeout(() => {
           reconnectTimer = null;
           connect();
@@ -360,7 +357,7 @@ export const accChannelPlugin: ChannelPlugin<ResolvedAccAccount, AccProbe> = {
           return;
         }
         
-        log?.info(`[acc:${account.accountId}] Task received: ${taskId}`);
+        log.info(`[acc:${account.accountId}] Task received: ${taskId}`);
         
         const startedAt = Date.now();
         activeTasks.set(taskId, { startedAt });
@@ -390,7 +387,7 @@ export const accChannelPlugin: ChannelPlugin<ResolvedAccAccount, AccProbe> = {
           });
           
           const durationMs = Date.now() - startedAt;
-          log?.info(`[acc:${account.accountId}] Task completed: ${taskId} (${durationMs}ms)`);
+          log.info(`[acc:${account.accountId}] Task completed: ${taskId} (${durationMs}ms)`);
           
           ws?.send(JSON.stringify({
             type: "task.completed",
@@ -402,7 +399,7 @@ export const accChannelPlugin: ChannelPlugin<ResolvedAccAccount, AccProbe> = {
           
         } catch (err: any) {
           const durationMs = Date.now() - startedAt;
-          log?.error(`[acc:${account.accountId}] Task failed: ${taskId} - ${err.message}`);
+          log.error(`[acc:${account.accountId}] Task failed: ${taskId} - ${err.message}`);
           
           ws?.send(JSON.stringify({
             type: "task.error",
@@ -420,7 +417,7 @@ export const accChannelPlugin: ChannelPlugin<ResolvedAccAccount, AccProbe> = {
       const handleTaskCancel = (msg: { taskId: string }) => {
         const { taskId } = msg;
         if (activeTasks.has(taskId)) {
-          log?.info(`[acc:${account.accountId}] Cancelling task: ${taskId}`);
+          log.info(`[acc:${account.accountId}] Cancelling task: ${taskId}`);
           activeTasks.delete(taskId);
           ws?.send(JSON.stringify({ type: "task.cancelled", taskId }));
         }
@@ -428,7 +425,7 @@ export const accChannelPlugin: ChannelPlugin<ResolvedAccAccount, AccProbe> = {
       
       // Cleanup on abort
       abortSignal?.addEventListener("abort", () => {
-        log?.info(`[acc:${account.accountId}] Shutting down ACC channel`);
+        log.info(`[acc:${account.accountId}] Shutting down ACC channel`);
         if (reconnectTimer) clearTimeout(reconnectTimer);
         if (ws) ws.close();
         updateRuntime({ running: false, connected: false, registered: false });
