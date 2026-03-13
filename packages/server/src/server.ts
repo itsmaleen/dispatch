@@ -12,12 +12,14 @@ import { serve } from '@hono/node-server';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { AdapterConfig, AdapterEvent } from '@acc/contracts';
 import type { AdapterImplementation, AdapterContext } from './adapters/types';
+import { AdapterEventEmitter } from './adapters/types';
 import { createClaudeCodeAdapter } from './adapters/claude-code';
 import { createOpenClawAdapter } from './adapters/openclaw';
 
 interface ManagedAdapter {
   implementation: AdapterImplementation;
   config: AdapterConfig;
+  eventEmitter: AdapterEventEmitter;
 }
 
 interface ConnectedAgent {
@@ -305,29 +307,32 @@ export class CommandCenterServer {
       task.status = 'planning';
       task.agent = agentName;
 
-      // Ask agent to create a plan
+      // Ask agent to create a plan (plain text only so the UI can display it cleanly)
       const planPrompt = `Create a step-by-step plan for this task. Be concise.
 
 Task: ${task.message}
 
-Respond with a numbered list of steps you'll take to complete this task.`;
+Format your response as plain text only:
+- One numbered step per line (e.g. "1. First step" then newline "2. Second step").
+- Use real line breaks between steps. Do not output JSON, code blocks, or markdown.
+- Output only the numbered list, nothing else.`;
 
       try {
         let result: string;
         
         if (useClaudeCode) {
           // Use Claude Code adapter
-          const turnId = await claudeAdapter!.implementation.send(planPrompt);
-          // Wait for completion (TODO: proper event handling)
+          const { turnId } = await claudeAdapter!.implementation.send({ message: planPrompt });
           result = await this.waitForAdapterResult(claudeAdapter!.config.id, turnId);
         } else {
           // Use OpenClaw agent
           result = await this.sendTaskToAgent(agentName!, `plan-${id}`, planPrompt);
         }
         
-        task.plan = result;
+        const planText = this.normalizePlanText(result);
+        task.plan = planText;
         task.status = 'planned';
-        return c.json({ ok: true, plan: result, agent: agentName, source: useClaudeCode ? 'adapter' : 'agent' });
+        return c.json({ ok: true, plan: planText, agent: agentName, source: useClaudeCode ? 'adapter' : 'agent' });
       } catch (error) {
         task.status = 'failed';
         return c.json({ 
@@ -363,7 +368,7 @@ Respond with a numbered list of steps you'll take to complete this task.`;
         
         if (useClaudeCode && claudeAdapter) {
           // Use Claude Code adapter
-          const turnId = await claudeAdapter.implementation.send(executePrompt);
+          const { turnId } = await claudeAdapter.implementation.send({ message: executePrompt });
           result = await this.waitForAdapterResult(claudeAdapter.config.id, turnId);
         } else if (task.agent && task.agent !== 'claude-code') {
           // Use OpenClaw agent
@@ -456,6 +461,7 @@ Respond with a numbered list of steps you'll take to complete this task.`;
         throw new Error(`Unknown adapter kind: ${config.kind}`);
     }
 
+    const eventEmitter = new AdapterEventEmitter();
     const ctx: AdapterContext = {
       config,
       emitEvent: (event) => {
@@ -465,6 +471,7 @@ Respond with a numbered list of steps you'll take to complete this task.`;
           timestamp: new Date(),
         } as AdapterEvent;
         this.broadcastEvent(fullEvent);
+        eventEmitter.emit(fullEvent);
       },
       log: {
         info: (msg, ...args) => console.log(`[${config.id}] ${msg}`, ...args),
@@ -474,7 +481,7 @@ Respond with a numbered list of steps you'll take to complete this task.`;
     };
 
     await implementation.init(ctx);
-    this.adapters.set(config.id, { implementation, config });
+    this.adapters.set(config.id, { implementation, config, eventEmitter });
 
     return implementation;
   }
@@ -683,15 +690,15 @@ Respond with a numbered list of steps you'll take to complete this task.`;
         }
       };
       
-      // Subscribe to events
-      const unsubscribe = managed.implementation.onEvent((event: any) => {
+      // Subscribe to events (adapter emits via ctx.emitEvent -> eventEmitter)
+      const unsubscribe = managed.eventEmitter.on('*', (event: any) => {
         if (event.type === 'content.delta' && event.turnId === turnId) {
-          output += event.payload?.content || '';
+          output += event.payload?.delta ?? event.payload?.content ?? '';
         }
         if (event.type === 'turn.completed' && event.turnId === turnId) {
           completed = true;
           unsubscribe();
-          resolve(output || event.payload?.content || 'Task completed');
+          resolve(output || event.payload?.content || event.payload?.delta || 'Task completed');
         }
         if (event.type === 'turn.error' && event.turnId === turnId) {
           completed = true;
@@ -708,6 +715,30 @@ Respond with a numbered list of steps you'll take to complete this task.`;
         }
       }, 300000);
     });
+  }
+
+  /**
+   * Normalize plan text for UI: extract from JSON (e.g. payloads[0].text) if needed,
+   * so the client always receives plain text with real newlines.
+   */
+  private normalizePlanText(raw: string): string {
+    const trimmed = raw?.trim();
+    if (!trimmed) return trimmed || '';
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (parsed && typeof parsed === 'object' && 'payloads' in parsed) {
+        const payloads = (parsed as { payloads?: Array<{ text?: string }> }).payloads;
+        if (Array.isArray(payloads) && payloads.length > 0 && typeof payloads[0]?.text === 'string') {
+          return payloads[0].text.replace(/\\n/g, '\n').trim();
+        }
+      }
+      if (parsed && typeof parsed === 'object' && 'text' in parsed && typeof (parsed as { text: string }).text === 'string') {
+        return (parsed as { text: string }).text.replace(/\\n/g, '\n').trim();
+      }
+    } catch {
+      // Not JSON, use as-is but normalize escaped newlines
+    }
+    return trimmed.replace(/\\n/g, '\n');
   }
 
   /** List connected agents */

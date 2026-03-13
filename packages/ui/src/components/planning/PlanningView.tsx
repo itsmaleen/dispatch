@@ -59,8 +59,27 @@ export function PlanningView({ taskId, initialMessage, onExecute, onBack }: Plan
     }
   };
 
-  // Parse plan into steps
-  const planSteps = plan?.split('\n').filter(line => line.trim()) || [];
+  // Normalize plan for display: extract from JSON if needed, then split into steps (handle \n and literal \n)
+  const normalizedPlan = (() => {
+    if (!plan?.trim()) return '';
+    const s = plan.trim();
+    try {
+      const parsed = JSON.parse(s) as unknown;
+      if (parsed && typeof parsed === 'object' && 'payloads' in parsed) {
+        const payloads = (parsed as { payloads?: Array<{ text?: string }> }).payloads;
+        if (Array.isArray(payloads) && payloads.length > 0 && typeof payloads[0]?.text === 'string') {
+          return payloads[0].text.replace(/\\n/g, '\n').trim();
+        }
+      }
+      if (parsed && typeof parsed === 'object' && 'text' in parsed && typeof (parsed as { text: string }).text === 'string') {
+        return (parsed as { text: string }).text.replace(/\\n/g, '\n').trim();
+      }
+    } catch {
+      /* not JSON */
+    }
+    return s.replace(/\\n/g, '\n');
+  })();
+  const planSteps = normalizedPlan ? normalizedPlan.split(/\r?\n/).map(l => l.trim()).filter(Boolean) : [];
 
   return (
     <div className="h-full flex flex-col p-6">
@@ -117,7 +136,7 @@ export function PlanningView({ taskId, initialMessage, onExecute, onBack }: Plan
           )}
 
           {/* Planned state */}
-          {status === 'planned' && plan && (
+          {status === 'planned' && (plan || planSteps.length > 0) && (
             <div className="bg-zinc-800/50 rounded-lg overflow-hidden">
               {/* Plan header */}
               <div className="p-4 border-b border-zinc-700 flex items-center gap-3">
@@ -130,16 +149,20 @@ export function PlanningView({ taskId, initialMessage, onExecute, onBack }: Plan
                 </div>
               </div>
 
-              {/* Plan steps */}
+              {/* Plan steps: one step per line, clean numbering */}
               <div className="p-4 space-y-3">
-                {planSteps.map((step, i) => (
-                  <div key={i} className="flex items-start gap-3">
-                    <div className="w-6 h-6 rounded-full bg-zinc-700 flex items-center justify-center text-xs font-medium flex-shrink-0 mt-0.5">
-                      {i + 1}
+                {planSteps.length > 0 ? (
+                  planSteps.map((step, i) => (
+                    <div key={i} className="flex items-start gap-3">
+                      <div className="w-6 h-6 rounded-full bg-zinc-700 flex items-center justify-center text-xs font-medium shrink-0 mt-0.5">
+                        {i + 1}
+                      </div>
+                      <p className="text-zinc-300 leading-relaxed">{step.replace(/^\d+\.\s*/, '').trim()}</p>
                     </div>
-                    <p className="text-zinc-300">{step.replace(/^\d+\.\s*/, '')}</p>
-                  </div>
-                ))}
+                  ))
+                ) : (
+                  <p className="text-zinc-300 whitespace-pre-wrap">{normalizedPlan || plan}</p>
+                )}
               </div>
 
               {/* Actions */}
