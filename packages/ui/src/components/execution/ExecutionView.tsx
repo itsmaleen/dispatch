@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback, memo } from 'react';
-import { ArrowLeft, Loader2, CheckCircle, XCircle, Clock, Zap, Brain, FileSearch, FilePen, Terminal, Check, AlertCircle, Info } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { ArrowLeft, Loader2, CheckCircle, XCircle, Clock, Zap, Bot } from 'lucide-react';
+import { TimelineRow, type WorkEntry, type WorkTone } from '../shared/TimelineRow';
 import { api, useAppStore } from '../../stores/app';
 
 interface ExecutionViewProps {
@@ -13,136 +12,29 @@ interface ExecutionViewProps {
   onComplete: () => void;
 }
 
-// Timeline entry types
-type TimelineEntry = 
-  | { kind: 'activity'; id: string; type: ActivityType; label: string; detail?: string; status?: 'running' | 'completed' | 'failed' }
+// Timeline section types
+type TimelineSection = 
+  | { kind: 'work'; id: string; entries: WorkEntry[] }
   | { kind: 'working'; id: string }
-  | { kind: 'output'; id: string; content: string; isStreaming?: boolean };
-
-type ActivityType = 'thinking' | 'file_read' | 'file_write' | 'command' | 'tool' | 'info' | 'error';
+  | { kind: 'message'; id: string; content: string; isStreaming?: boolean };
 
 const WS_URL = 'ws://localhost:3333';
 
-// Activity styling
-function getActivityIcon(type: ActivityType, status?: string) {
-  const baseClass = "w-3 h-3 shrink-0";
-  
-  if (status === 'running') {
-    return <Loader2 className={`${baseClass} text-indigo-400 animate-spin`} />;
-  }
-  
-  switch (type) {
-    case 'thinking':
-      return <Brain className={`${baseClass} text-purple-400`} />;
-    case 'file_read':
-      return <FileSearch className={`${baseClass} text-blue-400`} />;
-    case 'file_write':
-      return <FilePen className={`${baseClass} text-emerald-400`} />;
-    case 'command':
-      return <Terminal className={`${baseClass} text-amber-400`} />;
-    case 'tool':
-      return status === 'completed' 
-        ? <Check className={`${baseClass} text-emerald-400`} />
-        : <Loader2 className={`${baseClass} text-zinc-400 animate-spin`} />;
-    case 'error':
-      return <AlertCircle className={`${baseClass} text-red-400`} />;
-    default:
-      return <Info className={`${baseClass} text-zinc-500`} />;
-  }
-}
-
-function getActivityColor(type: ActivityType): string {
-  switch (type) {
-    case 'error': return 'text-red-300';
-    case 'thinking': return 'text-purple-300/80';
-    case 'file_read': return 'text-blue-300/80';
-    case 'file_write': return 'text-emerald-300/80';
-    case 'command': return 'text-amber-300/80';
-    default: return 'text-zinc-400';
-  }
-}
-
-// Markdown component for output
-const MarkdownOutput = memo(function MarkdownOutput({ content, isStreaming }: { content: string; isStreaming?: boolean }) {
-  return (
-    <div className="prose prose-invert prose-sm max-w-none">
-      <ReactMarkdown 
-        remarkPlugins={[remarkGfm]}
-        components={{
-          pre: ({ children, ...props }) => (
-            <pre className="bg-zinc-900 rounded-lg p-3 overflow-x-auto text-sm" {...props}>
-              {children}
-            </pre>
-          ),
-          code: ({ children, className, ...props }) => {
-            const isInline = !className;
-            if (isInline) {
-              return <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-sm" {...props}>{children}</code>;
-            }
-            return <code className={className} {...props}>{children}</code>;
-          },
-          a: ({ children, href, ...props }) => (
-            <a href={href} target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline" {...props}>
-              {children}
-            </a>
-          ),
-        }}
-      >
-        {content}
-      </ReactMarkdown>
-      {isStreaming && (
-        <span className="inline-block w-2 h-4 bg-indigo-400 animate-pulse ml-0.5" />
-      )}
-    </div>
-  );
-});
-
-// Activity row component
-const ActivityRow = memo(function ActivityRow({ entry }: { entry: TimelineEntry & { kind: 'activity' } }) {
-  return (
-    <div className="flex items-start gap-2 py-1">
-      <div className="mt-0.5">
-        {getActivityIcon(entry.type, entry.status)}
-      </div>
-      <div className="flex-1 min-w-0">
-        <span className={`text-[13px] ${getActivityColor(entry.type)}`}>
-          {entry.label}
-        </span>
-        {entry.detail && (
-          <span 
-            className="ml-2 text-zinc-500/70 truncate inline-block max-w-[60ch] align-bottom font-mono text-xs"
-            title={entry.detail}
-          >
-            {entry.detail}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-});
-
-// Working indicator (animated dots)
-const WorkingIndicator = memo(function WorkingIndicator() {
-  return (
-    <div className="flex items-center gap-2 py-2 pl-1">
-      <span className="flex items-center gap-[3px]">
-        <span className="h-1.5 w-1.5 rounded-full bg-indigo-400/60 animate-pulse" />
-        <span className="h-1.5 w-1.5 rounded-full bg-indigo-400/60 animate-pulse [animation-delay:200ms]" />
-        <span className="h-1.5 w-1.5 rounded-full bg-indigo-400/60 animate-pulse [animation-delay:400ms]" />
-      </span>
-      <span className="text-xs text-zinc-500">Working...</span>
-    </div>
-  );
-});
-
-export function ExecutionView({ taskId, initialStatus, initialResult, initialAgent, onBack, onComplete }: ExecutionViewProps) {
+export function ExecutionView({ 
+  taskId, 
+  initialStatus, 
+  initialResult, 
+  initialAgent, 
+  onBack, 
+  onComplete 
+}: ExecutionViewProps) {
   const { updateTask } = useAppStore();
   const [agent] = useState<string | undefined>(initialAgent);
   const isAlreadyDone = initialStatus === 'completed' || initialStatus === 'failed';
   const [status, setStatus] = useState<'executing' | 'completed' | 'failed'>(() =>
     isAlreadyDone ? initialStatus : 'executing'
   );
-  const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
+  const [timeline, setTimeline] = useState<TimelineSection[]>([]);
   const [outputContent, setOutputContent] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [startTime] = useState(Date.now());
@@ -151,32 +43,60 @@ export function ExecutionView({ taskId, initialStatus, initialResult, initialAge
   const wsRef = useRef<WebSocket | null>(null);
   const executedRef = useRef<string | null>(null);
 
-  // Add activity to timeline
-  const addActivity = useCallback((type: ActivityType, label: string, detail?: string, status?: 'running' | 'completed' | 'failed') => {
-    const entry: TimelineEntry = {
-      kind: 'activity',
-      id: crypto.randomUUID(),
-      type,
-      label,
-      detail,
-      status,
-    };
-    setTimeline(prev => [...prev, entry]);
+  // Add a work entry to the current work card (or create a new one)
+  const addWorkEntry = useCallback((entry: WorkEntry) => {
+    setTimeline(prev => {
+      const last = prev[prev.length - 1];
+      
+      // If last section is a work card, add to it
+      if (last?.kind === 'work') {
+        return [
+          ...prev.slice(0, -1),
+          { ...last, entries: [...last.entries, entry] }
+        ];
+      }
+      
+      // Otherwise create a new work card
+      return [
+        ...prev,
+        { kind: 'work', id: crypto.randomUUID(), entries: [entry] }
+      ];
+    });
   }, []);
 
-  // Update last running activity to completed
-  const completeLastActivity = useCallback(() => {
+  // Update the last running entry to completed
+  const completeLastEntry = useCallback(() => {
     setTimeline(prev => {
       const updated = [...prev];
       for (let i = updated.length - 1; i >= 0; i--) {
-        const item = updated[i];
-        if (item.kind === 'activity' && item.status === 'running') {
-          updated[i] = { ...item, status: 'completed' };
-          break;
+        const section = updated[i];
+        if (section.kind === 'work') {
+          const entries = [...section.entries];
+          for (let j = entries.length - 1; j >= 0; j--) {
+            if (entries[j].status === 'running') {
+              entries[j] = { ...entries[j], status: 'completed' };
+              updated[i] = { ...section, entries };
+              return updated;
+            }
+          }
         }
       }
-      return updated;
+      return prev;
     });
+  }, []);
+
+  // Map event types to work tones
+  const mapToTone = useCallback((type: string): WorkTone => {
+    switch (type) {
+      case 'thinking': return 'thinking';
+      case 'file_read': return 'file_read';
+      case 'file_write':
+      case 'file_change': return 'file_write';
+      case 'command':
+      case 'command_execution': return 'command';
+      case 'error': return 'error';
+      default: return 'tool';
+    }
   }, []);
 
   // Handle WebSocket events
@@ -185,27 +105,40 @@ export function ExecutionView({ taskId, initialStatus, initialResult, initialAge
     const event = data.event;
     if (!event) return;
     
+    // Activity events from adapter
     if (event.type === 'activity' && event.payload) {
       const p = event.payload;
-      addActivity(p.activityType, p.label, p.detail, p.status);
+      addWorkEntry({
+        id: crypto.randomUUID(),
+        tone: mapToTone(p.activityType),
+        label: p.label,
+        detail: p.detail,
+        status: p.status,
+      });
     }
     
+    // Content streaming
     if (event.type === 'content.delta' && event.payload?.delta) {
       setOutputContent(prev => prev + event.payload.delta);
     }
     
+    // Tool/item started
     if (event.type === 'item.started' && event.payload) {
       const p = event.payload;
-      const type = p.itemType === 'file_read' ? 'file_read' :
-                   p.itemType === 'file_change' ? 'file_write' :
-                   p.itemType === 'command_execution' ? 'command' : 'tool';
-      addActivity(type, p.title || 'Tool', p.detail, 'running');
+      addWorkEntry({
+        id: crypto.randomUUID(),
+        tone: mapToTone(p.itemType || 'tool'),
+        label: p.title || 'Tool',
+        detail: p.detail,
+        status: 'running',
+      });
     }
     
+    // Tool/item completed
     if (event.type === 'item.completed') {
-      completeLastActivity();
+      completeLastEntry();
     }
-  }, [addActivity, completeLastActivity]);
+  }, [addWorkEntry, completeLastEntry, mapToTone]);
 
   // WebSocket setup
   useEffect(() => {
@@ -219,7 +152,7 @@ export function ExecutionView({ taskId, initialStatus, initialResult, initialAge
         const data = JSON.parse(e.data);
         handleWsEvent(data);
       } catch {
-        // Ignore
+        // Ignore parse errors
       }
     };
     
@@ -251,28 +184,42 @@ export function ExecutionView({ taskId, initialStatus, initialResult, initialAge
 
     const execute = async () => {
       const agentLabel = agent === 'claude-code' ? 'Claude Code' : agent || 'agent';
-      addActivity('info', `Starting execution with ${agentLabel}`);
+      addWorkEntry({
+        id: crypto.randomUUID(),
+        tone: 'info',
+        label: `Starting execution with ${agentLabel}`,
+      });
       
       try {
         const { result } = await api.executeTask(taskId, agent);
         
         setOutputContent(result);
         setStatus('completed');
-        addActivity('info', 'Execution completed');
+        addWorkEntry({
+          id: crypto.randomUUID(),
+          tone: 'info',
+          label: 'Execution completed',
+          status: 'completed',
+        });
         
         updateTask(taskId, { status: 'completed', result });
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : 'Execution failed';
         setError(errMsg);
         setStatus('failed');
-        addActivity('error', 'Execution failed', errMsg);
+        addWorkEntry({
+          id: crypto.randomUUID(),
+          tone: 'error',
+          label: 'Execution failed',
+          detail: errMsg,
+        });
         
         updateTask(taskId, { status: 'failed' });
       }
     };
 
     execute();
-  }, [taskId, agent, isAlreadyDone, initialStatus, initialResult, addActivity, updateTask]);
+  }, [taskId, agent, isAlreadyDone, initialStatus, initialResult, addWorkEntry, updateTask]);
 
   // Auto-scroll
   useEffect(() => {
@@ -287,111 +234,137 @@ export function ExecutionView({ taskId, initialStatus, initialResult, initialAge
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // Count total work entries
+  const workCount = timeline.reduce((acc, section) => {
+    if (section.kind === 'work') return acc + section.entries.length;
+    return acc;
+  }, 0);
+
   return (
     <div className="h-full flex flex-col bg-zinc-950">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-zinc-900/50">
         <div className="flex items-center gap-4">
           <button
             onClick={onBack}
-            className="flex items-center gap-2 text-zinc-400 hover:text-zinc-100"
+            className="flex items-center gap-1.5 text-zinc-400 hover:text-zinc-100 transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
-            <span>Back</span>
+            <span className="text-sm">Back</span>
           </button>
-          <div>
-            <h1 className="text-lg font-semibold flex items-center gap-2">
-              {status === 'executing' && (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
-                  Executing...
-                </>
-              )}
-              {status === 'completed' && (
-                <>
-                  <CheckCircle className="w-4 h-4 text-emerald-500" />
-                  Completed
-                </>
-              )}
-              {status === 'failed' && (
-                <>
-                  <XCircle className="w-4 h-4 text-red-500" />
-                  Failed
-                </>
-              )}
-            </h1>
-            {agent && (
-              <p className="text-xs text-zinc-500">
-                {agent === 'claude-code' ? 'Claude Code' : agent}
-              </p>
+          
+          <div className="h-4 w-px bg-zinc-700" />
+          
+          <div className="flex items-center gap-2">
+            {status === 'executing' && (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
+                <span className="text-sm font-medium text-zinc-200">Executing...</span>
+              </>
+            )}
+            {status === 'completed' && (
+              <>
+                <CheckCircle className="w-4 h-4 text-emerald-400" />
+                <span className="text-sm font-medium text-emerald-400">Completed</span>
+              </>
+            )}
+            {status === 'failed' && (
+              <>
+                <XCircle className="w-4 h-4 text-red-400" />
+                <span className="text-sm font-medium text-red-400">Failed</span>
+              </>
             )}
           </div>
         </div>
 
-        <div className="flex items-center gap-4 text-sm text-zinc-400">
-          <div className="flex items-center gap-1">
-            <Clock className="w-4 h-4" />
-            <span>{formatTime(elapsed)}</span>
+        <div className="flex items-center gap-4 text-sm">
+          {agent && (
+            <div className="flex items-center gap-1.5 text-zinc-500">
+              <Bot className="w-3.5 h-3.5" />
+              <span className="text-xs">
+                {agent === 'claude-code' ? 'Claude Code' : agent}
+              </span>
+            </div>
+          )}
+          <div className="flex items-center gap-1.5 text-zinc-500">
+            <Clock className="w-3.5 h-3.5" />
+            <span className="font-mono text-xs">{formatTime(elapsed)}</span>
           </div>
-          <div className="flex items-center gap-1">
-            <Zap className="w-4 h-4" />
-            <span>{taskId.slice(0, 8)}</span>
+          <div className="flex items-center gap-1.5 text-zinc-600">
+            <Zap className="w-3.5 h-3.5" />
+            <span className="font-mono text-xs">{taskId.slice(0, 8)}</span>
           </div>
         </div>
       </div>
 
-      {/* Timeline / Terminal */}
+      {/* Timeline */}
       <div 
         ref={timelineRef}
-        className="flex-1 overflow-y-auto p-4"
+        className="flex-1 overflow-y-auto"
       >
-        <div className="max-w-3xl mx-auto space-y-1">
-          {/* Activity entries */}
-          {timeline.map((entry) => {
-            if (entry.kind === 'activity') {
-              return <ActivityRow key={entry.id} entry={entry} />;
+        <div className="max-w-3xl mx-auto px-4 py-4">
+          {/* Work sections */}
+          {timeline.map((section) => {
+            switch (section.kind) {
+              case 'work':
+                return (
+                  <TimelineRow 
+                    key={section.id} 
+                    type="work" 
+                    entries={section.entries} 
+                  />
+                );
+              case 'message':
+                return (
+                  <TimelineRow 
+                    key={section.id} 
+                    type="message" 
+                    content={section.content}
+                    isStreaming={section.isStreaming}
+                  />
+                );
+              default:
+                return null;
             }
-            return null;
           })}
           
           {/* Working indicator */}
-          {status === 'executing' && timeline.length > 0 && (
-            <WorkingIndicator />
+          {status === 'executing' && workCount > 0 && (
+            <TimelineRow type="working" />
           )}
           
-          {/* Output section */}
+          {/* Output / Response */}
           {outputContent && (
-            <div className="mt-4 pt-4 border-t border-zinc-800">
-              <div className="mb-2 flex items-center gap-2">
-                <span className="text-[10px] uppercase tracking-wider text-zinc-500">Response</span>
-                {status === 'executing' && (
-                  <span className="text-xs text-indigo-400">(streaming)</span>
-                )}
-              </div>
-              <div className="bg-zinc-900/50 rounded-lg p-4 border border-zinc-800">
-                <MarkdownOutput 
-                  content={outputContent} 
-                  isStreaming={status === 'executing'} 
-                />
-              </div>
+            <TimelineRow 
+              type="message" 
+              content={outputContent}
+              isStreaming={status === 'executing'}
+            />
+          )}
+          
+          {/* Empty state */}
+          {timeline.length === 0 && !outputContent && status === 'executing' && (
+            <div className="flex flex-col items-center justify-center py-12 text-zinc-500">
+              <Loader2 className="w-6 h-6 animate-spin mb-3 text-indigo-400/50" />
+              <p className="text-sm">Waiting for agent...</p>
             </div>
           )}
         </div>
       </div>
 
       {/* Footer */}
-      <div className="p-4 border-t border-zinc-800 flex justify-between items-center">
-        <div className="text-sm text-zinc-500">
-          {status === 'completed' && 'Task completed successfully'}
-          {status === 'failed' && error}
-          {status === 'executing' && `${timeline.length} activities`}
+      <div className="px-4 py-3 border-t border-zinc-800 bg-zinc-900/50 flex justify-between items-center">
+        <div className="text-xs text-zinc-500">
+          {status === 'completed' && `Completed • ${workCount} activities`}
+          {status === 'failed' && (error || 'Execution failed')}
+          {status === 'executing' && `${workCount} activities`}
         </div>
         
-        <div className="flex gap-3">
+        <div className="flex gap-2">
           {status === 'completed' && (
             <button
               onClick={onComplete}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg font-medium"
+              className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm font-medium transition-colors"
             >
               Done
             </button>
@@ -400,13 +373,13 @@ export function ExecutionView({ taskId, initialStatus, initialResult, initialAge
             <>
               <button
                 onClick={onBack}
-                className="px-4 py-2 text-zinc-400 hover:text-zinc-100"
+                className="px-3 py-1.5 text-zinc-400 hover:text-zinc-100 text-sm transition-colors"
               >
                 Go Back
               </button>
               <button
                 onClick={() => window.location.reload()}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg"
+                className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium transition-colors"
               >
                 Retry
               </button>
