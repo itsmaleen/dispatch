@@ -303,9 +303,22 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
     const turnId = this.currentTurn?.turnId;
     if (!turnId) return;
 
+    // Log ALL SDK events for debugging
+    this.ctx.log.info(`[SDK] ${event.type}${(event as any).subtype ? `:${(event as any).subtype}` : ''}`);
+
     switch (event.type) {
       case 'assistant': {
-        // Full assistant message
+        // Full assistant message - emit activity for visibility
+        this.ctx.emitEvent({
+          type: 'activity',
+          threadId: this.state.activeThreadId!,
+          turnId,
+          payload: {
+            activityType: 'info',
+            label: 'Processing response...',
+          },
+        });
+        
         const content = (event.message as any)?.content;
         if (Array.isArray(content)) {
           for (const block of content) {
@@ -327,14 +340,17 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       }
 
       case 'stream_event': {
-        // Streaming delta
         const streamEvent = event.event as any;
-        if (streamEvent?.type === 'content_block_delta') {
+        const streamType = streamEvent?.type;
+        this.ctx.log.info(`[SDK] stream_event/${streamType}`);
+        
+        if (streamType === 'content_block_delta') {
           const delta = streamEvent.delta;
-          if (delta?.type === 'text_delta' && delta.text) {
+          const deltaType = delta?.type;
+          this.ctx.log.info(`[SDK] delta type: ${deltaType}`);
+          
+          if (deltaType === 'text_delta' && delta.text) {
             this.outputBuffer += delta.text;
-            
-            // Emit content delta
             this.ctx.emitEvent({
               type: 'content.delta',
               threadId: this.state.activeThreadId!,
@@ -344,8 +360,8 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
                 delta: delta.text,
               },
             });
-          } else if (delta?.type === 'thinking_delta' && delta.thinking) {
-            // Emit thinking activity
+          } else if (deltaType === 'thinking_delta' && delta.thinking) {
+            // Thinking/reasoning
             this.ctx.emitEvent({
               type: 'activity',
               threadId: this.state.activeThreadId!,
@@ -356,7 +372,6 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
                 detail: delta.thinking.slice(0, 100),
               },
             });
-            
             this.ctx.emitEvent({
               type: 'content.delta',
               threadId: this.state.activeThreadId!,
@@ -366,12 +381,29 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
                 delta: delta.thinking,
               },
             });
+          } else if (deltaType === 'input_json_delta') {
+            // Tool input streaming - show as activity
+            this.ctx.emitEvent({
+              type: 'activity',
+              threadId: this.state.activeThreadId!,
+              turnId,
+              payload: {
+                activityType: 'tool',
+                label: 'Building tool input...',
+                status: 'running',
+              },
+            });
           }
-        } else if (streamEvent?.type === 'content_block_start') {
-          // Tool use started
+        } else if (streamType === 'content_block_start') {
           const block = streamEvent.content_block;
-          if (block?.type === 'tool_use' || block?.type === 'server_tool_use') {
+          const blockType = block?.type;
+          this.ctx.log.info(`[SDK] content_block_start: ${blockType} - ${block?.name || 'no name'}`);
+          
+          if (blockType === 'tool_use' || blockType === 'server_tool_use') {
             const toolType = this.classifyTool(block.name);
+            const activityType = toolType === 'file_read' ? 'file_read' : 
+                                 toolType === 'file_change' ? 'file_write' :
+                                 toolType === 'command_execution' ? 'command' : 'tool';
             const detail = this.summarizeToolInput(block.name, block.input);
             
             this.ctx.emitEvent({
@@ -379,9 +411,7 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
               threadId: this.state.activeThreadId!,
               turnId,
               payload: {
-                activityType: toolType === 'file_read' ? 'file_read' : 
-                              toolType === 'file_change' ? 'file_write' :
-                              toolType === 'command_execution' ? 'command' : 'tool_started',
+                activityType,
                 label: this.toolLabel(block.name),
                 detail,
                 status: 'running',
@@ -399,16 +429,38 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
                 detail,
               },
             });
+          } else if (blockType === 'thinking') {
+            // Thinking block started
+            this.ctx.emitEvent({
+              type: 'activity',
+              threadId: this.state.activeThreadId!,
+              turnId,
+              payload: {
+                activityType: 'thinking',
+                label: 'Thinking...',
+                status: 'running',
+              },
+            });
+          } else if (blockType === 'text') {
+            // Text block started - response beginning
+            this.ctx.emitEvent({
+              type: 'activity',
+              threadId: this.state.activeThreadId!,
+              turnId,
+              payload: {
+                activityType: 'info',
+                label: 'Writing response...',
+              },
+            });
           }
-        } else if (streamEvent?.type === 'content_block_stop') {
-          // Tool use completed
+        } else if (streamType === 'content_block_stop') {
           this.ctx.emitEvent({
             type: 'activity',
             threadId: this.state.activeThreadId!,
             turnId,
             payload: {
-              activityType: 'tool_completed',
-              label: 'Tool completed',
+              activityType: 'info',
+              label: 'Block completed',
               status: 'completed',
             },
           });
@@ -422,79 +474,91 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
               status: 'completed',
             },
           });
-        }
-        break;
-      }
-
-      case 'result': {
-        // Query result with usage info
-        const result = event as any;
-        
-        // Emit usage/cost as activity
-        if (result.usage || typeof result.total_cost_usd === 'number') {
-          const parts = [];
-          if (result.usage) {
-            parts.push(`${result.usage.input_tokens} in / ${result.usage.output_tokens} out`);
-          }
-          if (typeof result.total_cost_usd === 'number') {
-            parts.push(`$${result.total_cost_usd.toFixed(4)}`);
-          }
-          
+        } else if (streamType === 'message_start') {
           this.ctx.emitEvent({
             type: 'activity',
             threadId: this.state.activeThreadId!,
             turnId,
             payload: {
               activityType: 'info',
-              label: 'Completed',
-              detail: parts.join(' • '),
+              label: 'Starting response...',
             },
           });
-          
+        } else if (streamType === 'message_stop') {
+          this.ctx.emitEvent({
+            type: 'activity',
+            threadId: this.state.activeThreadId!,
+            turnId,
+            payload: {
+              activityType: 'info',
+              label: 'Response complete',
+              status: 'completed',
+            },
+          });
+        }
+        break;
+      }
+
+      case 'result': {
+        const result = event as any;
+        const parts = [];
+        if (result.usage) {
+          parts.push(`${result.usage.input_tokens} in / ${result.usage.output_tokens} out`);
+        }
+        if (typeof result.total_cost_usd === 'number') {
+          parts.push(`$${result.total_cost_usd.toFixed(4)}`);
+        }
+        
+        this.ctx.emitEvent({
+          type: 'activity',
+          threadId: this.state.activeThreadId!,
+          turnId,
+          payload: {
+            activityType: 'info',
+            label: 'Completed',
+            detail: parts.join(' • ') || undefined,
+          },
+        });
+        
+        if (parts.length > 0) {
           this.ctx.log.info(`Usage: ${parts.join(' • ')}`);
         }
         break;
       }
 
       case 'system': {
-        // System messages (status updates, etc)
         const sysEvent = event as any;
-        if (sysEvent.subtype === 'status') {
-          this.ctx.emitEvent({
-            type: 'activity',
-            threadId: this.state.activeThreadId!,
-            turnId,
-            payload: {
-              activityType: 'info',
-              label: `Status: ${sysEvent.status}`,
-            },
-          });
-          this.ctx.log.info(`Claude Code status: ${sysEvent.status}`);
-        }
+        this.ctx.emitEvent({
+          type: 'activity',
+          threadId: this.state.activeThreadId!,
+          turnId,
+          payload: {
+            activityType: 'info',
+            label: sysEvent.subtype === 'status' ? `Status: ${sysEvent.status}` : `System: ${sysEvent.subtype}`,
+          },
+        });
         break;
       }
 
       case 'tool_progress': {
-        // Tool execution progress
         const toolEvent = event as any;
         this.ctx.emitEvent({
           type: 'activity',
           threadId: this.state.activeThreadId!,
           turnId,
           payload: {
-            activityType: 'tool_started',
-            label: toolEvent.tool_name,
+            activityType: 'tool',
+            label: toolEvent.tool_name || 'Tool',
             detail: `${toolEvent.elapsed_time_seconds}s elapsed`,
             status: 'running',
           },
         });
-        this.ctx.log.info(`Tool progress: ${toolEvent.tool_name} (${toolEvent.elapsed_time_seconds}s)`);
         break;
       }
 
       default: {
-        // Log unhandled event types for debugging
-        this.ctx.log.info(`SDK event: ${event.type}`);
+        // Still log but don't emit activity for unknown types
+        this.ctx.log.info(`[SDK] Unhandled: ${event.type}`);
       }
     }
   }

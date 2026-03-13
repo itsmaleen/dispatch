@@ -212,6 +212,31 @@ export interface ErrorEvent {
   timestamp: Date;
 }
 
+// ============ Activity Events ============
+
+export type ActivityType = 
+  | 'thinking'
+  | 'file_read'
+  | 'file_write'
+  | 'command'
+  | 'tool'
+  | 'info'
+  | 'error';
+
+export interface ActivityEvent {
+  type: 'activity';
+  adapterId?: string;
+  threadId: string;
+  turnId: string;
+  payload: {
+    activityType: ActivityType;
+    label: string;
+    detail?: string;
+    status?: 'running' | 'completed' | 'failed';
+  };
+  timestamp?: Date;
+}
+
 // ============ Union Type ============
 
 export type RuntimeEvent = 
@@ -229,4 +254,5 @@ export type RuntimeEvent =
   | ApprovalRequestedEvent
   | ApprovalResolvedEvent
   | PlanUpdatedEvent
-  | ErrorEvent;
+  | ErrorEvent
+  | ActivityEvent;
