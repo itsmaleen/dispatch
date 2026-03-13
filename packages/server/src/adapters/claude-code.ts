@@ -262,6 +262,7 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       const sdkOptions: Options = {
         cwd: this.config.cwd ?? process.cwd(),
         permissionMode: this.config.options?.permissionMode ?? 'bypassPermissions',
+        includePartialMessages: true, // Enable streaming events for activity tracking
       };
 
       // Model: task override > config override > default
@@ -405,6 +406,28 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
             status: 'running',
           },
         });
+        break;
+      }
+
+      case 'tool_use_summary': {
+        // Tool completion with summary text
+        const summaryEvent = event as any;
+        this.ctx.emitEvent({
+          type: 'activity',
+          threadId: this.state.activeThreadId!,
+          turnId,
+          payload: {
+            activityType: 'tool',
+            label: summaryEvent.summary || 'Tool completed',
+            status: 'completed',
+          },
+        });
+        break;
+      }
+
+      case 'user': {
+        // User messages (tool results, etc.) - just log, don't emit activity
+        this.ctx.log.info(`[SDK] user message (tool result or input)`);
         break;
       }
 
