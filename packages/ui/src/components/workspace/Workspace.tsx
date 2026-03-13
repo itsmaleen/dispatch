@@ -538,7 +538,7 @@ export function Workspace() {
       
       if (ccStatus.available) {
         allAgents.push({
-          id: 'claude-code',
+          id: 'claude-code-local', // Must match adapter ID on server
           name: 'Claude Code',
           status: 'ready',
           icon: '🖥️',
@@ -734,20 +734,88 @@ export function Workspace() {
     setChatMessages(prev => [...prev, userMsg]);
     setIsChatStreaming(true);
 
-    // Simple command detection
     const lower = text.toLowerCase();
-    if (lower.includes('run it') || lower.includes('execute') || lower.includes('go ahead')) {
+
+    // Execute command - run the last plan
+    if (lower.includes('run it') || lower.includes('execute') || lower.includes('go ahead') || lower.includes('do it')) {
       const lastPlan = [...chatMessages].reverse().find(m => m.plan);
       if (lastPlan?.plan) {
         setPlanSteps(lastPlan.plan);
-        handleExecute();
+        setTimeout(() => handleExecute(), 100);
         setChatMessages(prev => [...prev, { id: `${Date.now()}`, role: 'assistant', content: '🚀 Executing plan. Watch the terminals!', timestamp: makeTimestamp() }]);
+      } else {
+        setChatMessages(prev => [...prev, { id: `${Date.now()}`, role: 'assistant', content: 'No plan to execute yet. Describe a task first!', timestamp: makeTimestamp() }]);
       }
       setIsChatStreaming(false);
       return;
     }
 
-    // Generate plan via API
+    // Status query
+    if (lower.includes('status') || lower.includes('progress') || lower.includes('what\'s happening')) {
+      const busy = terminals.filter(t => t.isStreaming);
+      const msg = busy.length > 0
+        ? `Currently ${busy.length} terminal(s) active:\n${busy.map(t => `• ${t.agent.name}: ${t.currentTask || 'working...'}`).join('\n')}`
+        : planSteps.some(s => s.status === 'running')
+          ? `Executing plan: ${planSteps.filter(s => s.status === 'completed').length}/${planSteps.length} steps done`
+          : 'All quiet. Ready for a new task!';
+      setChatMessages(prev => [...prev, { id: `${Date.now()}`, role: 'assistant', content: msg, timestamp: makeTimestamp() }]);
+      setIsChatStreaming(false);
+      return;
+    }
+
+    // Detect if this is a simple question vs a task
+    const isQuestion = lower.includes('?') || 
+                       lower.startsWith('what') || 
+                       lower.startsWith('how') || 
+                       lower.startsWith('why') ||
+                       lower.startsWith('can you') ||
+                       lower.startsWith('tell me') ||
+                       lower.length < 30;
+
+    // For simple questions, ask Claude directly without planning
+    if (isQuestion && !lower.includes('build') && !lower.includes('create') && !lower.includes('implement') && !lower.includes('add')) {
+      try {
+        // Send directly to Claude Code for a quick answer
+        const res = await fetch(`${API_URL}/adapters/claude-code-local/send`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            message: text,
+            taskOptions: { taskType: 'planning', effort: 'low', maxTurns: 1 }
+          }),
+        });
+        const data = await res.json();
+        
+        if (data.ok) {
+          // Wait a bit for the response
+          setTimeout(async () => {
+            const resultRes = await fetch(`${API_URL}/adapters/claude-code-local/result/${data.turnId}`);
+            const resultData = await resultRes.json();
+            setChatMessages(prev => [...prev, { 
+              id: `${Date.now()}`, 
+              role: 'assistant', 
+              content: resultData.result || 'Let me think about that...', 
+              timestamp: makeTimestamp() 
+            }]);
+            setIsChatStreaming(false);
+          }, 2000);
+        } else {
+          // Fallback to planning mode
+          setChatMessages(prev => [...prev, { id: `${Date.now()}`, role: 'assistant', content: `I'll help with that. Let me create a plan...`, timestamp: makeTimestamp() }]);
+          await generatePlan(text);
+        }
+        return;
+      } catch {
+        // Fallback to planning mode
+      }
+    }
+
+    // For tasks, generate a plan
+    setChatMessages(prev => [...prev, { id: `${Date.now()}-thinking`, role: 'assistant', content: 'Creating a plan...', timestamp: makeTimestamp(), isStreaming: true }]);
+    await generatePlan(text);
+  };
+
+  const generatePlan = async (text: string) => {
     try {
       const { taskId } = await api.createTask(text);
       const planResult = await api.planTask(taskId, agents[0]?.id);
@@ -755,7 +823,7 @@ export function Workspace() {
       const steps = planResult.plan.split('\n').filter(Boolean).map((line, i) => ({
         id: `step-${Date.now()}-${i}`,
         text: line.replace(/^\d+\.\s*/, ''),
-        agent: agents[i % agents.length]?.id || 'claude-code',
+        agent: agents[i % agents.length]?.id || 'claude-code-local',
       }));
 
       setChatMessages(prev => [...prev, {
