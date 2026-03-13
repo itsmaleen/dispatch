@@ -22,7 +22,9 @@ interface AgentsPanelProps {
 interface ClaudeCodeStatus {
   available: boolean;
   version?: string;
+  adapterRegistered?: boolean;
   checking: boolean;
+  initializing?: boolean;
 }
 
 export function AgentsPanel({ isOpen, onClose, serverUrl }: AgentsPanelProps) {
@@ -60,16 +62,15 @@ export function AgentsPanel({ isOpen, onClose, serverUrl }: AgentsPanelProps) {
       // Check Claude Code CLI availability
       setClaudeStatus(s => ({ ...s, checking: true }));
       try {
-        // Check via server endpoint that tests if 'claude' CLI exists
         const res = await fetch(`http://${serverUrl}/check/claude-code`);
         const data = await res.json();
         setClaudeStatus({
           available: data.available ?? false,
           version: data.version,
+          adapterRegistered: data.adapterRegistered,
           checking: false,
         });
       } catch {
-        // Fallback: assume not available if check fails
         setClaudeStatus({ available: false, checking: false });
       }
     };
@@ -169,24 +170,55 @@ export ACC_TOKEN="dev-token"`;
             <div className="bg-zinc-800/50 rounded-lg p-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  {claudeStatus.checking ? (
+                  {claudeStatus.checking || claudeStatus.initializing ? (
                     <RefreshCw className="w-5 h-5 text-zinc-400 animate-spin" />
-                  ) : claudeStatus.available ? (
+                  ) : claudeStatus.adapterRegistered ? (
                     <CheckCircle className="w-5 h-5 text-green-500" />
+                  ) : claudeStatus.available ? (
+                    <CheckCircle className="w-5 h-5 text-yellow-500" />
                   ) : (
                     <XCircle className="w-5 h-5 text-zinc-500" />
                   )}
                   <div>
                     <div className="font-medium">
-                      {claudeStatus.checking ? 'Checking...' : claudeStatus.available ? 'Available' : 'Not detected'}
+                      {claudeStatus.checking ? 'Checking...' 
+                        : claudeStatus.initializing ? 'Connecting...'
+                        : claudeStatus.adapterRegistered ? 'Connected' 
+                        : claudeStatus.available ? 'Available (not connected)' 
+                        : 'Not detected'}
                     </div>
                     <div className="text-sm text-zinc-500">
-                      {claudeStatus.available 
-                        ? 'Claude Code CLI is ready to use'
+                      {claudeStatus.adapterRegistered 
+                        ? `Claude Code ${claudeStatus.version || ''} - Primary adapter`
+                        : claudeStatus.available 
+                        ? 'Click Connect to use Claude Code as primary'
                         : 'Install Claude Code CLI to use this adapter'}
                     </div>
                   </div>
                 </div>
+                {claudeStatus.available && !claudeStatus.adapterRegistered && !claudeStatus.checking && (
+                  <button
+                    onClick={async () => {
+                      setClaudeStatus(s => ({ ...s, initializing: true }));
+                      try {
+                        const res = await fetch(`http://${serverUrl}/adapters/claude-code/init`, { method: 'POST' });
+                        const data = await res.json();
+                        if (data.ok) {
+                          setClaudeStatus(s => ({ ...s, adapterRegistered: true, initializing: false }));
+                        } else {
+                          alert(data.error || 'Failed to connect');
+                          setClaudeStatus(s => ({ ...s, initializing: false }));
+                        }
+                      } catch {
+                        alert('Failed to connect');
+                        setClaudeStatus(s => ({ ...s, initializing: false }));
+                      }
+                    }}
+                    className="px-3 py-1.5 text-sm bg-indigo-600 hover:bg-indigo-500 rounded-md"
+                  >
+                    Connect
+                  </button>
+                )}
                 {!claudeStatus.available && !claudeStatus.checking && (
                   <a
                     href="https://claude.ai/code"

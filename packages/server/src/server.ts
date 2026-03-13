@@ -63,9 +63,49 @@ export class CommandCenterServer {
       try {
         const { execSync } = await import('child_process');
         const version = execSync('claude --version 2>/dev/null', { encoding: 'utf-8' }).trim();
-        return c.json({ available: true, version });
+        
+        // Also check if adapter is registered
+        const hasAdapter = Array.from(this.adapters.values()).some(a => a.config.kind === 'claude-code');
+        
+        return c.json({ available: true, version, adapterRegistered: hasAdapter });
       } catch {
-        return c.json({ available: false });
+        return c.json({ available: false, adapterRegistered: false });
+      }
+    });
+
+    // Initialize Claude Code adapter
+    this.app.post('/adapters/claude-code/init', async (c) => {
+      try {
+        // Check if already registered
+        const existing = Array.from(this.adapters.values()).find(a => a.config.kind === 'claude-code');
+        if (existing) {
+          return c.json({ ok: true, status: 'already_registered', id: existing.config.id });
+        }
+
+        // Check if CLI is available
+        const { execSync } = await import('child_process');
+        try {
+          execSync('claude --version', { encoding: 'utf-8' });
+        } catch {
+          return c.json({ ok: false, error: 'Claude Code CLI not installed' }, 400);
+        }
+
+        // Create adapter
+        const config = {
+          id: 'claude-code-local',
+          kind: 'claude-code' as const,
+          name: 'Claude Code (Local)',
+        };
+        
+        const adapter = await this.createAdapter(config);
+        await adapter.connect();
+        
+        return c.json({ ok: true, status: 'initialized', id: config.id });
+      } catch (error) {
+        return c.json({ 
+          ok: false, 
+          error: error instanceof Error ? error.message : 'Failed to initialize' 
+        }, 500);
       }
     });
 
@@ -247,12 +287,15 @@ export class CommandCenterServer {
         return c.json({ ok: false, error: 'Task not found' }, 404);
       }
 
-      // Find an available agent
+      // Priority: 1) Claude Code adapter, 2) OpenClaw agents
+      const claudeAdapter = Array.from(this.adapters.values()).find(a => a.config.kind === 'claude-code');
       const agents = this.getConnectedAgents();
-      const agentName = task.agent || agents[0]?.name;
       
-      if (!agentName) {
-        return c.json({ ok: false, error: 'No agents available' }, 400);
+      const useClaudeCode = claudeAdapter && claudeAdapter.implementation.getState().status === 'ready';
+      const agentName = useClaudeCode ? 'claude-code' : (task.agent || agents[0]?.name);
+      
+      if (!useClaudeCode && !agentName) {
+        return c.json({ ok: false, error: 'No agents available. Connect Claude Code or an OpenClaw instance.' }, 400);
       }
 
       task.status = 'planning';
@@ -266,10 +309,21 @@ Task: ${task.message}
 Respond with a numbered list of steps you'll take to complete this task.`;
 
       try {
-        const result = await this.sendTaskToAgent(agentName, `plan-${id}`, planPrompt);
+        let result: string;
+        
+        if (useClaudeCode) {
+          // Use Claude Code adapter
+          const turnId = await claudeAdapter!.implementation.send(planPrompt);
+          // Wait for completion (TODO: proper event handling)
+          result = await this.waitForAdapterResult(claudeAdapter!.config.id, turnId);
+        } else {
+          // Use OpenClaw agent
+          result = await this.sendTaskToAgent(agentName!, `plan-${id}`, planPrompt);
+        }
+        
         task.plan = result;
         task.status = 'planned';
-        return c.json({ ok: true, plan: result, agent: agentName });
+        return c.json({ ok: true, plan: result, agent: agentName, source: useClaudeCode ? 'adapter' : 'agent' });
       } catch (error) {
         task.status = 'failed';
         return c.json({ 
@@ -288,10 +342,6 @@ Respond with a numbered list of steps you'll take to complete this task.`;
         return c.json({ ok: false, error: 'Task not found' }, 404);
       }
 
-      if (!task.agent) {
-        return c.json({ ok: false, error: 'No agent assigned' }, 400);
-      }
-
       task.status = 'executing';
 
       // Send the actual task to execute
@@ -299,8 +349,30 @@ Respond with a numbered list of steps you'll take to complete this task.`;
         ? `Execute this task according to the plan:\n\nTask: ${task.message}\n\nPlan:\n${task.plan}`
         : task.message;
 
+      // Priority: 1) Claude Code adapter, 2) OpenClaw agents
+      const claudeAdapter = Array.from(this.adapters.values()).find(a => a.config.kind === 'claude-code');
+      const useClaudeCode = task.agent === 'claude-code' || 
+        (claudeAdapter && claudeAdapter.implementation.getState().status === 'ready');
+
       try {
-        const result = await this.sendTaskToAgent(task.agent, `exec-${id}`, executePrompt);
+        let result: string;
+        
+        if (useClaudeCode && claudeAdapter) {
+          // Use Claude Code adapter
+          const turnId = await claudeAdapter.implementation.send(executePrompt);
+          result = await this.waitForAdapterResult(claudeAdapter.config.id, turnId);
+        } else if (task.agent && task.agent !== 'claude-code') {
+          // Use OpenClaw agent
+          result = await this.sendTaskToAgent(task.agent, `exec-${id}`, executePrompt);
+        } else {
+          // Fallback to first available agent
+          const agents = this.getConnectedAgents();
+          if (agents.length === 0) {
+            throw new Error('No agents available');
+          }
+          result = await this.sendTaskToAgent(agents[0].name, `exec-${id}`, executePrompt);
+        }
+        
         task.result = result;
         task.status = 'completed';
         task.completedAt = new Date();
@@ -580,6 +652,55 @@ Respond with a numbered list of steps you'll take to complete this task.`;
         if (agent.pendingTasks.has(taskId)) {
           agent.pendingTasks.delete(taskId);
           reject(new Error('Task timeout'));
+        }
+      }, 300000);
+    });
+  }
+
+  /** Wait for adapter to complete a turn */
+  async waitForAdapterResult(adapterId: string, turnId: string): Promise<string> {
+    const managed = this.adapters.get(adapterId);
+    if (!managed) {
+      throw new Error(`Adapter not found: ${adapterId}`);
+    }
+    
+    // For now, poll the adapter state or wait for event
+    // TODO: Use proper event subscription
+    return new Promise((resolve, reject) => {
+      let output = '';
+      let completed = false;
+      
+      const checkCompletion = () => {
+        const state = managed.implementation.getState();
+        if (state.status === 'ready' && state.activeThreadId !== turnId) {
+          // Turn completed
+          completed = true;
+          resolve(output || 'Task completed');
+        }
+      };
+      
+      // Subscribe to events
+      const unsubscribe = managed.implementation.onEvent((event: any) => {
+        if (event.type === 'content.delta' && event.turnId === turnId) {
+          output += event.payload?.content || '';
+        }
+        if (event.type === 'turn.completed' && event.turnId === turnId) {
+          completed = true;
+          unsubscribe();
+          resolve(output || event.payload?.content || 'Task completed');
+        }
+        if (event.type === 'turn.error' && event.turnId === turnId) {
+          completed = true;
+          unsubscribe();
+          reject(new Error(event.payload?.error || 'Task failed'));
+        }
+      });
+      
+      // Timeout after 5 minutes
+      setTimeout(() => {
+        if (!completed) {
+          unsubscribe();
+          reject(new Error('Adapter timeout'));
         }
       }, 300000);
     });
