@@ -180,6 +180,10 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
 
     const turnId = crypto.randomUUID();
     
+    // Phase 1: Log incoming cwd from SendOptions
+    this.ctx.log.info(`[send] Received cwd in options: ${options.cwd ?? '(not provided)'}`);
+    this.ctx.log.info(`[send] Message preview: ${options.message.slice(0, 80)}...`);
+    
     // Build the full message
     let message = options.message;
     if (options.context) {
@@ -263,13 +267,24 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       // Build SDK options with task-specific optimizations
       // cwd priority: message option > config > process.cwd()
       const effectiveCwd = queuedMessage.cwd ?? this.config.cwd ?? process.cwd();
-      this.ctx.log.info(`Working directory: ${effectiveCwd}${queuedMessage.cwd ? ' (from message)' : this.config.cwd ? ' (from config)' : ' (default)'}`);
+      
+      // Phase 1: Detailed CWD tracing
+      this.ctx.log.info(`┌─ CWD TRACE ─────────────────────────────────`);
+      this.ctx.log.info(`│ queuedMessage.cwd: ${queuedMessage.cwd ?? '(not set)'}`);
+      this.ctx.log.info(`│ this.config.cwd:   ${this.config.cwd ?? '(not set)'}`);
+      this.ctx.log.info(`│ process.cwd():     ${process.cwd()}`);
+      this.ctx.log.info(`│ → effectiveCwd:    ${effectiveCwd}`);
+      this.ctx.log.info(`│ source: ${queuedMessage.cwd ? 'message' : this.config.cwd ? 'config' : 'process.cwd()'}`);
+      this.ctx.log.info(`└─────────────────────────────────────────────`);
       
       const sdkOptions: Options = {
         cwd: effectiveCwd,
         permissionMode: this.config.options?.permissionMode ?? 'bypassPermissions',
         includePartialMessages: true, // Enable streaming events for activity tracking
       };
+      
+      // Log what we're passing to SDK
+      this.ctx.log.info(`SDK options.cwd = "${sdkOptions.cwd}"`);
 
       // Model: task override > config override > default
       const model = taskOpts.model ?? this.config.options?.model;
@@ -308,8 +323,15 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       queuedMessage.resolve(this.outputBuffer);
 
     } catch (error) {
-      this.ctx.log.error(`Claude Code query failed: ${error}`);
-      queuedMessage.reject(error instanceof Error ? error : new Error(String(error)));
+      // The SDK may throw on process exit even if result was success
+      // Check if we got output before failing
+      if (this.outputBuffer.length > 0) {
+        this.ctx.log.info(`Claude Code query ended with error but has output (${this.outputBuffer.length} chars), treating as success`);
+        queuedMessage.resolve(this.outputBuffer);
+      } else {
+        this.ctx.log.error(`Claude Code query failed: ${error}`);
+        queuedMessage.reject(error instanceof Error ? error : new Error(String(error)));
+      }
     } finally {
       this.queryInstance = null;
       this.currentTurn = null;
@@ -328,9 +350,11 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
     switch (event.type) {
       case 'assistant': {
         // Full assistant message - may come without streaming for fast tasks
+        this.ctx.log.info(`[SDK] assistant message received, content count: ${(event.message as any)?.content?.length ?? 0}`);
         const content = (event.message as any)?.content;
         if (Array.isArray(content)) {
           for (const block of content) {
+            this.ctx.log.info(`[SDK] content block: ${block?.type}, text: "${block?.text?.slice(0, 100)}..."`);
             if (block?.type === 'text' && typeof block.text === 'string') {
               // Only emit if not already streamed (check if text is new)
               if (!this.outputBuffer.includes(block.text)) {

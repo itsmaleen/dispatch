@@ -183,6 +183,34 @@ export class CommandCenterServer {
       return c.json({ ok: true });
     });
 
+    // Test CWD handling - sends a simple pwd check to verify cwd is working
+    this.app.post('/adapters/:id/test-cwd', async (c) => {
+      const id = c.req.param('id');
+      const managed = this.adapters.get(id);
+      
+      if (!managed) {
+        return c.json({ ok: false, error: 'Adapter not found' }, 404);
+      }
+
+      const { cwd } = await c.req.json<{ cwd?: string }>();
+      console.log(`[${id}] CWD test request with cwd: ${cwd ?? '(not set)'}`);
+      
+      try {
+        const result = await managed.implementation.send({
+          message: 'Run `pwd` and report the current working directory. Just show the path, nothing else.',
+          cwd,
+          taskOptions: { taskType: 'execution', effort: 'low', maxTurns: 1 },
+        });
+        return c.json({ ok: true, ...result, requestedCwd: cwd });
+      } catch (error) {
+        return c.json({ 
+          ok: false, 
+          error: error instanceof Error ? error.message : 'Test failed',
+          requestedCwd: cwd,
+        }, 500);
+      }
+    });
+
     // Send to adapter
     this.app.post('/adapters/:id/send', async (c) => {
       const id = c.req.param('id');
