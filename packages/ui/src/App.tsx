@@ -4,10 +4,11 @@ import { PlanningView } from './components/planning/PlanningView';
 import { ExecutionView } from './components/execution/ExecutionView';
 import { AgentsPanel } from './components/agents/AgentsPanel';
 import { WidgetDemo } from './components/demo/WidgetDemo';
+import { WorkspaceDemo } from './components/demo/WorkspaceDemo';
 import { useAppStore, api, type Task } from './stores/app';
-import { Settings, FolderOpen, Users } from 'lucide-react';
+import { Settings, FolderOpen, Users, Layout } from 'lucide-react';
 
-type View = 'home' | 'planning' | 'execution' | 'demo';
+type View = 'home' | 'planning' | 'execution' | 'demo' | 'workspace';
 
 const ACC_SERVER_URL = 'localhost:3333';
 
@@ -151,6 +152,18 @@ export function App() {
             )}
           </button>
           <button
+            onClick={() => setView(view === 'workspace' ? 'home' : 'workspace')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors ${
+              view === 'workspace' 
+                ? 'bg-violet-600 text-white' 
+                : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800'
+            }`}
+            title="Workspace Demo (new UI)"
+          >
+            <Layout className="w-4 h-4" />
+            <span>Workspace</span>
+          </button>
+          <button
             onClick={() => setView(view === 'demo' ? 'home' : 'demo')}
             className="px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-md transition-colors"
             title="Toggle Widget Demo (⌘⇧D)"
@@ -193,6 +206,7 @@ export function App() {
           />
         )}
         {view === 'demo' && <WidgetDemo />}
+        {view === 'workspace' && <WorkspaceDemo />}
       </div>
 
       {/* Status bar */}
