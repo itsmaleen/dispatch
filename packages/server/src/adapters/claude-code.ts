@@ -262,8 +262,11 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
 
       // Build SDK options with task-specific optimizations
       // cwd priority: message option > config > process.cwd()
+      const effectiveCwd = queuedMessage.cwd ?? this.config.cwd ?? process.cwd();
+      this.ctx.log.info(`Working directory: ${effectiveCwd}${queuedMessage.cwd ? ' (from message)' : this.config.cwd ? ' (from config)' : ' (default)'}`);
+      
       const sdkOptions: Options = {
-        cwd: queuedMessage.cwd ?? this.config.cwd ?? process.cwd(),
+        cwd: effectiveCwd,
         permissionMode: this.config.options?.permissionMode ?? 'bypassPermissions',
         includePartialMessages: true, // Enable streaming events for activity tracking
       };

@@ -193,6 +193,7 @@ export class CommandCenterServer {
       }
 
       const options = await c.req.json();
+      console.log(`[${id}] Send request:`, { message: options.message?.slice(0, 50), cwd: options.cwd });
       
       try {
         const result = await managed.implementation.send(options);
@@ -313,20 +314,26 @@ export class CommandCenterServer {
       let useClaudeCode = false;
       let agentName: string | undefined;
       
-      if (requestedAgent === 'claude-code') {
-        // User explicitly requested Claude Code
+      if (requestedAgent === 'claude-code' || requestedAgent === 'claude-code-local') {
+        // User explicitly requested Claude Code (either ID)
         useClaudeCode = claudeAdapter?.implementation.getState().status === 'ready';
         if (!useClaudeCode) {
           return c.json({ ok: false, error: 'Claude Code is not available' }, 400);
         }
-        agentName = 'claude-code';
+        agentName = 'claude-code-local';
       } else if (requestedAgent) {
-        // User requested a specific OpenClaw agent
-        const found = agents.find(a => a.name === requestedAgent);
-        if (!found) {
-          return c.json({ ok: false, error: `Agent "${requestedAgent}" is not connected` }, 400);
+        // User requested a specific agent - check adapters first, then OpenClaw agents
+        const adapter = Array.from(this.adapters.values()).find(a => a.config.id === requestedAgent);
+        if (adapter) {
+          useClaudeCode = adapter.config.kind === 'claude-code';
+          agentName = requestedAgent;
+        } else {
+          const found = agents.find(a => a.name === requestedAgent);
+          if (!found) {
+            return c.json({ ok: false, error: `Agent "${requestedAgent}" is not connected` }, 400);
+          }
+          agentName = requestedAgent;
         }
-        agentName = requestedAgent;
       } else {
         // No preference - use Claude Code if available, otherwise first OpenClaw agent
         useClaudeCode = claudeAdapter?.implementation.getState().status === 'ready';
