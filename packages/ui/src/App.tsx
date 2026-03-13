@@ -3,15 +3,15 @@ import { HomePage } from './components/home/HomePage';
 import { PlanningView } from './components/planning/PlanningView';
 import { ExecutionView } from './components/execution/ExecutionView';
 import { AgentsPanel } from './components/agents/AgentsPanel';
-import { useAppStore } from './stores/app';
+import { useAppStore, api } from './stores/app';
 import { Settings, FolderOpen, Users } from 'lucide-react';
 
-type View = 'home' | 'planning' | 'execution' | 'review';
+type View = 'home' | 'planning' | 'execution';
 
 const ACC_SERVER_URL = 'localhost:3333';
 
 export function App() {
-  const { currentProject, setProject, agents, setAgents } = useAppStore();
+  const { currentProject, setProject, agents, setAgents, addTask, updateTask } = useAppStore();
   const [view, setView] = useState<View>('home');
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [currentTaskMessage, setCurrentTaskMessage] = useState<string>('');
@@ -21,18 +21,15 @@ export function App() {
   useEffect(() => {
     const fetchAgents = async () => {
       try {
-        const res = await fetch(`http://${ACC_SERVER_URL}/agents`);
-        const data = await res.json();
-        if (data.agents) {
-          setAgents(
-            data.agents.map((a: any) => ({
-              name: a.name,
-              capabilities: a.capabilities || [],
-              connectedAt: a.connectedAt,
-              status: 'idle' as const,
-            }))
-          );
-        }
+        const agentsList = await api.getAgents();
+        setAgents(
+          agentsList.map((a: any) => ({
+            name: a.name,
+            capabilities: a.capabilities || [],
+            connectedAt: a.connectedAt,
+            status: 'idle' as const,
+          }))
+        );
       } catch (err) {
         console.error('Failed to fetch agents:', err);
       }
@@ -43,14 +40,39 @@ export function App() {
     return () => clearInterval(interval);
   }, [setAgents]);
 
-  const handleStartTask = (message: string) => {
-    setCurrentTaskMessage(message);
-    setView('planning');
+  const handleStartTask = async (message: string) => {
+    try {
+      // Create task on server
+      const { taskId } = await api.createTask(message);
+      
+      // Add to local store
+      addTask({
+        id: taskId,
+        message,
+        status: 'created',
+        createdAt: Date.now(),
+      });
+      
+      setCurrentTaskId(taskId);
+      setCurrentTaskMessage(message);
+      setView('planning');
+    } catch (err) {
+      console.error('Failed to create task:', err);
+      alert('Failed to create task. Is the server running?');
+    }
   };
 
-  const handleTaskConfirmed = (taskId: string) => {
-    setCurrentTaskId(taskId);
-    setView('execution');
+  const handleExecute = () => {
+    if (currentTaskId) {
+      updateTask(currentTaskId, { status: 'executing' });
+      setView('execution');
+    }
+  };
+
+  const handleComplete = () => {
+    setView('home');
+    setCurrentTaskId(null);
+    setCurrentTaskMessage('');
   };
 
   const handleBackToHome = () => {
@@ -119,10 +141,11 @@ export function App() {
         {view === 'home' && (
           <HomePage onStartTask={handleStartTask} />
         )}
-        {view === 'planning' && (
+        {view === 'planning' && currentTaskId && (
           <PlanningView 
+            taskId={currentTaskId}
             initialMessage={currentTaskMessage}
-            onTaskConfirmed={handleTaskConfirmed}
+            onExecute={handleExecute}
             onBack={handleBackToHome}
           />
         )}
@@ -130,6 +153,7 @@ export function App() {
           <ExecutionView 
             taskId={currentTaskId} 
             onBack={handleBackToHome}
+            onComplete={handleComplete}
           />
         )}
       </div>

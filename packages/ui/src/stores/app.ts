@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+const API_URL = 'http://localhost:3333';
+
 export interface Project {
   path: string;
   name: string;
@@ -19,12 +21,54 @@ export interface Agent {
 export interface Task {
   id: string;
   message: string;
-  status: 'planning' | 'executing' | 'review' | 'completed' | 'failed';
+  status: 'created' | 'planning' | 'planned' | 'executing' | 'completed' | 'failed';
   createdAt: number;
   completedAt?: number;
   agent?: string;
+  plan?: string;
   result?: string;
 }
+
+// API functions
+export const api = {
+  async createTask(message: string, agent?: string): Promise<{ taskId: string }> {
+    const res = await fetch(`${API_URL}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, agent }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    return { taskId: data.taskId };
+  },
+
+  async getTask(taskId: string): Promise<Task> {
+    const res = await fetch(`${API_URL}/tasks/${taskId}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    return data.task;
+  },
+
+  async planTask(taskId: string): Promise<{ plan: string; agent: string }> {
+    const res = await fetch(`${API_URL}/tasks/${taskId}/plan`, { method: 'POST' });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    return { plan: data.plan, agent: data.agent };
+  },
+
+  async executeTask(taskId: string): Promise<{ result: string }> {
+    const res = await fetch(`${API_URL}/tasks/${taskId}/execute`, { method: 'POST' });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    return { result: data.result };
+  },
+
+  async getAgents(): Promise<Agent[]> {
+    const res = await fetch(`${API_URL}/agents`);
+    const data = await res.json();
+    return data.agents || [];
+  },
+};
 
 interface AppState {
   // Project

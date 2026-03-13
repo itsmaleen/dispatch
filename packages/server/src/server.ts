@@ -27,6 +27,17 @@ interface ConnectedAgent {
   pendingTasks: Map<string, { resolve: (result: string) => void; reject: (error: Error) => void }>;
 }
 
+interface Task {
+  id: string;
+  message: string;
+  agent: string | null;
+  status: 'created' | 'planning' | 'planned' | 'executing' | 'completed' | 'failed';
+  createdAt: Date;
+  completedAt?: Date;
+  plan: string | null;
+  result: string | null;
+}
+
 export class CommandCenterServer {
   private app: Hono;
   private httpServer: Server | null = null;
@@ -34,6 +45,7 @@ export class CommandCenterServer {
   private adapters = new Map<string, ManagedAdapter>();
   private clients = new Set<WebSocket>();
   private connectedAgents = new Map<string, ConnectedAgent>();
+  private tasks = new Map<string, Task>();
   private port: number;
 
   constructor(port = 3333) {
@@ -178,7 +190,7 @@ export class CommandCenterServer {
       return c.json({ agents });
     });
 
-    // Send task to agent
+    // Send task to agent (low-level)
     this.app.post('/agents/:name/task', async (c) => {
       const name = c.req.param('name');
       const { message } = await c.req.json<{ message: string }>();
@@ -193,6 +205,121 @@ export class CommandCenterServer {
           error: error instanceof Error ? error.message : 'Task failed' 
         }, 500);
       }
+    });
+
+    // ============ Task Flow Routes ============
+
+    // Create a new task
+    this.app.post('/tasks', async (c) => {
+      const { message, agent } = await c.req.json<{ message: string; agent?: string }>();
+      const taskId = crypto.randomUUID();
+      
+      // Store task
+      this.tasks.set(taskId, {
+        id: taskId,
+        message,
+        agent: agent || null,
+        status: 'created',
+        createdAt: new Date(),
+        plan: null,
+        result: null,
+      });
+
+      return c.json({ ok: true, taskId });
+    });
+
+    // Get task status
+    this.app.get('/tasks/:id', (c) => {
+      const id = c.req.param('id');
+      const task = this.tasks.get(id);
+      if (!task) {
+        return c.json({ ok: false, error: 'Task not found' }, 404);
+      }
+      return c.json({ ok: true, task });
+    });
+
+    // Plan a task (ask agent to create a plan)
+    this.app.post('/tasks/:id/plan', async (c) => {
+      const id = c.req.param('id');
+      const task = this.tasks.get(id);
+      
+      if (!task) {
+        return c.json({ ok: false, error: 'Task not found' }, 404);
+      }
+
+      // Find an available agent
+      const agents = this.getConnectedAgents();
+      const agentName = task.agent || agents[0]?.name;
+      
+      if (!agentName) {
+        return c.json({ ok: false, error: 'No agents available' }, 400);
+      }
+
+      task.status = 'planning';
+      task.agent = agentName;
+
+      // Ask agent to create a plan
+      const planPrompt = `Create a step-by-step plan for this task. Be concise.
+
+Task: ${task.message}
+
+Respond with a numbered list of steps you'll take to complete this task.`;
+
+      try {
+        const result = await this.sendTaskToAgent(agentName, `plan-${id}`, planPrompt);
+        task.plan = result;
+        task.status = 'planned';
+        return c.json({ ok: true, plan: result, agent: agentName });
+      } catch (error) {
+        task.status = 'failed';
+        return c.json({ 
+          ok: false, 
+          error: error instanceof Error ? error.message : 'Planning failed' 
+        }, 500);
+      }
+    });
+
+    // Execute a task
+    this.app.post('/tasks/:id/execute', async (c) => {
+      const id = c.req.param('id');
+      const task = this.tasks.get(id);
+      
+      if (!task) {
+        return c.json({ ok: false, error: 'Task not found' }, 404);
+      }
+
+      if (!task.agent) {
+        return c.json({ ok: false, error: 'No agent assigned' }, 400);
+      }
+
+      task.status = 'executing';
+
+      // Send the actual task to execute
+      const executePrompt = task.plan 
+        ? `Execute this task according to the plan:\n\nTask: ${task.message}\n\nPlan:\n${task.plan}`
+        : task.message;
+
+      try {
+        const result = await this.sendTaskToAgent(task.agent, `exec-${id}`, executePrompt);
+        task.result = result;
+        task.status = 'completed';
+        task.completedAt = new Date();
+        return c.json({ ok: true, result });
+      } catch (error) {
+        task.status = 'failed';
+        return c.json({ 
+          ok: false, 
+          error: error instanceof Error ? error.message : 'Execution failed' 
+        }, 500);
+      }
+    });
+
+    // List recent tasks
+    this.app.get('/tasks', (c) => {
+      const tasks = Array.from(this.tasks.values())
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, 20);
+      return c.json({ tasks });
     });
 
     // ============ Integration Routes ============
