@@ -333,6 +333,10 @@ export class CommandCenterServer {
         return c.json({ ok: false, error: 'No agents available. Connect Claude Code or an OpenClaw instance.' }, 400);
       }
 
+      if (useClaudeCode && claudeAdapter) {
+        await this.ensureClaudeAdapterConnected(claudeAdapter);
+      }
+
       task.status = 'planning';
       task.agent = agentName;
 
@@ -402,12 +406,16 @@ Format your response as plain text only:
       
       // Use: 1) requested agent, 2) task's assigned agent, 3) Claude Code if available
       const agentToUse = requestedAgent || task.agent;
-      const useClaudeCode = agentToUse === 'claude-code' || 
+      const useClaudeCode = agentToUse === 'claude-code' ||
         (!agentToUse && claudeAdapter?.implementation.getState().status === 'ready');
+
+      if (useClaudeCode && claudeAdapter) {
+        await this.ensureClaudeAdapterConnected(claudeAdapter);
+      }
 
       try {
         let result: string;
-        
+
         if (useClaudeCode && claudeAdapter) {
           // Use Claude Code adapter
           task.agent = 'claude-code';
@@ -518,9 +526,18 @@ Format your response as plain text only:
         eventEmitter.emit(fullEvent);
       },
       log: {
-        info: (msg, ...args) => console.log(`[${config.id}] ${msg}`, ...args),
-        warn: (msg, ...args) => console.warn(`[${config.id}] ${msg}`, ...args),
-        error: (msg, ...args) => console.error(`[${config.id}] ${msg}`, ...args),
+        info: (msg, ...args) => {
+          const ts = new Date().toISOString();
+          console.log(`[${ts}] [${config.id}] ${msg}`, ...args);
+        },
+        warn: (msg, ...args) => {
+          const ts = new Date().toISOString();
+          console.warn(`[${ts}] [${config.id}] ${msg}`, ...args);
+        },
+        error: (msg, ...args) => {
+          const ts = new Date().toISOString();
+          console.error(`[${ts}] [${config.id}] ${msg}`, ...args);
+        },
       },
     };
 
@@ -710,6 +727,15 @@ Format your response as plain text only:
         }
       }, 300000);
     });
+  }
+
+  /** If the Claude adapter exists but is disconnected, connect it so plan/execute can use it. */
+  private async ensureClaudeAdapterConnected(managed: ManagedAdapter | undefined): Promise<void> {
+    if (!managed || managed.config.kind !== 'claude-code') return;
+    const state = managed.implementation.getState();
+    if (state.status === 'disconnected') {
+      await managed.implementation.connect();
+    }
   }
 
   /** Wait for adapter to complete a turn */

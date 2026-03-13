@@ -123,7 +123,17 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
 
   async send(options: SendOptions): Promise<{ turnId: string }> {
     if (this.state.status !== 'ready') {
-      throw new Error('Not ready - call connect() first');
+      const msg =
+        this.state.status === 'running'
+          ? 'Adapter is busy with another task - wait for it to finish'
+          : this.state.status === 'disconnected'
+            ? 'Not ready - call connect() first'
+            : this.state.status === 'connecting'
+              ? 'Still connecting - try again in a moment'
+              : this.state.status === 'error'
+                ? `Adapter error: ${this.state.lastError ?? 'unknown'}`
+                : 'Not ready';
+      throw new Error(msg);
     }
 
     const turnId = crypto.randomUUID();
@@ -295,7 +305,8 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
   private handleOutput(data: string): void {
     if (data.length > 0 && !this.hasReceivedOutputThisTurn) {
       this.hasReceivedOutputThisTurn = true;
-      this.ctx.log.info('Claude Code first output received');
+      const elapsedMs = Date.now() - this.turnStartTime;
+      this.ctx.log.info(`Claude Code first output received (${elapsedMs}ms)`);
     }
     this.outputBuffer += data;
 

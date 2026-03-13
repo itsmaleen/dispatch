@@ -33,6 +33,7 @@ export function ExecutionView({ taskId, initialStatus, initialResult, initialAge
   const [startTime] = useState(Date.now());
   const [elapsed, setElapsed] = useState(0);
   const outputRef = useRef<HTMLDivElement>(null);
+  const executedTaskIdRef = useRef<string | null>(null);
 
   // Update elapsed time
   useEffect(() => {
@@ -43,13 +44,17 @@ export function ExecutionView({ taskId, initialStatus, initialResult, initialAge
     return () => clearInterval(interval);
   }, [status, startTime]);
 
-  // Execute task on mount (skip if we already have result or failed state)
+  // Execute task on mount once (skip if we already have result or failed state)
   useEffect(() => {
     if (isAlreadyDone) {
       setStatus(initialStatus!);
       if (initialResult != null) setResult(initialResult);
       return;
     }
+    // Prevent double execution (e.g. React Strict Mode or duplicate effect run)
+    if (executedTaskIdRef.current === taskId) return;
+    executedTaskIdRef.current = taskId;
+
     const execute = async () => {
       try {
         const agentLabel = agent === 'claude-code' ? 'Claude Code' : agent || 'agent';
