@@ -1,0 +1,5 @@
+make minor aesthetic change on the widget terminal that as it grows because of text the icon on the left hand side stays vertically centered
+
+---
+
+no this was incorrect, I wanted the change to be in ChatInput as the chat textbox grows because of text
