@@ -5,19 +5,29 @@ import { api, useAppStore } from '../../stores/app';
 interface PlanningViewProps {
   taskId: string;
   initialMessage: string;
+  initialPlan?: string;
+  initialAgent?: string;
   onExecute: () => void;
   onBack: () => void;
 }
 
-export function PlanningView({ taskId, initialMessage, onExecute, onBack }: PlanningViewProps) {
+export function PlanningView({ taskId, initialMessage, initialPlan, initialAgent, onExecute, onBack }: PlanningViewProps) {
   const { agents, updateTask } = useAppStore();
-  const [status, setStatus] = useState<'planning' | 'planned' | 'error'>('planning');
-  const [plan, setPlan] = useState<string | null>(null);
-  const [agent, setAgent] = useState<string | null>(null);
+  const [status, setStatus] = useState<'planning' | 'planned' | 'error'>(() =>
+    initialPlan ? 'planned' : 'planning'
+  );
+  const [plan, setPlan] = useState<string | null>(() => initialPlan ?? null);
+  const [agent, setAgent] = useState<string | null>(() => initialAgent ?? null);
   const [error, setError] = useState<string | null>(null);
 
-  // Request plan when component mounts
+  // Request plan when component mounts (skip if we already have a plan)
   useEffect(() => {
+    if (initialPlan) {
+      setPlan(initialPlan);
+      setAgent(initialAgent ?? null);
+      setStatus('planned');
+      return;
+    }
     const requestPlan = async () => {
       try {
         setStatus('planning');
@@ -39,7 +49,7 @@ export function PlanningView({ taskId, initialMessage, onExecute, onBack }: Plan
     };
 
     requestPlan();
-  }, [taskId, updateTask]);
+  }, [taskId, updateTask, initialPlan, initialAgent]);
 
   const handleExecute = () => {
     onExecute();

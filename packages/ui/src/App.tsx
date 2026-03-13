@@ -3,7 +3,7 @@ import { HomePage } from './components/home/HomePage';
 import { PlanningView } from './components/planning/PlanningView';
 import { ExecutionView } from './components/execution/ExecutionView';
 import { AgentsPanel } from './components/agents/AgentsPanel';
-import { useAppStore, api } from './stores/app';
+import { useAppStore, api, type Task } from './stores/app';
 import { Settings, FolderOpen, Users } from 'lucide-react';
 
 type View = 'home' | 'planning' | 'execution';
@@ -11,11 +11,12 @@ type View = 'home' | 'planning' | 'execution';
 const ACC_SERVER_URL = 'localhost:3333';
 
 export function App() {
-  const { currentProject, setProject, agents, setAgents, addTask, updateTask } = useAppStore();
+  const { currentProject, setProject, agents, setAgents, addTask, updateTask, tasks } = useAppStore();
   const [view, setView] = useState<View>('home');
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [currentTaskMessage, setCurrentTaskMessage] = useState<string>('');
   const [showAgentsPanel, setShowAgentsPanel] = useState(false);
+  const currentTask = currentTaskId ? tasks.find((t) => t.id === currentTaskId) ?? null : null;
 
   // Fetch agents from server
   useEffect(() => {
@@ -81,6 +82,16 @@ export function App() {
     setCurrentTaskMessage('');
   };
 
+  const handleOpenTask = (task: Task) => {
+    setCurrentTaskId(task.id);
+    setCurrentTaskMessage(task.message);
+    if (task.status === 'executing' || task.status === 'completed' || task.status === 'failed') {
+      setView('execution');
+    } else {
+      setView('planning');
+    }
+  };
+
   const handleSwitchProject = async () => {
     if (window.electronAPI?.openFolder) {
       const path = await window.electronAPI.openFolder();
@@ -139,19 +150,27 @@ export function App() {
       {/* Main content */}
       <div className="flex-1 overflow-hidden">
         {view === 'home' && (
-          <HomePage onStartTask={handleStartTask} />
+          <HomePage onStartTask={handleStartTask} onOpenTask={handleOpenTask} />
         )}
         {view === 'planning' && currentTaskId && (
           <PlanningView 
             taskId={currentTaskId}
             initialMessage={currentTaskMessage}
+            initialPlan={currentTask?.plan}
+            initialAgent={currentTask?.agent}
             onExecute={handleExecute}
             onBack={handleBackToHome}
           />
         )}
         {view === 'execution' && currentTaskId && (
           <ExecutionView 
-            taskId={currentTaskId} 
+            taskId={currentTaskId}
+            initialStatus={
+              currentTask?.status === 'executing' || currentTask?.status === 'completed' || currentTask?.status === 'failed'
+                ? currentTask.status
+                : undefined
+            }
+            initialResult={currentTask?.result}
             onBack={handleBackToHome}
             onComplete={handleComplete}
           />

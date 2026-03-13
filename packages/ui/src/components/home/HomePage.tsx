@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import { useAppStore, type Project, type Agent } from '../../stores/app';
+import { useAppStore, type Project, type Agent, type Task } from '../../stores/app';
 import { FolderOpen, ArrowRight, Folder, Users, Clock, Zap } from 'lucide-react';
 
 interface HomePageProps {
   onStartTask: (message: string) => void;
+  onOpenTask?: (task: Task) => void;
 }
 
-export function HomePage({ onStartTask }: HomePageProps) {
+export function HomePage({ onStartTask, onOpenTask }: HomePageProps) {
   const { currentProject, recentProjects, agents, tasks, setProject } = useAppStore();
   const [pathInput, setPathInput] = useState('');
   const [taskInput, setTaskInput] = useState('');
@@ -212,7 +213,7 @@ export function HomePage({ onStartTask }: HomePageProps) {
           <div className="space-y-2">
             {recentTasks.length > 0 ? (
               recentTasks.map((task) => (
-                <TaskCard key={task.id} task={task} />
+                <TaskCard key={task.id} task={task} onClick={onOpenTask ? () => onOpenTask(task) : undefined} />
               ))
             ) : (
               <div className="text-zinc-500 text-sm">No tasks yet</div>
@@ -246,7 +247,13 @@ function AgentCard({ agent }: { agent: Agent }) {
   );
 }
 
-function TaskCard({ task }: { task: { id: string; message: string; status: string; createdAt: number } }) {
+function TaskCard({
+  task,
+  onClick,
+}: {
+  task: { id: string; message: string; status: string; createdAt: number };
+  onClick?: () => void;
+}) {
   const statusIcon = {
     planning: '📝',
     executing: '🔄',
@@ -258,7 +265,13 @@ function TaskCard({ task }: { task: { id: string; message: string; status: strin
   const timeAgo = getTimeAgo(task.createdAt);
 
   return (
-    <div className="flex items-start gap-3 px-3 py-2 bg-zinc-800/50 hover:bg-zinc-800 rounded-lg cursor-pointer transition-colors">
+    <div
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={onClick ? (e) => e.key === 'Enter' && onClick() : undefined}
+      className="flex items-start gap-3 px-3 py-2 bg-zinc-800/50 hover:bg-zinc-800 rounded-lg cursor-pointer transition-colors"
+    >
       <span>{statusIcon}</span>
       <div className="flex-1 min-w-0">
         <div className="text-zinc-100 text-sm truncate">{task.message}</div>

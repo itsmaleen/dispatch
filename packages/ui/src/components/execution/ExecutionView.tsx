@@ -4,15 +4,29 @@ import { api, useAppStore } from '../../stores/app';
 
 interface ExecutionViewProps {
   taskId: string;
+  /** When reopening a task, pass its status so we show existing result instead of re-executing */
+  initialStatus?: 'executing' | 'completed' | 'failed';
+  initialResult?: string;
   onBack: () => void;
   onComplete: () => void;
 }
 
-export function ExecutionView({ taskId, onBack, onComplete }: ExecutionViewProps) {
+export function ExecutionView({ taskId, initialStatus, initialResult, onBack, onComplete }: ExecutionViewProps) {
   const { updateTask } = useAppStore();
-  const [status, setStatus] = useState<'executing' | 'completed' | 'failed'>('executing');
-  const [output, setOutput] = useState<string[]>([]);
-  const [result, setResult] = useState<string | null>(null);
+  const isAlreadyDone = initialStatus === 'completed' || initialStatus === 'failed';
+  const [status, setStatus] = useState<'executing' | 'completed' | 'failed'>(() =>
+    isAlreadyDone ? initialStatus : 'executing'
+  );
+  const [output, setOutput] = useState<string[]>(() => {
+    if (initialStatus === 'completed' && initialResult != null) {
+      return ['> Execution completed.', '', '--- Output ---', initialResult];
+    }
+    if (initialStatus === 'failed') {
+      return ['> Execution failed.', '', initialResult ?? 'No output'];
+    }
+    return [];
+  });
+  const [result, setResult] = useState<string | null>(() => initialResult ?? null);
   const [error, setError] = useState<string | null>(null);
   const [startTime] = useState(Date.now());
   const [elapsed, setElapsed] = useState(0);
@@ -27,8 +41,13 @@ export function ExecutionView({ taskId, onBack, onComplete }: ExecutionViewProps
     return () => clearInterval(interval);
   }, [status, startTime]);
 
-  // Execute task on mount
+  // Execute task on mount (skip if we already have result or failed state)
   useEffect(() => {
+    if (isAlreadyDone) {
+      setStatus(initialStatus!);
+      if (initialResult != null) setResult(initialResult);
+      return;
+    }
     const execute = async () => {
       try {
         setOutput(prev => [...prev, '> Starting execution...']);
@@ -56,7 +75,7 @@ export function ExecutionView({ taskId, onBack, onComplete }: ExecutionViewProps
     };
 
     execute();
-  }, [taskId, updateTask]);
+  }, [taskId, updateTask, isAlreadyDone, initialStatus, initialResult]);
 
   // Auto-scroll output
   useEffect(() => {
