@@ -3,3 +3,7 @@ make minor aesthetic change on the widget terminal that as it grows because of t
 ---
 
 no this was incorrect, I wanted the change to be in ChatInput as the chat textbox grows because of text
+
+---
+
+perfect can you commit these changes with an accurate commit message following proper standard
