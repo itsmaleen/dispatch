@@ -40,29 +40,36 @@ export function AgentsPanel({ isOpen, onClose, serverUrl }: AgentsPanelProps) {
 
   // Fetch agents and check Claude Code when panel opens
   useEffect(() => {
+    if (!isOpen) return;
+
+    const agentsUrl = `http://${serverUrl}/agents`;
+    const claudeCheckUrl = `http://${serverUrl}/check/claude-code`;
+
     const fetchData = async () => {
       // Fetch agents
       try {
-        const agentsRes = await fetch(`http://${serverUrl}/agents`);
+        const agentsRes = await fetch(agentsUrl);
+        if (!agentsRes.ok) throw new Error(`agents ${agentsRes.status}`);
         const agentsData = await agentsRes.json();
-        if (agentsData.agents) {
+        const list = agentsData?.agents;
+        if (Array.isArray(list)) {
           setAgents(
-            agentsData.agents.map((a: any) => ({
-              name: a.name,
-              capabilities: a.capabilities || [],
+            list.map((a: any) => ({
+              name: a.name ?? 'Unknown',
+              capabilities: a.capabilities ?? [],
               connectedAt: a.connectedAt,
               status: 'idle' as const,
             }))
           );
         }
-      } catch (err) {
-        console.error('Failed to fetch agents:', err);
+      } catch {
+        // ignore
       }
 
       // Check Claude Code CLI availability
       setClaudeStatus(s => ({ ...s, checking: true }));
       try {
-        const res = await fetch(`http://${serverUrl}/check/claude-code`);
+        const res = await fetch(claudeCheckUrl);
         const data = await res.json();
         setClaudeStatus({
           available: data.available ?? false,
@@ -74,13 +81,10 @@ export function AgentsPanel({ isOpen, onClose, serverUrl }: AgentsPanelProps) {
         setClaudeStatus({ available: false, checking: false });
       }
     };
-    
-    if (isOpen) {
-      fetchData();
-      // Refresh every 3 seconds while open
-      const interval = setInterval(fetchData, 3000);
-      return () => clearInterval(interval);
-    }
+
+    fetchData();
+    const interval = setInterval(fetchData, 3000);
+    return () => clearInterval(interval);
   }, [isOpen, serverUrl, setAgents]);
 
   const copyToClipboard = async (text: string, id: string) => {

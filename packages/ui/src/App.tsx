@@ -24,8 +24,8 @@ export function App() {
         const agentsList = await api.getAgents();
         setAgents(
           agentsList.map((a: any) => ({
-            name: a.name,
-            capabilities: a.capabilities || [],
+            name: a.name ?? 'Unknown',
+            capabilities: a.capabilities ?? [],
             connectedAt: a.connectedAt,
             status: 'idle' as const,
           }))

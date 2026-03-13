@@ -7,6 +7,7 @@
 
 import { createServer, type Server } from 'http';
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { AdapterConfig, AdapterEvent } from '@acc/contracts';
@@ -55,6 +56,9 @@ export class CommandCenterServer {
   }
 
   private setupRoutes(): void {
+    // Allow UI (Vite dev or Electron) to call API
+    this.app.use('*', cors({ origin: '*', allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'], allowHeaders: ['Content-Type', 'Authorization'] }));
+
     // Health check
     this.app.get('/health', (c) => c.json({ ok: true }));
 
