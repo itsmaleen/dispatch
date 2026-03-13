@@ -15,6 +15,7 @@ import type { AdapterImplementation, AdapterContext } from './adapters/types';
 import { AdapterEventEmitter } from './adapters/types';
 import { createClaudeCodeAdapter } from './adapters/claude-code';
 import { createOpenClawAdapter } from './adapters/openclaw';
+import { getSessionManager, type Thread, type Session } from './adapters/session-manager';
 
 interface ManagedAdapter {
   implementation: AdapterImplementation;
@@ -282,6 +283,155 @@ export class CommandCenterServer {
         return c.json({ 
           ok: false, 
           error: error instanceof Error ? error.message : 'Task failed' 
+        }, 500);
+      }
+    });
+
+    // ============ Thread & Session Routes (Phase 2/3) ============
+
+    // List all threads
+    this.app.get('/threads', async (c) => {
+      const manager = getSessionManager();
+      const threads = manager.listThreads();
+      return c.json({ 
+        ok: true, 
+        threads: threads.map(t => ({
+          id: t.id,
+          name: t.name,
+          projectPath: t.projectPath,
+          worktreePath: t.worktreePath,
+          createdAt: t.createdAt,
+          lastActiveAt: t.lastActiveAt,
+          messageCount: t.history.length,
+          hasSession: !!manager.getSession(t.id),
+        })),
+      });
+    });
+
+    // Get thread details (including history)
+    this.app.get('/threads/:id', async (c) => {
+      const id = c.req.param('id');
+      const manager = getSessionManager();
+      const thread = manager.getThread(id);
+      
+      if (!thread) {
+        return c.json({ ok: false, error: 'Thread not found' }, 404);
+      }
+
+      const session = manager.getSession(id);
+      return c.json({ 
+        ok: true, 
+        thread,
+        session: session ? {
+          status: session.status,
+          currentTurnId: session.currentTurnId,
+        } : null,
+      });
+    });
+
+    // Create session for thread (or resume existing)
+    this.app.post('/threads/:id/session', async (c) => {
+      const id = c.req.param('id');
+      const { cwd, name, worktreePath, resume } = await c.req.json<{
+        cwd: string;
+        name?: string;
+        worktreePath?: string;
+        resume?: boolean;
+      }>();
+
+      const manager = getSessionManager();
+      
+      try {
+        const session = await manager.createSession({
+          threadId: id,
+          cwd,
+          name,
+          worktreePath,
+          resume,
+        });
+
+        return c.json({ 
+          ok: true, 
+          threadId: id,
+          session: {
+            status: session.status,
+            cwd: session.cwd,
+          },
+        });
+      } catch (error) {
+        return c.json({ 
+          ok: false, 
+          error: error instanceof Error ? error.message : 'Failed to create session',
+        }, 500);
+      }
+    });
+
+    // Send message to thread session
+    this.app.post('/threads/:id/send', async (c) => {
+      const id = c.req.param('id');
+      const options = await c.req.json<{
+        message: string;
+        effort?: 'low' | 'medium' | 'high' | 'max';
+        thinking?: { type: 'adaptive' } | { type: 'enabled'; budgetTokens?: number } | { type: 'disabled' };
+        maxTurns?: number;
+        model?: string;
+      }>();
+
+      const manager = getSessionManager();
+      const session = manager.getSession(id);
+      
+      if (!session) {
+        return c.json({ ok: false, error: 'No active session for thread' }, 400);
+      }
+
+      console.log(`[threads/${id}] Send:`, { message: options.message.slice(0, 50) });
+
+      try {
+        const result = await manager.send(id, options);
+        return c.json({ ok: true, ...result });
+      } catch (error) {
+        return c.json({ 
+          ok: false, 
+          error: error instanceof Error ? error.message : 'Send failed',
+        }, 500);
+      }
+    });
+
+    // Close thread session
+    this.app.post('/threads/:id/close', async (c) => {
+      const id = c.req.param('id');
+      const manager = getSessionManager();
+      
+      await manager.closeSession(id);
+      return c.json({ ok: true });
+    });
+
+    // Delete thread entirely
+    this.app.delete('/threads/:id', async (c) => {
+      const id = c.req.param('id');
+      const manager = getSessionManager();
+      
+      await manager.deleteThread(id);
+      return c.json({ ok: true });
+    });
+
+    // Fork a thread
+    this.app.post('/threads/:id/fork', async (c) => {
+      const id = c.req.param('id');
+      const { name, fromTurnId } = await c.req.json<{
+        name?: string;
+        fromTurnId?: string;
+      }>();
+
+      const manager = getSessionManager();
+      
+      try {
+        const forked = await manager.forkThread(id, { name, fromTurnId });
+        return c.json({ ok: true, thread: forked });
+      } catch (error) {
+        return c.json({ 
+          ok: false, 
+          error: error instanceof Error ? error.message : 'Fork failed',
         }, 500);
       }
     });
@@ -611,6 +761,16 @@ Format your response as plain text only:
     }
   }
 
+  /** Broadcast raw JSON (for thread events that don't match AdapterEvent) */
+  private broadcastRaw(data: unknown): void {
+    const message = JSON.stringify(data);
+    for (const client of this.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    }
+  }
+
   // ============ Agent Channel Methods ============
 
   private handleAgentConnection(ws: WebSocket, req: import('http').IncomingMessage): void {
@@ -886,6 +1046,63 @@ Format your response as plain text only:
   }
 
   async start(): Promise<void> {
+    // Initialize session manager
+    const sessionManager = getSessionManager();
+    await sessionManager.init();
+
+    // Forward session manager events to WebSocket clients
+    sessionManager.on('message', (threadId, message) => {
+      this.broadcastRaw({
+        type: 'event',
+        event: {
+          type: 'session.message',
+          threadId,
+          payload: message,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    });
+
+    sessionManager.on('turn.started', (threadId, turnId) => {
+      this.broadcastRaw({
+        type: 'event',
+        event: {
+          type: 'turn.started',
+          threadId,
+          turnId,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    });
+
+    sessionManager.on('turn.completed', (threadId, turnId, result) => {
+      this.broadcastRaw({
+        type: 'event',
+        event: {
+          type: 'turn.completed',
+          threadId,
+          turnId,
+          status: 'completed',
+          payload: { result },
+          timestamp: new Date().toISOString(),
+        },
+      });
+    });
+
+    sessionManager.on('turn.error', (threadId, turnId, error) => {
+      this.broadcastRaw({
+        type: 'event',
+        event: {
+          type: 'turn.completed',
+          threadId,
+          turnId,
+          status: 'failed',
+          reason: error.message,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    });
+
     return new Promise((resolve) => {
       // Create HTTP server with Hono handler
       this.httpServer = createServer(async (req, res) => {
@@ -955,6 +1172,10 @@ Format your response as plain text only:
   }
 
   async stop(): Promise<void> {
+    // Shutdown session manager
+    const sessionManager = getSessionManager();
+    await sessionManager.shutdown();
+
     // Cleanup adapters
     for (const [, managed] of this.adapters) {
       await managed.implementation.destroy();

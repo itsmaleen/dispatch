@@ -29,6 +29,41 @@ export interface Task {
   result?: string;
 }
 
+// Thread types (Phase 2/3)
+export interface ThreadMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+  turnId: string;
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    costUsd?: number;
+  };
+}
+
+export interface Thread {
+  id: string;
+  name?: string;
+  projectPath: string;
+  worktreePath?: string;
+  createdAt: string;
+  lastActiveAt: string;
+  history: ThreadMessage[];
+  sessionId?: string;
+}
+
+export interface ThreadSummary {
+  id: string;
+  name?: string;
+  projectPath: string;
+  worktreePath?: string;
+  createdAt: string;
+  lastActiveAt: string;
+  messageCount: number;
+  hasSession: boolean;
+}
+
 // API functions
 export const api = {
   async checkClaudeCode(): Promise<{ available: boolean; version?: string }> {
@@ -106,6 +141,68 @@ export const api = {
     } catch {
       return [];
     }
+  },
+
+  // Thread API (Phase 2/3)
+  async listThreads(): Promise<ThreadSummary[]> {
+    const res = await fetch(`${API_URL}/threads`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    return data.threads;
+  },
+
+  async getThread(threadId: string): Promise<{ thread: Thread; session: { status: string; currentTurnId?: string } | null }> {
+    const res = await fetch(`${API_URL}/threads/${threadId}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    return { thread: data.thread, session: data.session };
+  },
+
+  async createSession(threadId: string, options: { cwd: string; name?: string; worktreePath?: string; resume?: boolean }): Promise<{ threadId: string; session: { status: string; cwd: string } }> {
+    const res = await fetch(`${API_URL}/threads/${threadId}/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(options),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    return { threadId: data.threadId, session: data.session };
+  },
+
+  async sendToThread(threadId: string, options: {
+    message: string;
+    effort?: 'low' | 'medium' | 'high' | 'max';
+    thinking?: { type: 'adaptive' } | { type: 'enabled'; budgetTokens?: number } | { type: 'disabled' };
+    maxTurns?: number;
+    model?: string;
+  }): Promise<{ turnId: string }> {
+    const res = await fetch(`${API_URL}/threads/${threadId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(options),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    return { turnId: data.turnId };
+  },
+
+  async closeSession(threadId: string): Promise<void> {
+    await fetch(`${API_URL}/threads/${threadId}/close`, { method: 'POST' });
+  },
+
+  async deleteThread(threadId: string): Promise<void> {
+    await fetch(`${API_URL}/threads/${threadId}`, { method: 'DELETE' });
+  },
+
+  async forkThread(threadId: string, options: { name?: string; fromTurnId?: string }): Promise<Thread> {
+    const res = await fetch(`${API_URL}/threads/${threadId}/fork`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(options),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    return data.thread;
   },
 };
 

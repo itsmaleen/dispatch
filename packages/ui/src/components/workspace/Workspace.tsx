@@ -66,6 +66,9 @@ interface TerminalState {
   isStreaming: boolean;
   currentTask?: string;
   path?: string; // Override workspace path
+  // Thread integration (Phase 2/3)
+  threadId?: string;
+  sessionActive?: boolean;
 }
 
 interface ChatMessage {
@@ -575,11 +578,73 @@ export function Workspace() {
     const event = data.event;
     if (!event) return;
 
-    // adapterId is inside the event object
+    // Support both adapterId (legacy) and threadId (Phase 2/3)
     const adapterId = event.adapterId;
-    if (!adapterId) return;
+    const threadId = event.threadId;
+    
+    // For thread events, find terminal by threadId
+    const findTerminal = (terminals: TerminalState[]) => {
+      if (threadId) {
+        return terminals.find(t => t.threadId === threadId);
+      }
+      if (adapterId) {
+        return terminals.find(t => t.agent.id === adapterId);
+      }
+      return null;
+    };
 
-    console.log('[WS Event]', event.type, adapterId, event.payload);
+    const matchesTerminal = (t: TerminalState) => {
+      if (threadId) return t.threadId === threadId;
+      if (adapterId) return t.agent.id === adapterId;
+      return false;
+    };
+
+    if (!adapterId && !threadId) return;
+
+    console.log('[WS Event]', event.type, { adapterId, threadId }, event.payload);
+
+    // Handle session.message (raw SDK events from thread)
+    if (event.type === 'session.message' && event.payload) {
+      const msg = event.payload;
+      
+      // Process SDK message types for thread sessions
+      if (msg.type === 'stream_event') {
+        const streamEvent = msg.event;
+        if (streamEvent?.type === 'content_block_delta') {
+          const delta = streamEvent.delta;
+          if (delta?.type === 'text_delta' && delta.text) {
+            // Append text delta to terminal
+            setTerminals(prev => prev.map(t => {
+              if (!matchesTerminal(t)) return t;
+              
+              const lastLine = t.lines[t.lines.length - 1];
+              if (lastLine?.type === 'output' && lastLine.isStreaming) {
+                return {
+                  ...t,
+                  lines: t.lines.map((l, i) => 
+                    i === t.lines.length - 1 
+                      ? { ...l, content: l.content + delta.text }
+                      : l
+                  ),
+                };
+              } else {
+                return {
+                  ...t,
+                  lines: [...t.lines, {
+                    id: `${Date.now()}`,
+                    type: 'output' as const,
+                    content: delta.text,
+                    timestamp: makeTimestamp(),
+                    isStreaming: true,
+                  }],
+                };
+              }
+            }));
+          }
+        }
+      }
+      return;
+    }
 
     if (event.type === 'activity' && event.payload) {
       const activityType = event.payload.activityType;
@@ -598,7 +663,7 @@ export function Workspace() {
       };
 
       setTerminals(prev => prev.map(t =>
-        t.agent.id === adapterId ? { 
+        matchesTerminal(t) ? { 
           ...t, 
           lines: [...t.lines, line],
           isStreaming: event.payload.status === 'running',
@@ -609,7 +674,7 @@ export function Workspace() {
     if (event.type === 'content.delta' && event.payload?.delta) {
       // Append to last output line or create new one
       setTerminals(prev => prev.map(t => {
-        if (t.agent.id !== adapterId) return t;
+        if (!matchesTerminal(t)) return t;
         
         const lastLine = t.lines[t.lines.length - 1];
         if (lastLine?.type === 'output' && lastLine.isStreaming) {
@@ -641,7 +706,7 @@ export function Workspace() {
     // Handle turn/item completion
     if (event.type === 'turn.completed' || event.type === 'item.completed') {
       setTerminals(prev => prev.map(t =>
-        t.agent.id === adapterId ? {
+        matchesTerminal(t) ? {
           ...t,
           isStreaming: false,
           lines: t.lines.map(l => ({ ...l, isStreaming: false })),
@@ -686,7 +751,18 @@ export function Workspace() {
     }]);
   };
 
-  const handleCloseTerminal = (terminalId: string) => {
+  const handleCloseTerminal = async (terminalId: string) => {
+    const terminal = terminals.find(t => t.id === terminalId);
+    
+    // Close thread session if exists
+    if (terminal?.threadId) {
+      try {
+        await fetch(`${API_URL}/threads/${terminal.threadId}/close`, { method: 'POST' });
+      } catch (err) {
+        console.warn('Failed to close thread session:', err);
+      }
+    }
+    
     setTerminals(prev => prev.filter(t => t.id !== terminalId));
   };
 
@@ -699,6 +775,8 @@ export function Workspace() {
     const terminal = terminals.find(t => t.id === terminalId);
     if (!terminal) return;
 
+    const cwd = terminal.path || workspacePath || process.cwd?.() || '/';
+
     // Add prompt line
     setTerminals(prev => prev.map(t =>
       t.id === terminalId ? {
@@ -710,24 +788,42 @@ export function Workspace() {
     ));
 
     try {
-      // Send to adapter with workspace path
-      const cwd = terminal.path || workspacePath || undefined;
-      const res = await fetch(`${API_URL}/adapters/${terminal.agent.id}/send`, {
+      let threadId = terminal.threadId;
+
+      // Create thread/session if needed (Phase 2/3)
+      if (!threadId) {
+        threadId = `thread-${terminalId}`;
+        const sessionRes = await fetch(`${API_URL}/threads/${threadId}/session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            cwd,
+            name: `${terminal.agent.name} - ${new Date().toLocaleString()}`,
+          }),
+        });
+        const sessionData = await sessionRes.json();
+        
+        if (sessionData.ok) {
+          setTerminals(prev => prev.map(t =>
+            t.id === terminalId ? { ...t, threadId, sessionActive: true } : t
+          ));
+        }
+      }
+
+      // Send via thread API (persistent session)
+      const res = await fetch(`${API_URL}/threads/${threadId}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, cwd }),
+        body: JSON.stringify({ message }),
       });
       const data = await res.json();
 
-      if (data.response) {
-        setTerminals(prev => prev.map(t =>
-          t.id === terminalId ? {
-            ...t,
-            isStreaming: false,
-            lines: [...t.lines, { id: `${Date.now()}`, type: 'info', content: data.response, timestamp: makeTimestamp() }]
-          } : t
-        ));
+      // Response comes via WebSocket events, not HTTP response
+      // The streaming updates will be handled by the WebSocket listener
+      if (!data.ok) {
+        throw new Error(data.error || 'Send failed');
       }
+
     } catch (err) {
       setTerminals(prev => prev.map(t =>
         t.id === terminalId ? {
