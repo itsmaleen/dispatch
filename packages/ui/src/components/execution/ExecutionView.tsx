@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef, useCallback, memo } from 'react';
-import { ArrowLeft, Loader2, CheckCircle, XCircle, Clock, Zap, Bot } from 'lucide-react';
-import { TimelineRow, type WorkEntry, type WorkTone } from '../shared/TimelineRow';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { ArrowLeft, Loader2, CheckCircle, XCircle, Clock, Zap, Activity } from 'lucide-react';
 import { api, useAppStore } from '../../stores/app';
+import { ActivityLog, type ActivityEntry } from './ActivityLog';
 
 interface ExecutionViewProps {
   taskId: string;
@@ -12,141 +12,97 @@ interface ExecutionViewProps {
   onComplete: () => void;
 }
 
-// Timeline section types
-type TimelineSection = 
-  | { kind: 'work'; id: string; entries: WorkEntry[] }
-  | { kind: 'working'; id: string }
-  | { kind: 'message'; id: string; content: string; isStreaming?: boolean };
-
 const WS_URL = 'ws://localhost:3333';
 
-export function ExecutionView({ 
-  taskId, 
-  initialStatus, 
-  initialResult, 
-  initialAgent, 
-  onBack, 
-  onComplete 
-}: ExecutionViewProps) {
+export function ExecutionView({ taskId, initialStatus, initialResult, initialAgent, onBack, onComplete }: ExecutionViewProps) {
   const { updateTask } = useAppStore();
   const [agent] = useState<string | undefined>(initialAgent);
   const isAlreadyDone = initialStatus === 'completed' || initialStatus === 'failed';
   const [status, setStatus] = useState<'executing' | 'completed' | 'failed'>(() =>
     isAlreadyDone ? initialStatus : 'executing'
   );
-  const [timeline, setTimeline] = useState<TimelineSection[]>([]);
-  const [outputContent, setOutputContent] = useState<string>('');
+  const [output, setOutput] = useState<string[]>(() => {
+    if (initialStatus === 'completed' && initialResult != null) {
+      return ['> Execution completed.', '', '--- Output ---', initialResult];
+    }
+    if (initialStatus === 'failed') {
+      return ['> Execution failed.', '', initialResult ?? 'No output'];
+    }
+    return [];
+  });
+  const [activities, setActivities] = useState<ActivityEntry[]>([]);
+  const [result, setResult] = useState<string | null>(() => initialResult ?? null);
   const [error, setError] = useState<string | null>(null);
   const [startTime] = useState(Date.now());
   const [elapsed, setElapsed] = useState(0);
-  const timelineRef = useRef<HTMLDivElement>(null);
+  const outputRef = useRef<HTMLDivElement>(null);
+  const activityRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const executedRef = useRef<string | null>(null);
+  const executedTaskIdRef = useRef<string | null>(null);
 
-  // Add a work entry to the current work card (or create a new one)
-  const addWorkEntry = useCallback((entry: WorkEntry) => {
-    setTimeline(prev => {
-      const last = prev[prev.length - 1];
-      
-      // If last section is a work card, add to it
-      if (last?.kind === 'work') {
-        return [
-          ...prev.slice(0, -1),
-          { ...last, entries: [...last.entries, entry] }
-        ];
-      }
-      
-      // Otherwise create a new work card
-      return [
-        ...prev,
-        { kind: 'work', id: crypto.randomUUID(), entries: [entry] }
-      ];
-    });
-  }, []);
-
-  // Update the last running entry to completed
-  const completeLastEntry = useCallback(() => {
-    setTimeline(prev => {
-      const updated = [...prev];
-      for (let i = updated.length - 1; i >= 0; i--) {
-        const section = updated[i];
-        if (section.kind === 'work') {
-          const entries = [...section.entries];
-          for (let j = entries.length - 1; j >= 0; j--) {
-            if (entries[j].status === 'running') {
-              entries[j] = { ...entries[j], status: 'completed' };
-              updated[i] = { ...section, entries };
-              return updated;
-            }
-          }
-        }
-      }
-      return prev;
-    });
-  }, []);
-
-  // Map event types to work tones
-  const mapToTone = useCallback((type: string): WorkTone => {
-    switch (type) {
-      case 'thinking': return 'thinking';
-      case 'file_read': return 'file_read';
-      case 'file_write':
-      case 'file_change': return 'file_write';
-      case 'command':
-      case 'command_execution': return 'command';
-      case 'error': return 'error';
-      default: return 'tool';
-    }
-  }, []);
-
-  // Handle WebSocket events
+  // Handle incoming WebSocket events
   const handleWsEvent = useCallback((data: any) => {
     if (data.type !== 'event') return;
+
     const event = data.event;
     if (!event) return;
-    
-    // Activity events from adapter
-    if (event.type === 'activity' && event.payload) {
-      const p = event.payload;
-      addWorkEntry({
-        id: crypto.randomUUID(),
-        tone: mapToTone(p.activityType),
-        label: p.label,
-        detail: p.detail,
-        status: p.status,
-      });
-    }
-    
-    // Content streaming
-    if (event.type === 'content.delta' && event.payload?.delta) {
-      setOutputContent(prev => prev + event.payload.delta);
-    }
-    
-    // Tool/item started
-    if (event.type === 'item.started' && event.payload) {
-      const p = event.payload;
-      addWorkEntry({
-        id: crypto.randomUUID(),
-        tone: mapToTone(p.itemType || 'tool'),
-        label: p.title || 'Tool',
-        detail: p.detail,
-        status: 'running',
-      });
-    }
-    
-    // Tool/item completed
-    if (event.type === 'item.completed') {
-      completeLastEntry();
-    }
-  }, [addWorkEntry, completeLastEntry, mapToTone]);
 
-  // WebSocket setup
+    // Handle activity events
+    if (event.type === 'activity' && event.payload) {
+      const newActivity: ActivityEntry = {
+        id: crypto.randomUUID(),
+        createdAt: new Date().toISOString(),
+        activityType: event.payload.activityType,
+        label: event.payload.label,
+        detail: event.payload.detail,
+        status: event.payload.status,
+      };
+      setActivities(prev => [...prev, newActivity]);
+    }
+
+    // Handle content deltas (for output)
+    if (event.type === 'content.delta' && event.payload?.delta) {
+      // Don't add to output - we get full result at the end
+      // But could show streaming content here if wanted
+    }
+
+    // Handle item events (tool starts/stops)
+    if (event.type === 'item.started' && event.payload) {
+      const newActivity: ActivityEntry = {
+        id: crypto.randomUUID(),
+        createdAt: new Date().toISOString(),
+        activityType: event.payload.itemType === 'file_read' ? 'file_read' :
+                     event.payload.itemType === 'file_change' ? 'file_write' :
+                     event.payload.itemType === 'command_execution' ? 'command' : 'tool_started',
+        label: event.payload.title || 'Tool',
+        detail: event.payload.detail,
+        status: 'running',
+      };
+      setActivities(prev => [...prev, newActivity]);
+    }
+
+    if (event.type === 'item.completed') {
+      // Update the last running activity to completed
+      setActivities(prev => {
+        const updated = [...prev];
+        for (let i = updated.length - 1; i >= 0; i--) {
+          if (updated[i].status === 'running') {
+            updated[i] = { ...updated[i], status: 'completed', activityType: 'tool_completed' };
+            break;
+          }
+        }
+        return updated;
+      });
+    }
+  }, []);
+
+  // Set up WebSocket connection
   useEffect(() => {
     if (isAlreadyDone) return;
-    
+
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
-    
+
     ws.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data);
@@ -155,14 +111,18 @@ export function ExecutionView({
         // Ignore parse errors
       }
     };
-    
+
+    ws.onerror = () => {
+      console.warn('WebSocket error - activities may not stream');
+    };
+
     return () => {
       ws.close();
       wsRef.current = null;
     };
   }, [isAlreadyDone, handleWsEvent]);
 
-  // Elapsed timer
+  // Update elapsed time
   useEffect(() => {
     if (status !== 'executing') return;
     const interval = setInterval(() => {
@@ -175,70 +135,81 @@ export function ExecutionView({
   useEffect(() => {
     if (isAlreadyDone) {
       setStatus(initialStatus!);
-      if (initialResult) setOutputContent(initialResult);
+      if (initialResult) {
+        setOutput(prev => prev.length ? prev : ['> Execution completed.', '', '--- Output ---', initialResult]);
+      }
       return;
     }
-    
-    if (executedRef.current === taskId) return;
-    executedRef.current = taskId;
+
+    // Prevent double execution
+    if (executedTaskIdRef.current === taskId) return;
+    executedTaskIdRef.current = taskId;
 
     const execute = async () => {
       const agentLabel = agent === 'claude-code' ? 'Claude Code' : agent || 'agent';
-      addWorkEntry({
+      setOutput(prev => [...prev, `> Starting execution with ${agentLabel}...`]);
+      setActivities([{
         id: crypto.randomUUID(),
-        tone: 'info',
-        label: `Starting execution with ${agentLabel}`,
-      });
-      
+        createdAt: new Date().toISOString(),
+        activityType: 'info',
+        label: 'Starting execution',
+        detail: agentLabel,
+      }]);
+
       try {
         const { result } = await api.executeTask(taskId, agent);
-        
-        setOutputContent(result);
+
+        setOutput(prev => [...prev, '', '--- Output ---', result]);
+        setResult(result);
         setStatus('completed');
-        addWorkEntry({
+        setActivities(prev => [...prev, {
           id: crypto.randomUUID(),
-          tone: 'info',
+          createdAt: new Date().toISOString(),
+          activityType: 'info',
           label: 'Execution completed',
+        }]);
+
+        updateTask(taskId, {
           status: 'completed',
+          result,
         });
-        
-        updateTask(taskId, { status: 'completed', result });
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : 'Execution failed';
         setError(errMsg);
         setStatus('failed');
-        addWorkEntry({
+        setActivities(prev => [...prev, {
           id: crypto.randomUUID(),
-          tone: 'error',
+          createdAt: new Date().toISOString(),
+          activityType: 'error',
           label: 'Execution failed',
           detail: errMsg,
-        });
-        
+        }]);
+
         updateTask(taskId, { status: 'failed' });
       }
     };
 
     execute();
-  }, [taskId, agent, isAlreadyDone, initialStatus, initialResult, addWorkEntry, updateTask]);
+  }, [taskId, updateTask, isAlreadyDone, initialStatus, initialResult, agent]);
 
-  // Auto-scroll
+  // Auto-scroll output and activity
   useEffect(() => {
-    if (timelineRef.current) {
-      timelineRef.current.scrollTop = timelineRef.current.scrollHeight;
+    if (outputRef.current) {
+      outputRef.current.scrollTop = outputRef.current.scrollHeight;
     }
-  }, [timeline, outputContent]);
+  }, [output]);
+
+  useEffect(() => {
+    if (activityRef.current) {
+      activityRef.current.scrollTop = activityRef.current.scrollHeight;
+    }
+  }, [activities]);
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
-
-  // Count total work entries
-  const workCount = timeline.reduce((acc, section) => {
-    if (section.kind === 'work') return acc + section.entries.length;
-    return acc;
-  }, 0);
 
   return (
     <div className="h-full flex flex-col bg-zinc-950">
@@ -252,40 +223,37 @@ export function ExecutionView({
             <ArrowLeft className="w-4 h-4" />
             <span className="text-sm">Back</span>
           </button>
-          
-          <div className="h-4 w-px bg-zinc-700" />
-          
-          <div className="flex items-center gap-2">
-            {status === 'executing' && (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
-                <span className="text-sm font-medium text-zinc-200">Executing...</span>
-              </>
-            )}
-            {status === 'completed' && (
-              <>
-                <CheckCircle className="w-4 h-4 text-emerald-400" />
-                <span className="text-sm font-medium text-emerald-400">Completed</span>
-              </>
-            )}
-            {status === 'failed' && (
-              <>
-                <XCircle className="w-4 h-4 text-red-400" />
-                <span className="text-sm font-medium text-red-400">Failed</span>
-              </>
+
+          <div>
+            <h1 className="text-lg font-semibold flex items-center gap-2">
+              {status === 'executing' && (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
+                  Executing...
+                </>
+              )}
+              {status === 'completed' && (
+                <>
+                  <CheckCircle className="w-4 h-4 text-emerald-500" />
+                  Completed
+                </>
+              )}
+              {status === 'failed' && (
+                <>
+                  <XCircle className="w-4 h-4 text-red-500" />
+                  Failed
+                </>
+              )}
+            </h1>
+            {agent && (
+              <p className="text-sm text-zinc-500">
+                Agent: {agent === 'claude-code' ? 'Claude Code' : agent}
+              </p>
             )}
           </div>
         </div>
 
         <div className="flex items-center gap-4 text-sm">
-          {agent && (
-            <div className="flex items-center gap-1.5 text-zinc-500">
-              <Bot className="w-3.5 h-3.5" />
-              <span className="text-xs">
-                {agent === 'claude-code' ? 'Claude Code' : agent}
-              </span>
-            </div>
-          )}
           <div className="flex items-center gap-1.5 text-zinc-500">
             <Clock className="w-3.5 h-3.5" />
             <span className="font-mono text-xs">{formatTime(elapsed)}</span>
@@ -297,69 +265,57 @@ export function ExecutionView({
         </div>
       </div>
 
-      {/* Timeline */}
-      <div 
-        ref={timelineRef}
-        className="flex-1 overflow-y-auto"
-      >
-        <div className="max-w-3xl mx-auto px-4 py-4">
-          {/* Work sections */}
-          {timeline.map((section) => {
-            switch (section.kind) {
-              case 'work':
-                return (
-                  <TimelineRow 
-                    key={section.id} 
-                    type="work" 
-                    entries={section.entries} 
-                  />
-                );
-              case 'message':
-                return (
-                  <TimelineRow 
-                    key={section.id} 
-                    type="message" 
-                    content={section.content}
-                    isStreaming={section.isStreaming}
-                  />
-                );
-              default:
-                return null;
-            }
-          })}
-          
-          {/* Working indicator */}
-          {status === 'executing' && workCount > 0 && (
-            <TimelineRow type="working" />
-          )}
-          
-          {/* Output / Response */}
-          {outputContent && (
-            <TimelineRow 
-              type="message" 
-              content={outputContent}
-              isStreaming={status === 'executing'}
-            />
-          )}
-          
-          {/* Empty state */}
-          {timeline.length === 0 && !outputContent && status === 'executing' && (
-            <div className="flex flex-col items-center justify-center py-12 text-zinc-500">
-              <Loader2 className="w-6 h-6 animate-spin mb-3 text-indigo-400/50" />
-              <p className="text-sm">Waiting for agent...</p>
+      {/* Main content - split view */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Activity panel */}
+        <div className="w-80 border-r border-zinc-800 flex flex-col">
+          <div className="p-3 border-b border-zinc-800 flex items-center gap-2">
+            <Activity className="w-4 h-4 text-zinc-400" />
+            <span className="text-sm font-medium text-zinc-300">Activity</span>
+            <span className="text-xs text-zinc-600">({activities.length})</span>
+          </div>
+          <div
+            ref={activityRef}
+            className="flex-1 p-3 overflow-y-auto"
+          >
+            <ActivityLog activities={activities} maxVisible={50} />
+          </div>
+        </div>
+
+        {/* Output panel */}
+        <div className="flex-1 flex flex-col">
+          <div className="p-3 border-b border-zinc-800">
+            <span className="text-sm font-medium text-zinc-300">Output</span>
+          </div>
+          <div className="flex-1 p-4 overflow-hidden">
+            <div
+              ref={outputRef}
+              className="h-full bg-zinc-900 rounded-lg p-4 font-mono text-sm overflow-auto"
+            >
+              {output.map((line, i) => (
+                <div key={i} className="text-zinc-300 whitespace-pre-wrap">
+                  {line || '\u00A0'}
+                </div>
+              ))}
+              {status === 'executing' && (
+                <div className="flex items-center gap-2 text-indigo-400 mt-2">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <span>Working...</span>
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </div>
       </div>
 
       {/* Footer */}
       <div className="px-4 py-3 border-t border-zinc-800 bg-zinc-900/50 flex justify-between items-center">
         <div className="text-xs text-zinc-500">
-          {status === 'completed' && `Completed • ${workCount} activities`}
+          {status === 'completed' && 'Task completed successfully'}
           {status === 'failed' && (error || 'Execution failed')}
-          {status === 'executing' && `${workCount} activities`}
+          {status === 'executing' && `${activities.length} activities • Agent is working...`}
         </div>
-        
+
         <div className="flex gap-2">
           {status === 'completed' && (
             <button

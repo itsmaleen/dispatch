@@ -3,10 +3,11 @@ import { HomePage } from './components/home/HomePage';
 import { PlanningView } from './components/planning/PlanningView';
 import { ExecutionView } from './components/execution/ExecutionView';
 import { AgentsPanel } from './components/agents/AgentsPanel';
+import { WidgetDemo } from './components/demo/WidgetDemo';
 import { useAppStore, api, type Task } from './stores/app';
 import { Settings, FolderOpen, Users } from 'lucide-react';
 
-type View = 'home' | 'planning' | 'execution';
+type View = 'home' | 'planning' | 'execution' | 'demo';
 
 const ACC_SERVER_URL = 'localhost:3333';
 
@@ -33,6 +34,18 @@ export function App() {
     const interval = setInterval(refreshAgentStatus, 5000);
     return () => clearInterval(interval);
   }, [refreshAgentStatus]);
+
+  // Keyboard shortcut for demo view (Cmd/Ctrl + Shift + D)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'D') {
+        e.preventDefault();
+        setView(view === 'demo' ? 'home' : 'demo');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [view]);
 
   const handleStartTask = async (message: string) => {
     try {
@@ -137,6 +150,13 @@ export function App() {
               </span>
             )}
           </button>
+          <button
+            onClick={() => setView(view === 'demo' ? 'home' : 'demo')}
+            className="px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-md transition-colors"
+            title="Toggle Widget Demo (⌘⇧D)"
+          >
+            {view === 'demo' ? 'Exit Demo' : 'Demo'}
+          </button>
           <button className="p-2 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-md transition-colors">
             <Settings className="w-4 h-4" />
           </button>
@@ -149,7 +169,7 @@ export function App() {
           <HomePage onStartTask={handleStartTask} onOpenTask={handleOpenTask} />
         )}
         {view === 'planning' && currentTaskId && (
-          <PlanningView 
+          <PlanningView
             taskId={currentTaskId}
             initialMessage={currentTaskMessage}
             initialPlan={currentTask?.plan}
@@ -159,7 +179,7 @@ export function App() {
           />
         )}
         {view === 'execution' && currentTaskId && (
-          <ExecutionView 
+          <ExecutionView
             taskId={currentTaskId}
             initialStatus={
               currentTask?.status === 'executing' || currentTask?.status === 'completed' || currentTask?.status === 'failed'
@@ -172,6 +192,7 @@ export function App() {
             onComplete={handleComplete}
           />
         )}
+        {view === 'demo' && <WidgetDemo />}
       </div>
 
       {/* Status bar */}

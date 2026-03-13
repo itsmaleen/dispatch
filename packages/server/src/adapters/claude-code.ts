@@ -351,6 +351,8 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
           
           if (deltaType === 'text_delta' && delta.text) {
             this.outputBuffer += delta.text;
+            
+            // Emit content delta
             this.ctx.emitEvent({
               type: 'content.delta',
               threadId: this.state.activeThreadId!,
@@ -361,7 +363,7 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
               },
             });
           } else if (deltaType === 'thinking_delta' && delta.thinking) {
-            // Thinking/reasoning
+            // Emit thinking activity
             this.ctx.emitEvent({
               type: 'activity',
               threadId: this.state.activeThreadId!,
@@ -372,6 +374,7 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
                 detail: delta.thinking.slice(0, 100),
               },
             });
+
             this.ctx.emitEvent({
               type: 'content.delta',
               threadId: this.state.activeThreadId!,
@@ -388,7 +391,7 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
               threadId: this.state.activeThreadId!,
               turnId,
               payload: {
-                activityType: 'tool',
+                activityType: 'tool_started',
                 label: 'Building tool input...',
                 status: 'running',
               },
@@ -398,12 +401,12 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
           const block = streamEvent.content_block;
           const blockType = block?.type;
           this.ctx.log.info(`[SDK] content_block_start: ${blockType} - ${block?.name || 'no name'}`);
-          
+
           if (blockType === 'tool_use' || blockType === 'server_tool_use') {
             const toolType = this.classifyTool(block.name);
-            const activityType = toolType === 'file_read' ? 'file_read' : 
+            const activityType = toolType === 'file_read' ? 'file_read' :
                                  toolType === 'file_change' ? 'file_write' :
-                                 toolType === 'command_execution' ? 'command' : 'tool';
+                                 toolType === 'command_execution' ? 'command' : 'tool_started';
             const detail = this.summarizeToolInput(block.name, block.input);
             
             this.ctx.emitEvent({
@@ -430,7 +433,6 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
               },
             });
           } else if (blockType === 'thinking') {
-            // Thinking block started
             this.ctx.emitEvent({
               type: 'activity',
               threadId: this.state.activeThreadId!,
@@ -442,7 +444,6 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
               },
             });
           } else if (blockType === 'text') {
-            // Text block started - response beginning
             this.ctx.emitEvent({
               type: 'activity',
               threadId: this.state.activeThreadId!,
@@ -461,6 +462,17 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
             payload: {
               activityType: 'info',
               label: 'Block completed',
+              status: 'completed',
+            },
+          });
+          
+          this.ctx.emitEvent({
+            type: 'activity',
+            threadId: this.state.activeThreadId!,
+            turnId,
+            payload: {
+              activityType: 'tool_completed',
+              label: 'Tool completed',
               status: 'completed',
             },
           });
@@ -501,26 +513,28 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
 
       case 'result': {
         const result = event as any;
-        const parts = [];
-        if (result.usage) {
-          parts.push(`${result.usage.input_tokens} in / ${result.usage.output_tokens} out`);
-        }
-        if (typeof result.total_cost_usd === 'number') {
-          parts.push(`$${result.total_cost_usd.toFixed(4)}`);
-        }
-        
-        this.ctx.emitEvent({
-          type: 'activity',
-          threadId: this.state.activeThreadId!,
-          turnId,
-          payload: {
-            activityType: 'info',
-            label: 'Completed',
-            detail: parts.join(' • ') || undefined,
-          },
-        });
-        
-        if (parts.length > 0) {
+
+        // Emit usage/cost as activity
+        if (result.usage || typeof result.total_cost_usd === 'number') {
+          const parts = [];
+          if (result.usage) {
+            parts.push(`${result.usage.input_tokens} in / ${result.usage.output_tokens} out`);
+          }
+          if (typeof result.total_cost_usd === 'number') {
+            parts.push(`$${result.total_cost_usd.toFixed(4)}`);
+          }
+
+          this.ctx.emitEvent({
+            type: 'activity',
+            threadId: this.state.activeThreadId!,
+            turnId,
+            payload: {
+              activityType: 'info',
+              label: 'Completed',
+              detail: parts.join(' • '),
+            },
+          });
+
           this.ctx.log.info(`Usage: ${parts.join(' • ')}`);
         }
         break;
@@ -528,15 +542,18 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
 
       case 'system': {
         const sysEvent = event as any;
-        this.ctx.emitEvent({
-          type: 'activity',
-          threadId: this.state.activeThreadId!,
-          turnId,
-          payload: {
-            activityType: 'info',
-            label: sysEvent.subtype === 'status' ? `Status: ${sysEvent.status}` : `System: ${sysEvent.subtype}`,
-          },
-        });
+        if (sysEvent.subtype === 'status') {
+          this.ctx.emitEvent({
+            type: 'activity',
+            threadId: this.state.activeThreadId!,
+            turnId,
+            payload: {
+              activityType: 'info',
+              label: `Status: ${sysEvent.status}`,
+            },
+          });
+          this.ctx.log.info(`Claude Code status: ${sysEvent.status}`);
+        }
         break;
       }
 
@@ -547,12 +564,13 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
           threadId: this.state.activeThreadId!,
           turnId,
           payload: {
-            activityType: 'tool',
+            activityType: 'tool_started',
             label: toolEvent.tool_name || 'Tool',
             detail: `${toolEvent.elapsed_time_seconds}s elapsed`,
             status: 'running',
           },
         });
+        this.ctx.log.info(`Tool progress: ${toolEvent.tool_name} (${toolEvent.elapsed_time_seconds}s)`);
         break;
       }
 
