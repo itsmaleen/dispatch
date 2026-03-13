@@ -267,13 +267,14 @@ function TerminalWidget({
 }) {
   const outputRef = useRef<HTMLDivElement>(null);
   const [input, setInput] = useState('');
+  const [autoScroll, setAutoScroll] = useState(true);
 
   // Auto-scroll to bottom
   useEffect(() => {
-    if (outputRef.current) {
+    if (autoScroll && outputRef.current) {
       outputRef.current.scrollTop = outputRef.current.scrollHeight;
     }
-  }, [terminal.lines]);
+  }, [terminal.lines, autoScroll]);
 
   const handleSubmit = () => {
     if (input.trim()) {
@@ -325,6 +326,14 @@ function TerminalWidget({
           )}
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setAutoScroll(!autoScroll)}
+            className={`text-xs px-2 py-0.5 rounded ${
+              autoScroll ? 'bg-blue-600/20 text-blue-400' : 'bg-zinc-800 text-zinc-500'
+            }`}
+          >
+            Auto-scroll
+          </button>
           {terminal.isStreaming && (
             <div className="flex items-center gap-1.5 text-indigo-400">
               <Loader2 className="w-3 h-3 animate-spin" />

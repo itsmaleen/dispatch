@@ -188,12 +188,13 @@ function TerminalWidget({
   onSendMessage: (terminalId: string, message: string, files?: UploadedFile[]) => void;
 }) {
   const outputRef = useRef<HTMLDivElement>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
 
   useEffect(() => {
-    if (outputRef.current) {
+    if (autoScroll && outputRef.current) {
       outputRef.current.scrollTop = outputRef.current.scrollHeight;
     }
-  }, [terminal.lines]);
+  }, [terminal.lines, autoScroll]);
 
   const handleSend = (message: string, files?: UploadedFile[]) => {
     onSendMessage(terminal.id, message, files);
@@ -217,9 +218,19 @@ function TerminalWidget({
           <span className="text-xs font-medium text-zinc-300">{terminal.agent.name}</span>
           {terminal.isStreaming && <Loader2 className="w-3 h-3 text-violet-400 animate-spin" />}
         </div>
-        {terminal.currentTask && (
-          <span className="text-[10px] text-zinc-500 truncate max-w-[200px]">{terminal.currentTask}</span>
-        )}
+        <div className="flex items-center gap-2">
+          {terminal.currentTask && (
+            <span className="text-[10px] text-zinc-500 truncate max-w-[200px]">{terminal.currentTask}</span>
+          )}
+          <button
+            onClick={() => setAutoScroll(!autoScroll)}
+            className={`text-xs px-2 py-0.5 rounded ${
+              autoScroll ? 'bg-blue-600/20 text-blue-400' : 'bg-zinc-800 text-zinc-500'
+            }`}
+          >
+            Auto-scroll
+          </button>
+        </div>
       </div>
 
       {/* Output */}
