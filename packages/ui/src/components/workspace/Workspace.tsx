@@ -25,6 +25,7 @@ import {
   Pencil,
 } from 'lucide-react';
 import { api } from '../../stores/app';
+import { ChatInput, type UploadedFile } from './ChatInput';
 
 // ============================================================================
 // TYPES
@@ -184,10 +185,9 @@ function TerminalWidget({
   terminal: TerminalState;
   onClose?: () => void;
   onMinimize?: () => void;
-  onSendMessage: (terminalId: string, message: string) => void;
+  onSendMessage: (terminalId: string, message: string, files?: UploadedFile[]) => void;
 }) {
   const outputRef = useRef<HTMLDivElement>(null);
-  const [input, setInput] = useState('');
 
   useEffect(() => {
     if (outputRef.current) {
@@ -195,11 +195,8 @@ function TerminalWidget({
     }
   }, [terminal.lines]);
 
-  const handleSubmit = () => {
-    if (input.trim()) {
-      onSendMessage(terminal.id, input);
-      setInput('');
-    }
+  const handleSend = (message: string, files?: UploadedFile[]) => {
+    onSendMessage(terminal.id, message, files);
   };
 
   return (
@@ -234,20 +231,13 @@ function TerminalWidget({
 
       {/* Input */}
       <div className="flex-shrink-0 p-2 border-t border-zinc-800">
-        <div className="flex items-center gap-2 bg-zinc-900 rounded px-3 py-1.5">
-          <span className="text-violet-400 text-sm">❯</span>
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
-            placeholder="Send message..."
-            className="flex-1 bg-transparent text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none"
-          />
-          <button onClick={handleSubmit} disabled={!input.trim()} className="text-zinc-500 hover:text-violet-400 disabled:opacity-30">
-            <Send className="w-4 h-4" />
-          </button>
-        </div>
+        <ChatInput
+          onSend={handleSend}
+          placeholder="Send message..."
+          disabled={terminal.isStreaming}
+          showPrompt={true}
+          promptIcon="❯"
+        />
       </div>
     </div>
   );
@@ -391,18 +381,19 @@ function OrchestratorChat({
   onMinimize?: () => void;
   isStreaming: boolean;
 }) {
-  const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || isStreaming) return;
-    onSendMessage(input.trim());
-    setInput('');
+  const handleSend = (message: string, files?: UploadedFile[]) => {
+    let content = message;
+    if (files && files.length > 0) {
+      const fileNames = files.map(f => f.name).join(', ');
+      content = `${message}\n📎 Attached: ${fileNames}`;
+    }
+    onSendMessage(content);
   };
 
   return (
@@ -478,21 +469,14 @@ function OrchestratorChat({
         <div ref={messagesEndRef} />
       </div>
 
-      <form onSubmit={handleSubmit} className="flex-shrink-0 p-2 border-t border-zinc-800">
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Describe your task..."
-            disabled={isStreaming}
-            className="flex-1 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm placeholder:text-zinc-600 focus:outline-none focus:border-violet-500/50"
-          />
-          <button type="submit" disabled={!input.trim() || isStreaming} className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 disabled:bg-zinc-700 rounded-lg">
-            <Send className="w-4 h-4" />
-          </button>
-        </div>
-      </form>
+      <div className="flex-shrink-0 p-2 border-t border-zinc-800">
+        <ChatInput
+          onSend={handleSend}
+          placeholder="Describe your task..."
+          disabled={isStreaming}
+          showPrompt={false}
+        />
+      </div>
     </div>
   );
 }
@@ -771,11 +755,18 @@ export function Workspace() {
     setTerminals(prev => prev.filter(t => t.id !== terminal.id));
   };
 
-  const handleTerminalMessage = async (terminalId: string, message: string) => {
+  const handleTerminalMessage = async (terminalId: string, message: string, files?: UploadedFile[]) => {
     const terminal = terminals.find(t => t.id === terminalId);
     if (!terminal) return;
 
     const cwd = terminal.path || workspacePath || process.cwd?.() || '/';
+
+    // Build prompt content with file info
+    let promptContent = message;
+    if (files && files.length > 0) {
+      const fileNames = files.map(f => f.name).join(', ');
+      promptContent = `${message}\n📎 Attached: ${fileNames}`;
+    }
 
     // Add prompt line
     setTerminals(prev => prev.map(t =>
@@ -783,7 +774,7 @@ export function Workspace() {
         ...t,
         isStreaming: true,
         currentTask: message,
-        lines: [...t.lines, { id: `${Date.now()}`, type: 'prompt', content: message, timestamp: makeTimestamp() }]
+        lines: [...t.lines, { id: `${Date.now()}`, type: 'prompt', content: promptContent, timestamp: makeTimestamp() }]
       } : t
     ));
 
