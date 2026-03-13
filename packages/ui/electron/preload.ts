@@ -43,6 +43,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // System
   platform: process.platform,
+  
+  // Project
+  openFolder: () => ipcRenderer.invoke('dialog:openFolder'),
 });
 
 // Type declaration for renderer
@@ -66,6 +69,7 @@ declare global {
         createPr: (options: { title: string; body: string; cwd: string }) => Promise<{ ok: boolean; output: string }>;
       };
       platform: NodeJS.Platform;
+      openFolder: () => Promise<string | null>;
     };
   }
 }

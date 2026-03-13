@@ -310,9 +310,65 @@ Using **shadcn/ui** (already in UI package) + custom:
 
 ---
 
-## Open Questions
+## Decisions
 
-1. **Multi-agent assignment** - How to show which agent handles which part?
-2. **Widget persistence** - Save layouts per user? Per project?
-3. **Offline mode** - What to show when no agents connected?
-4. **Mobile/responsive** - Desktop-first, but any mobile consideration?
+1. **Multi-agent assignment** - Show which agent handles which file(s) in execution view
+2. **Widget persistence** - Project-specific layouts, editable by user
+3. **Project loading** - Folder select dialog OR paste path input
+
+---
+
+## Home Page States
+
+### No Project Loaded (Capy-style blank)
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  🦞 Agent Command Center                              [Agents]  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│                                                                 │
+│                         🦞                                      │
+│                                                                 │
+│              Welcome to Agent Command Center                    │
+│                                                                 │
+│         Open a project to start working with AI agents          │
+│                                                                 │
+│                                                                 │
+│         ┌─────────────────────────────────────────┐            │
+│         │  📁 Open Folder...                      │            │
+│         └─────────────────────────────────────────┘            │
+│                                                                 │
+│         ┌─────────────────────────────────────────┐            │
+│         │  /path/to/project                   [→] │            │
+│         └─────────────────────────────────────────┘            │
+│                          or paste a path                        │
+│                                                                 │
+│                                                                 │
+│         Recent Projects                                         │
+│         ─────────────────                                       │
+│         📁 agent-command-center    ~/workspace/acc              │
+│         📁 openclaw                ~/workspace/openclaw         │
+│         📁 portal                  ~/workspace/portal           │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Project Loaded (Active state)
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  🦞 ACC • agent-command-center          [Switch] [⚙️] [Agents]  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │                                                         │   │
+│  │     "What would you like to build?"                     │   │
+│  │                                                         │   │
+│  │  ┌─────────────────────────────────────────────────┐   │   │
+│  │  │ Describe your task...                      [→]  │   │   │
+│  │  └─────────────────────────────────────────────────┘   │   │
+│  │                                                         │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  ... (rest of active home view)                                 │
+└─────────────────────────────────────────────────────────────────┘
+```

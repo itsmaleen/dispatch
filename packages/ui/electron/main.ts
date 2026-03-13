@@ -7,7 +7,7 @@
  * - Native integrations (PTY, file system)
  */
 
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import path from 'path';
 
 let mainWindow: BrowserWindow | null = null;
@@ -119,4 +119,18 @@ ipcMain.handle('github:createPr', async (_event, options: { title: string; body:
       }
     );
   });
+});
+
+// Dialog: Open Folder
+ipcMain.handle('dialog:openFolder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow!, {
+    properties: ['openDirectory'],
+    title: 'Select Project Folder',
+  });
+  
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+  
+  return result.filePaths[0];
 });

@@ -1,36 +1,119 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { HomePage } from './components/home/HomePage';
 import { PlanningView } from './components/planning/PlanningView';
 import { ExecutionView } from './components/execution/ExecutionView';
+import { useAppStore } from './stores/app';
+import { Settings, FolderOpen } from 'lucide-react';
 
-type View = 'planning' | 'execution';
+type View = 'home' | 'planning' | 'execution' | 'review';
 
 export function App() {
-  const [view, setView] = useState<View>('planning');
+  const { currentProject, setProject, agents, setAgents } = useAppStore();
+  const [view, setView] = useState<View>('home');
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
+  const [currentTaskMessage, setCurrentTaskMessage] = useState<string>('');
+
+  // Fetch agents from server
+  useEffect(() => {
+    const fetchAgents = async () => {
+      try {
+        const res = await fetch('http://localhost:3333/agents');
+        const data = await res.json();
+        if (data.agents) {
+          setAgents(
+            data.agents.map((a: any) => ({
+              name: a.name,
+              capabilities: a.capabilities || [],
+              connectedAt: a.connectedAt,
+              status: 'idle' as const,
+            }))
+          );
+        }
+      } catch (err) {
+        console.error('Failed to fetch agents:', err);
+      }
+    };
+
+    fetchAgents();
+    const interval = setInterval(fetchAgents, 5000);
+    return () => clearInterval(interval);
+  }, [setAgents]);
+
+  const handleStartTask = (message: string) => {
+    setCurrentTaskMessage(message);
+    setView('planning');
+  };
 
   const handleTaskConfirmed = (taskId: string) => {
     setCurrentTaskId(taskId);
     setView('execution');
   };
 
-  const handleBackToPlanning = () => {
-    setView('planning');
+  const handleBackToHome = () => {
+    setView('home');
     setCurrentTaskId(null);
+    setCurrentTaskMessage('');
+  };
+
+  const handleSwitchProject = async () => {
+    if (window.electronAPI?.openFolder) {
+      const path = await window.electronAPI.openFolder();
+      if (path) {
+        const name = path.split('/').pop() || path;
+        setProject({ path, name, lastOpened: Date.now() });
+      }
+    }
   };
 
   return (
     <div className="h-screen w-screen bg-zinc-950 text-zinc-100 flex flex-col">
-      {/* Title bar area (for macOS traffic lights) */}
-      <div className="h-8 flex-shrink-0 drag-region" />
+      {/* Title bar area */}
+      <div className="h-12 flex-shrink-0 flex items-center justify-between px-4 border-b border-zinc-800 drag-region">
+        <div className="flex items-center gap-3 no-drag">
+          <span className="text-xl">🦞</span>
+          {currentProject ? (
+            <>
+              <span className="font-semibold">ACC</span>
+              <span className="text-zinc-600">•</span>
+              <span className="text-zinc-300">{currentProject.name}</span>
+            </>
+          ) : (
+            <span className="font-semibold">Agent Command Center</span>
+          )}
+        </div>
+        
+        <div className="flex items-center gap-2 no-drag">
+          {currentProject && (
+            <button
+              onClick={handleSwitchProject}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-md transition-colors"
+            >
+              <FolderOpen className="w-4 h-4" />
+              <span>Switch</span>
+            </button>
+          )}
+          <button className="p-2 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-md transition-colors">
+            <Settings className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
 
       {/* Main content */}
       <div className="flex-1 overflow-hidden">
-        {view === 'planning' ? (
-          <PlanningView onTaskConfirmed={handleTaskConfirmed} />
-        ) : (
+        {view === 'home' && (
+          <HomePage onStartTask={handleStartTask} />
+        )}
+        {view === 'planning' && (
+          <PlanningView 
+            initialMessage={currentTaskMessage}
+            onTaskConfirmed={handleTaskConfirmed}
+            onBack={handleBackToHome}
+          />
+        )}
+        {view === 'execution' && currentTaskId && (
           <ExecutionView 
-            taskId={currentTaskId!} 
-            onBack={handleBackToPlanning} 
+            taskId={currentTaskId} 
+            onBack={handleBackToHome}
           />
         )}
       </div>
@@ -38,13 +121,22 @@ export function App() {
       {/* Status bar */}
       <div className="h-6 flex-shrink-0 bg-zinc-900 border-t border-zinc-800 px-4 flex items-center justify-between text-xs text-zinc-500">
         <div className="flex items-center gap-4">
-          <span>Agent Command Center v0.1.0</span>
-          <span className="text-zinc-700">|</span>
-          <span>View: {view}</span>
+          <span>ACC v0.1.0</span>
+          {currentProject && (
+            <>
+              <span className="text-zinc-700">|</span>
+              <span className="text-zinc-400">{currentProject.path}</span>
+            </>
+          )}
         </div>
         <div className="flex items-center gap-4">
-          <span>Claude Code: ⚫ Disconnected</span>
-          <span>OpenClaw: ⚫ Disconnected</span>
+          {agents.length > 0 ? (
+            <span className="text-green-500">
+              🟢 {agents.length} agent{agents.length !== 1 ? 's' : ''} connected
+            </span>
+          ) : (
+            <span>⚫ No agents connected</span>
+          )}
         </div>
       </div>
     </div>
