@@ -2,16 +2,20 @@ import { useState, useEffect } from 'react';
 import { HomePage } from './components/home/HomePage';
 import { PlanningView } from './components/planning/PlanningView';
 import { ExecutionView } from './components/execution/ExecutionView';
+import { AgentsPanel } from './components/agents/AgentsPanel';
 import { useAppStore } from './stores/app';
-import { Settings, FolderOpen } from 'lucide-react';
+import { Settings, FolderOpen, Users } from 'lucide-react';
 
 type View = 'home' | 'planning' | 'execution' | 'review';
+
+const ACC_SERVER_URL = 'localhost:3333';
 
 export function App() {
   const { currentProject, setProject, agents, setAgents } = useAppStore();
   const [view, setView] = useState<View>('home');
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [currentTaskMessage, setCurrentTaskMessage] = useState<string>('');
+  const [showAgentsPanel, setShowAgentsPanel] = useState(false);
 
   // Fetch agents from server
   useEffect(() => {
@@ -92,6 +96,18 @@ export function App() {
               <span>Switch</span>
             </button>
           )}
+          <button 
+            onClick={() => setShowAgentsPanel(true)}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-md transition-colors"
+          >
+            <Users className="w-4 h-4" />
+            <span>Agents</span>
+            {agents.length > 0 && (
+              <span className="bg-green-600 text-white text-xs px-1.5 py-0.5 rounded-full">
+                {agents.length}
+              </span>
+            )}
+          </button>
           <button className="p-2 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-md transition-colors">
             <Settings className="w-4 h-4" />
           </button>
@@ -139,6 +155,13 @@ export function App() {
           )}
         </div>
       </div>
+
+      {/* Agents Panel Modal */}
+      <AgentsPanel
+        isOpen={showAgentsPanel}
+        onClose={() => setShowAgentsPanel(false)}
+        serverUrl={ACC_SERVER_URL}
+      />
     </div>
   );
 }
