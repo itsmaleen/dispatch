@@ -57,18 +57,19 @@ export function AgentsPanel({ isOpen, onClose, serverUrl }: AgentsPanelProps) {
         console.error('Failed to fetch agents:', err);
       }
 
-      // Check Claude Code
+      // Check Claude Code CLI availability
       setClaudeStatus(s => ({ ...s, checking: true }));
       try {
-        const res = await fetch(`http://${serverUrl}/adapters`);
+        // Check via server endpoint that tests if 'claude' CLI exists
+        const res = await fetch(`http://${serverUrl}/check/claude-code`);
         const data = await res.json();
-        const claudeAdapter = data.adapters?.find((a: any) => a.kind === 'claude-code');
         setClaudeStatus({
-          available: !!claudeAdapter,
-          version: claudeAdapter?.version,
+          available: data.available ?? false,
+          version: data.version,
           checking: false,
         });
       } catch {
+        // Fallback: assume not available if check fails
         setClaudeStatus({ available: false, checking: false });
       }
     };

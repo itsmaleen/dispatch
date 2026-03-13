@@ -46,6 +46,17 @@ export class CommandCenterServer {
     // Health check
     this.app.get('/health', (c) => c.json({ ok: true }));
 
+    // Check Claude Code CLI availability
+    this.app.get('/check/claude-code', async (c) => {
+      try {
+        const { execSync } = await import('child_process');
+        const version = execSync('claude --version 2>/dev/null', { encoding: 'utf-8' }).trim();
+        return c.json({ available: true, version });
+      } catch {
+        return c.json({ available: false });
+      }
+    });
+
     // List adapters
     this.app.get('/adapters', (c) => {
       const adapters = Array.from(this.adapters.entries()).map(([id, { config, implementation }]) => ({
