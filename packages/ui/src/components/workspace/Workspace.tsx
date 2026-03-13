@@ -561,63 +561,108 @@ export function Workspace() {
     return () => clearInterval(interval);
   }, [fetchAgents]);
 
-  // WebSocket connection for streaming events
-  useEffect(() => {
-    const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
-
-    ws.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        handleWsEvent(data);
-      } catch {}
-    };
-
-    ws.onerror = () => console.warn('WebSocket error');
-    ws.onclose = () => console.warn('WebSocket closed');
-
-    return () => ws.close();
-  }, []);
-
-  const handleWsEvent = (data: any) => {
+  const handleWsEvent = useCallback((data: any) => {
     if (data.type !== 'event') return;
     const event = data.event;
     if (!event) return;
 
-    // Find terminal by adapterId or agentId
-    const terminalId = data.adapterId || data.agentId;
-    if (!terminalId) return;
+    // adapterId is inside the event object
+    const adapterId = event.adapterId;
+    if (!adapterId) return;
+
+    console.log('[WS Event]', event.type, adapterId, event.payload);
 
     if (event.type === 'activity' && event.payload) {
+      const activityType = event.payload.activityType;
+      const lineType: TerminalLineType = 
+        activityType === 'thinking' ? 'thinking' :
+        activityType === 'file_read' ? 'tool_call' :
+        activityType === 'file_write' ? 'tool_call' :
+        activityType === 'command' ? 'command' : 'info';
+
       const line: TerminalLine = {
         id: `${Date.now()}-${Math.random()}`,
-        type: event.payload.activityType === 'thinking' ? 'thinking' :
-              event.payload.activityType === 'file_read' ? 'tool_call' :
-              event.payload.activityType === 'file_write' ? 'tool_call' :
-              event.payload.activityType === 'command' ? 'command' : 'info',
-        content: event.payload.label,
+        type: lineType,
+        content: event.payload.label + (event.payload.detail ? `: ${event.payload.detail}` : ''),
         timestamp: makeTimestamp(),
+        isStreaming: event.payload.status === 'running',
       };
 
       setTerminals(prev => prev.map(t =>
-        t.agent.id === terminalId ? { ...t, lines: [...t.lines, line] } : t
+        t.agent.id === adapterId ? { 
+          ...t, 
+          lines: [...t.lines, line],
+          isStreaming: event.payload.status === 'running',
+        } : t
       ));
     }
 
     if (event.type === 'content.delta' && event.payload?.delta) {
+      // Append to last output line or create new one
+      setTerminals(prev => prev.map(t => {
+        if (t.agent.id !== adapterId) return t;
+        
+        const lastLine = t.lines[t.lines.length - 1];
+        if (lastLine?.type === 'output' && lastLine.isStreaming) {
+          // Append to existing streaming output
+          return {
+            ...t,
+            lines: t.lines.map((l, i) => 
+              i === t.lines.length - 1 
+                ? { ...l, content: l.content + event.payload.delta }
+                : l
+            ),
+          };
+        } else {
+          // Create new output line
+          return {
+            ...t,
+            lines: [...t.lines, {
+              id: `${Date.now()}`,
+              type: 'output' as const,
+              content: event.payload.delta,
+              timestamp: makeTimestamp(),
+              isStreaming: true,
+            }],
+          };
+        }
+      }));
+    }
+
+    // Handle turn/item completion
+    if (event.type === 'turn.completed' || event.type === 'item.completed') {
       setTerminals(prev => prev.map(t =>
-        t.agent.id === terminalId ? {
+        t.agent.id === adapterId ? {
           ...t,
-          lines: [...t.lines, {
-            id: `${Date.now()}`,
-            type: 'output',
-            content: event.payload.delta,
-            timestamp: makeTimestamp(),
-          }]
+          isStreaming: false,
+          lines: t.lines.map(l => ({ ...l, isStreaming: false })),
         } : t
       ));
     }
-  };
+  }, []);
+
+  // WebSocket connection for streaming events
+  useEffect(() => {
+    console.log('[WS] Connecting to', WS_URL);
+    const ws = new WebSocket(WS_URL);
+    wsRef.current = ws;
+
+    ws.onopen = () => console.log('[WS] Connected');
+    
+    ws.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        handleWsEvent(data);
+      } catch (err) {
+        console.error('[WS] Parse error:', err);
+      }
+    };
+
+    ws.onerror = (e) => console.warn('[WS] Error:', e);
+    ws.onclose = () => console.warn('[WS] Closed');
+
+    return () => ws.close();
+  }, [handleWsEvent]);
 
   // Terminal handlers
   const handleNewTerminal = (agentId?: string) => {
@@ -772,41 +817,39 @@ export function Workspace() {
                        lower.startsWith('tell me') ||
                        lower.length < 30;
 
-    // For simple questions, ask Claude directly without planning
+    // For simple questions, use task API with quick settings
     if (isQuestion && !lower.includes('build') && !lower.includes('create') && !lower.includes('implement') && !lower.includes('add')) {
       try {
-        // Send directly to Claude Code for a quick answer
-        const res = await fetch(`${API_URL}/adapters/claude-code-local/send`, {
+        // Use the task API but with a simple response prompt
+        const { taskId } = await api.createTask(text);
+        const res = await fetch(`${API_URL}/tasks/${taskId}/plan`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            message: text,
-            taskOptions: { taskType: 'planning', effort: 'low', maxTurns: 1 }
-          }),
+          body: JSON.stringify({ agent: agents[0]?.id || 'claude-code-local' }),
         });
         const data = await res.json();
         
-        if (data.ok) {
-          // Wait a bit for the response
-          setTimeout(async () => {
-            const resultRes = await fetch(`${API_URL}/adapters/claude-code-local/result/${data.turnId}`);
-            const resultData = await resultRes.json();
-            setChatMessages(prev => [...prev, { 
-              id: `${Date.now()}`, 
-              role: 'assistant', 
-              content: resultData.result || 'Let me think about that...', 
-              timestamp: makeTimestamp() 
-            }]);
-            setIsChatStreaming(false);
-          }, 2000);
+        if (data.ok && data.plan) {
+          // Simple questions get direct answers, not plan format
+          setChatMessages(prev => [...prev, { 
+            id: `${Date.now()}`, 
+            role: 'assistant', 
+            content: data.plan, 
+            timestamp: makeTimestamp() 
+          }]);
         } else {
-          // Fallback to planning mode
-          setChatMessages(prev => [...prev, { id: `${Date.now()}`, role: 'assistant', content: `I'll help with that. Let me create a plan...`, timestamp: makeTimestamp() }]);
-          await generatePlan(text);
+          setChatMessages(prev => [...prev, { 
+            id: `${Date.now()}`, 
+            role: 'assistant', 
+            content: data.error || 'I couldn\'t process that. Try rephrasing?', 
+            timestamp: makeTimestamp() 
+          }]);
         }
+        setIsChatStreaming(false);
         return;
-      } catch {
-        // Fallback to planning mode
+      } catch (err) {
+        console.error('Question failed:', err);
+        // Fall through to generate plan
       }
     }
 
