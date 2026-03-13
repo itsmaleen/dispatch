@@ -333,13 +333,37 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
           const delta = streamEvent.delta;
           if (delta?.type === 'text_delta' && delta.text) {
             this.outputBuffer += delta.text;
+            
+            // Emit content delta
             this.ctx.emitEvent({
               type: 'content.delta',
               threadId: this.state.activeThreadId!,
               turnId,
               payload: {
-                streamKind: delta.type.includes('thinking') ? 'reasoning' : 'assistant_text',
+                streamKind: 'assistant_text',
                 delta: delta.text,
+              },
+            });
+          } else if (delta?.type === 'thinking_delta' && delta.thinking) {
+            // Emit thinking activity
+            this.ctx.emitEvent({
+              type: 'activity',
+              threadId: this.state.activeThreadId!,
+              turnId,
+              payload: {
+                activityType: 'thinking',
+                label: 'Thinking...',
+                detail: delta.thinking.slice(0, 100),
+              },
+            });
+            
+            this.ctx.emitEvent({
+              type: 'content.delta',
+              threadId: this.state.activeThreadId!,
+              turnId,
+              payload: {
+                streamKind: 'reasoning',
+                delta: delta.thinking,
               },
             });
           }
@@ -347,19 +371,48 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
           // Tool use started
           const block = streamEvent.content_block;
           if (block?.type === 'tool_use' || block?.type === 'server_tool_use') {
+            const toolType = this.classifyTool(block.name);
+            const detail = this.summarizeToolInput(block.name, block.input);
+            
+            this.ctx.emitEvent({
+              type: 'activity',
+              threadId: this.state.activeThreadId!,
+              turnId,
+              payload: {
+                activityType: toolType === 'file_read' ? 'file_read' : 
+                              toolType === 'file_change' ? 'file_write' :
+                              toolType === 'command_execution' ? 'command' : 'tool_started',
+                label: this.toolLabel(block.name),
+                detail,
+                status: 'running',
+              },
+            });
+            
             this.ctx.emitEvent({
               type: 'item.started',
               threadId: this.state.activeThreadId!,
               turnId,
               payload: {
                 itemId: block.id,
-                itemType: this.classifyTool(block.name),
+                itemType: toolType,
                 title: block.name,
+                detail,
               },
             });
           }
         } else if (streamEvent?.type === 'content_block_stop') {
           // Tool use completed
+          this.ctx.emitEvent({
+            type: 'activity',
+            threadId: this.state.activeThreadId!,
+            turnId,
+            payload: {
+              activityType: 'tool_completed',
+              label: 'Tool completed',
+              status: 'completed',
+            },
+          });
+          
           this.ctx.emitEvent({
             type: 'item.completed',
             threadId: this.state.activeThreadId!,
@@ -376,11 +429,29 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       case 'result': {
         // Query result with usage info
         const result = event as any;
-        if (result.usage) {
-          this.ctx.log.info(`Usage: input=${result.usage.input_tokens}, output=${result.usage.output_tokens}`);
-        }
-        if (typeof result.total_cost_usd === 'number') {
-          this.ctx.log.info(`Cost: $${result.total_cost_usd.toFixed(4)}`);
+        
+        // Emit usage/cost as activity
+        if (result.usage || typeof result.total_cost_usd === 'number') {
+          const parts = [];
+          if (result.usage) {
+            parts.push(`${result.usage.input_tokens} in / ${result.usage.output_tokens} out`);
+          }
+          if (typeof result.total_cost_usd === 'number') {
+            parts.push(`$${result.total_cost_usd.toFixed(4)}`);
+          }
+          
+          this.ctx.emitEvent({
+            type: 'activity',
+            threadId: this.state.activeThreadId!,
+            turnId,
+            payload: {
+              activityType: 'info',
+              label: 'Completed',
+              detail: parts.join(' • '),
+            },
+          });
+          
+          this.ctx.log.info(`Usage: ${parts.join(' • ')}`);
         }
         break;
       }
@@ -389,6 +460,15 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
         // System messages (status updates, etc)
         const sysEvent = event as any;
         if (sysEvent.subtype === 'status') {
+          this.ctx.emitEvent({
+            type: 'activity',
+            threadId: this.state.activeThreadId!,
+            turnId,
+            payload: {
+              activityType: 'info',
+              label: `Status: ${sysEvent.status}`,
+            },
+          });
           this.ctx.log.info(`Claude Code status: ${sysEvent.status}`);
         }
         break;
@@ -397,6 +477,17 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       case 'tool_progress': {
         // Tool execution progress
         const toolEvent = event as any;
+        this.ctx.emitEvent({
+          type: 'activity',
+          threadId: this.state.activeThreadId!,
+          turnId,
+          payload: {
+            activityType: 'tool_started',
+            label: toolEvent.tool_name,
+            detail: `${toolEvent.elapsed_time_seconds}s elapsed`,
+            status: 'running',
+          },
+        });
         this.ctx.log.info(`Tool progress: ${toolEvent.tool_name} (${toolEvent.elapsed_time_seconds}s)`);
         break;
       }
@@ -406,6 +497,36 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
         this.ctx.log.info(`SDK event: ${event.type}`);
       }
     }
+  }
+  
+  private toolLabel(toolName: string): string {
+    const name = toolName.toLowerCase();
+    if (name.includes('read')) return 'Reading file';
+    if (name.includes('edit') || name.includes('write')) return 'Editing file';
+    if (name.includes('bash') || name.includes('command')) return 'Running command';
+    if (name.includes('glob') || name.includes('find')) return 'Searching files';
+    if (name.includes('grep')) return 'Searching content';
+    return toolName;
+  }
+  
+  private summarizeToolInput(toolName: string, input: any): string {
+    if (!input || typeof input !== 'object') return '';
+    
+    // File operations
+    if (input.path) return input.path;
+    if (input.file_path) return input.file_path;
+    
+    // Commands
+    if (input.command) {
+      const cmd = String(input.command);
+      return cmd.length > 60 ? cmd.slice(0, 57) + '...' : cmd;
+    }
+    
+    // Search patterns
+    if (input.pattern) return input.pattern;
+    if (input.query) return input.query;
+    
+    return '';
   }
 
   private classifyTool(toolName: string): string {

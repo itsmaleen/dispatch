@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Loader2, CheckCircle, XCircle, Clock, Zap } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { ArrowLeft, Loader2, CheckCircle, XCircle, Clock, Zap, Activity } from 'lucide-react';
 import { api, useAppStore } from '../../stores/app';
+import { ActivityLog, type ActivityEntry } from './ActivityLog';
 
 interface ExecutionViewProps {
   taskId: string;
@@ -11,6 +12,8 @@ interface ExecutionViewProps {
   onBack: () => void;
   onComplete: () => void;
 }
+
+const WS_URL = 'ws://localhost:3333';
 
 export function ExecutionView({ taskId, initialStatus, initialResult, initialAgent, onBack, onComplete }: ExecutionViewProps) {
   const { updateTask } = useAppStore();
@@ -28,12 +31,97 @@ export function ExecutionView({ taskId, initialStatus, initialResult, initialAge
     }
     return [];
   });
+  const [activities, setActivities] = useState<ActivityEntry[]>([]);
   const [result, setResult] = useState<string | null>(() => initialResult ?? null);
   const [error, setError] = useState<string | null>(null);
   const [startTime] = useState(Date.now());
   const [elapsed, setElapsed] = useState(0);
   const outputRef = useRef<HTMLDivElement>(null);
+  const activityRef = useRef<HTMLDivElement>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   const executedTaskIdRef = useRef<string | null>(null);
+
+  // Handle incoming WebSocket events
+  const handleWsEvent = useCallback((data: any) => {
+    if (data.type !== 'event') return;
+    
+    const event = data.event;
+    if (!event) return;
+    
+    // Handle activity events
+    if (event.type === 'activity' && event.payload) {
+      const newActivity: ActivityEntry = {
+        id: crypto.randomUUID(),
+        createdAt: new Date().toISOString(),
+        activityType: event.payload.activityType,
+        label: event.payload.label,
+        detail: event.payload.detail,
+        status: event.payload.status,
+      };
+      setActivities(prev => [...prev, newActivity]);
+    }
+    
+    // Handle content deltas (for output)
+    if (event.type === 'content.delta' && event.payload?.delta) {
+      // Don't add to output - we get full result at the end
+      // But could show streaming content here if wanted
+    }
+    
+    // Handle item events (tool starts/stops)
+    if (event.type === 'item.started' && event.payload) {
+      const newActivity: ActivityEntry = {
+        id: crypto.randomUUID(),
+        createdAt: new Date().toISOString(),
+        activityType: event.payload.itemType === 'file_read' ? 'file_read' :
+                     event.payload.itemType === 'file_change' ? 'file_write' :
+                     event.payload.itemType === 'command_execution' ? 'command' : 'tool_started',
+        label: event.payload.title || 'Tool',
+        detail: event.payload.detail,
+        status: 'running',
+      };
+      setActivities(prev => [...prev, newActivity]);
+    }
+    
+    if (event.type === 'item.completed') {
+      // Update the last running activity to completed
+      setActivities(prev => {
+        const updated = [...prev];
+        for (let i = updated.length - 1; i >= 0; i--) {
+          if (updated[i].status === 'running') {
+            updated[i] = { ...updated[i], status: 'completed', activityType: 'tool_completed' };
+            break;
+          }
+        }
+        return updated;
+      });
+    }
+  }, []);
+
+  // Set up WebSocket connection
+  useEffect(() => {
+    if (isAlreadyDone) return;
+    
+    const ws = new WebSocket(WS_URL);
+    wsRef.current = ws;
+    
+    ws.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        handleWsEvent(data);
+      } catch {
+        // Ignore parse errors
+      }
+    };
+    
+    ws.onerror = () => {
+      console.warn('WebSocket error - activities may not stream');
+    };
+    
+    return () => {
+      ws.close();
+      wsRef.current = null;
+    };
+  }, [isAlreadyDone, handleWsEvent]);
 
   // Update elapsed time
   useEffect(() => {
@@ -51,7 +139,7 @@ export function ExecutionView({ taskId, initialStatus, initialResult, initialAge
       if (initialResult != null) setResult(initialResult);
       return;
     }
-    // Prevent double execution (e.g. React Strict Mode or duplicate effect run)
+    // Prevent double execution
     if (executedTaskIdRef.current === taskId) return;
     executedTaskIdRef.current = taskId;
 
@@ -59,14 +147,26 @@ export function ExecutionView({ taskId, initialStatus, initialResult, initialAge
       try {
         const agentLabel = agent === 'claude-code' ? 'Claude Code' : agent || 'agent';
         setOutput(prev => [...prev, `> Starting execution with ${agentLabel}...`]);
+        setActivities([{
+          id: crypto.randomUUID(),
+          createdAt: new Date().toISOString(),
+          activityType: 'info',
+          label: 'Starting execution',
+          detail: agentLabel,
+        }]);
         
-        // TODO: Use WebSocket for streaming
-        // For now, just poll or wait for result
         const { result } = await api.executeTask(taskId, agent);
         
         setOutput(prev => [...prev, '', '--- Output ---', result]);
         setResult(result);
         setStatus('completed');
+        
+        setActivities(prev => [...prev, {
+          id: crypto.randomUUID(),
+          createdAt: new Date().toISOString(),
+          activityType: 'info',
+          label: 'Execution completed',
+        }]);
         
         updateTask(taskId, {
           status: 'completed',
@@ -78,19 +178,33 @@ export function ExecutionView({ taskId, initialStatus, initialResult, initialAge
         setError(errMsg);
         setStatus('failed');
         
+        setActivities(prev => [...prev, {
+          id: crypto.randomUUID(),
+          createdAt: new Date().toISOString(),
+          activityType: 'error',
+          label: 'Execution failed',
+          detail: errMsg,
+        }]);
+        
         updateTask(taskId, { status: 'failed' });
       }
     };
 
     execute();
-  }, [taskId, updateTask, isAlreadyDone, initialStatus, initialResult]);
+  }, [taskId, updateTask, isAlreadyDone, initialStatus, initialResult, agent]);
 
-  // Auto-scroll output
+  // Auto-scroll output and activity
   useEffect(() => {
     if (outputRef.current) {
       outputRef.current.scrollTop = outputRef.current.scrollHeight;
     }
   }, [output]);
+  
+  useEffect(() => {
+    if (activityRef.current) {
+      activityRef.current.scrollTop = activityRef.current.scrollHeight;
+    }
+  }, [activities]);
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -131,6 +245,11 @@ export function ExecutionView({ taskId, initialStatus, initialResult, initialAge
                 </>
               )}
             </h1>
+            {agent && (
+              <p className="text-sm text-zinc-500">
+                Agent: {agent === 'claude-code' ? 'Claude Code' : agent}
+              </p>
+            )}
           </div>
         </div>
 
@@ -147,23 +266,46 @@ export function ExecutionView({ taskId, initialStatus, initialResult, initialAge
         </div>
       </div>
 
-      {/* Output terminal */}
-      <div className="flex-1 p-4 overflow-hidden">
-        <div
-          ref={outputRef}
-          className="h-full bg-zinc-900 rounded-lg p-4 font-mono text-sm overflow-auto"
-        >
-          {output.map((line, i) => (
-            <div key={i} className="text-zinc-300 whitespace-pre-wrap">
-              {line || '\u00A0'}
+      {/* Main content - split view */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Activity panel */}
+        <div className="w-80 border-r border-zinc-800 flex flex-col">
+          <div className="p-3 border-b border-zinc-800 flex items-center gap-2">
+            <Activity className="w-4 h-4 text-zinc-400" />
+            <span className="text-sm font-medium text-zinc-300">Activity</span>
+            <span className="text-xs text-zinc-600">({activities.length})</span>
+          </div>
+          <div 
+            ref={activityRef}
+            className="flex-1 p-3 overflow-y-auto"
+          >
+            <ActivityLog activities={activities} maxVisible={50} />
+          </div>
+        </div>
+        
+        {/* Output panel */}
+        <div className="flex-1 flex flex-col">
+          <div className="p-3 border-b border-zinc-800">
+            <span className="text-sm font-medium text-zinc-300">Output</span>
+          </div>
+          <div className="flex-1 p-4 overflow-hidden">
+            <div
+              ref={outputRef}
+              className="h-full bg-zinc-900 rounded-lg p-4 font-mono text-sm overflow-auto"
+            >
+              {output.map((line, i) => (
+                <div key={i} className="text-zinc-300 whitespace-pre-wrap">
+                  {line || '\u00A0'}
+                </div>
+              ))}
+              {status === 'executing' && (
+                <div className="flex items-center gap-2 text-indigo-400 mt-2">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <span>Working...</span>
+                </div>
+              )}
             </div>
-          ))}
-          {status === 'executing' && (
-            <div className="flex items-center gap-2 text-indigo-400 mt-2">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              <span>Working...</span>
-            </div>
-          )}
+          </div>
         </div>
       </div>
 
@@ -172,7 +314,7 @@ export function ExecutionView({ taskId, initialStatus, initialResult, initialAge
         <div className="text-sm text-zinc-500">
           {status === 'completed' && 'Task completed successfully'}
           {status === 'failed' && error}
-          {status === 'executing' && 'Agent is working on your task...'}
+          {status === 'executing' && `${activities.length} activities • Agent is working...`}
         </div>
         
         <div className="flex gap-3">
