@@ -21,7 +21,7 @@ export function App() {
   useEffect(() => {
     const fetchAgents = async () => {
       try {
-        const res = await fetch('http://localhost:3333/agents');
+        const res = await fetch(`http://${ACC_SERVER_URL}/agents`);
         const data = await res.json();
         if (data.agents) {
           setAgents(
@@ -39,7 +39,7 @@ export function App() {
     };
 
     fetchAgents();
-    const interval = setInterval(fetchAgents, 5000);
+    const interval = setInterval(fetchAgents, 3000);
     return () => clearInterval(interval);
   }, [setAgents]);
 

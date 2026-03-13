@@ -34,13 +34,33 @@ export function AgentsPanel({ isOpen, onClose, serverUrl }: AgentsPanelProps) {
   const [copied, setCopied] = useState<string | null>(null);
   const [showAddOpenClaw, setShowAddOpenClaw] = useState(false);
 
-  // Check Claude Code availability
+  const { setAgents } = useAppStore();
+
+  // Fetch agents and check Claude Code when panel opens
   useEffect(() => {
-    const checkClaude = async () => {
+    const fetchData = async () => {
+      // Fetch agents
+      try {
+        const agentsRes = await fetch(`http://${serverUrl}/agents`);
+        const agentsData = await agentsRes.json();
+        if (agentsData.agents) {
+          setAgents(
+            agentsData.agents.map((a: any) => ({
+              name: a.name,
+              capabilities: a.capabilities || [],
+              connectedAt: a.connectedAt,
+              status: 'idle' as const,
+            }))
+          );
+        }
+      } catch (err) {
+        console.error('Failed to fetch agents:', err);
+      }
+
+      // Check Claude Code
       setClaudeStatus(s => ({ ...s, checking: true }));
       try {
-        // Try to check if claude CLI exists
-        const res = await fetch('http://localhost:3333/adapters');
+        const res = await fetch(`http://${serverUrl}/adapters`);
         const data = await res.json();
         const claudeAdapter = data.adapters?.find((a: any) => a.kind === 'claude-code');
         setClaudeStatus({
@@ -54,9 +74,12 @@ export function AgentsPanel({ isOpen, onClose, serverUrl }: AgentsPanelProps) {
     };
     
     if (isOpen) {
-      checkClaude();
+      fetchData();
+      // Refresh every 3 seconds while open
+      const interval = setInterval(fetchData, 3000);
+      return () => clearInterval(interval);
     }
-  }, [isOpen]);
+  }, [isOpen, serverUrl, setAgents]);
 
   const copyToClipboard = async (text: string, id: string) => {
     await navigator.clipboard.writeText(text);
