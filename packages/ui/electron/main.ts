@@ -222,18 +222,21 @@ async function startServer(): Promise<boolean> {
       stdio: ["ignore", "pipe", "pipe"],
     });
   } else {
-    // Development: use tsx to run TypeScript with Node.js
-    // (bun doesn't support better-sqlite3 native module)
-    // Find tsx binary directly in node_modules to avoid PATH issues
-    const monorepoRoot = path.resolve(__dirname, "../../..");
-    const tsxBin = path.join(monorepoRoot, "node_modules", ".bin", "tsx");
+    // Development: use bunx tsx to run TypeScript with Node.js runtime
+    // bunx ensures tsx is found and runs it with Node.js (not Bun)
+    // This works because:
+    // 1. bunx is available (we're in a bun-managed project)
+    // 2. tsx uses Node.js internally, which supports better-sqlite3
+    const bunxPath = path.join(os.homedir(), ".bun", "bin", "bunx");
+    const bunxCmd = fs.existsSync(bunxPath) ? bunxPath : "bunx";
     
-    log(`Using tsx at: ${tsxBin}`);
+    log(`Using bunx tsx to run server`);
     
-    child = spawn(tsxBin, [serverEntry], {
+    child = spawn(bunxCmd, ["tsx", serverEntry], {
       cwd,
       env,
       stdio: ["ignore", "pipe", "pipe"],
+      shell: true, // Use shell to ensure PATH resolution works
     });
   }
 
