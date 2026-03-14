@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "840bd7eea5d9",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "packages/server/src/server.ts",
+    "packages/ui/electron/main.ts",
+    "packages/ui/src/App.tsx",
+    "packages/ui/src/components/home/HomePage.tsx",
+    "packages/ui/src/stores/app.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/84/0bd7eea5d9/0/metadata.json",
+      "transcript": "/84/0bd7eea5d9/0/full.jsonl",
+      "content_hash": "/84/0bd7eea5d9/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
