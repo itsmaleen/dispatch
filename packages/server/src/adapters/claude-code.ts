@@ -30,8 +30,6 @@ interface ClaudeCodeConfig extends AdapterConfig {
 
 /** Task-specific options for optimization */
 export interface TaskOptions {
-  /** Task type - affects default optimization settings */
-  taskType?: 'planning' | 'execution' | 'research';
   /** Effort level: 'low' (fastest), 'medium', 'high' (default), 'max' */
   effort?: 'low' | 'medium' | 'high' | 'max';
   /** Thinking mode */
@@ -41,25 +39,6 @@ export interface TaskOptions {
   /** Override model for this task */
   model?: string;
 }
-
-/** Default options per task type */
-const TASK_DEFAULTS: Record<string, Partial<TaskOptions>> = {
-  planning: {
-    effort: 'low',
-    thinking: { type: 'disabled' },
-    maxTurns: 1,
-  },
-  execution: {
-    effort: 'high',
-    thinking: { type: 'adaptive' },
-    // No maxTurns limit - let it work
-  },
-  research: {
-    effort: 'medium',
-    thinking: { type: 'adaptive' },
-    maxTurns: 5,
-  },
-};
 
 interface QueuedMessage {
   message: string;
@@ -190,13 +169,8 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       message = `Context:\n${options.context}\n\nTask:\n${message}`;
     }
 
-    // Merge task options with defaults
-    const taskType = options.taskOptions?.taskType ?? 'execution';
-    const defaults = TASK_DEFAULTS[taskType] ?? {};
-    const taskOptions: TaskOptions = {
-      ...defaults,
-      ...options.taskOptions,
-    };
+    // Task options (classification is now handled by separate classifier service)
+    const taskOptions: TaskOptions = options.taskOptions ?? {};
 
     // Create a promise that will resolve when this turn completes
     const turnPromise = new Promise<string>((resolve, reject) => {
@@ -262,7 +236,7 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
 
     try {
       const taskOpts = queuedMessage.taskOptions ?? {};
-      this.ctx.log.info(`Starting Claude Code query (${queuedMessage.message.length} chars, type=${taskOpts.taskType ?? 'execution'}, effort=${taskOpts.effort ?? 'default'})`);
+      this.ctx.log.info(`Starting Claude Code query (${queuedMessage.message.length} chars, effort=${taskOpts.effort ?? 'default'}, model=${taskOpts.model ?? 'default'})`);
 
       // Build SDK options with task-specific optimizations
       // cwd priority: message option > config > process.cwd()

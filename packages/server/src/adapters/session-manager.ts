@@ -13,7 +13,7 @@ import {
   type Message,
   type SqliteThreadStore,
 } from '../persistence/sqlite-store';
-import { getTaskClassifier, type ClassificationResult } from '../services/task-classifier';
+import { getExtractor } from '../extractor';
 import { getTaskStore, type Task } from '../persistence/task-store';
 
 /** Active session bound to a thread */
@@ -358,12 +358,12 @@ export class SessionManager extends EventEmitter {
     return result;
   }
 
-  /** Classify agent output and store extracted tasks */
+  /** Extract tasks from agent output using persistent Claude Code subprocess */
   private async classifyAndStoreTasks(
     output: string,
     source: { threadId: string; turnId: string; agentId: string; agentName: string }
   ): Promise<void> {
-    const classifier = getTaskClassifier();
+    const extractor = getExtractor();
     const taskStore = getTaskStore();
 
     // First, complete any "doing" tasks from this agent (turn ended)
@@ -372,59 +372,33 @@ export class SessionManager extends EventEmitter {
       console.log(`[SessionManager] Auto-completed ${completed} active tasks`);
     }
 
-    // Classify the output
-    const result = await classifier.classify(output);
+    // Extract tasks using persistent Claude Code subprocess
+    const result = await extractor.extract(output);
     
-    const totalTasks = 
-      result.doing.length + 
-      result.planned.length + 
-      result.suggested.length + 
-      result.completed.length;
-
-    if (totalTasks === 0) {
+    if (result.tasks.length === 0) {
       console.log('[SessionManager] No tasks extracted from output');
       return;
     }
 
-    console.log(`[SessionManager] Extracted ${totalTasks} tasks:`, {
-      doing: result.doing.length,
-      planned: result.planned.length,
-      suggested: result.suggested.length,
-      completed: result.completed.length,
-    });
+    // Count by status
+    const counts = { doing: 0, planned: 0, suggested: 0, completed: 0 };
+    for (const task of result.tasks) {
+      counts[task.status]++;
+    }
+
+    console.log(`[SessionManager] Extracted ${result.tasks.length} tasks:`, counts);
 
     // Store tasks
-    for (const task of result.doing) {
-      taskStore.createTask({
-        text: task.text,
-        category: 'doing',
-        confidence: task.confidence,
-        ...source,
-      });
-    }
+    for (const task of result.tasks) {
+      // Map status to category (status uses 'planned' but store uses 'planned')
+      const category = task.status === 'doing' ? 'doing'
+        : task.status === 'planned' ? 'planned'
+        : task.status === 'completed' ? 'completed'
+        : 'suggested';
 
-    for (const task of result.planned) {
       taskStore.createTask({
         text: task.text,
-        category: 'planned',
-        confidence: task.confidence,
-        ...source,
-      });
-    }
-
-    for (const task of result.suggested) {
-      taskStore.createTask({
-        text: task.text,
-        category: 'suggested',
-        confidence: task.confidence,
-        ...source,
-      });
-    }
-
-    for (const task of result.completed) {
-      taskStore.createTask({
-        text: task.text,
-        category: 'completed',
+        category,
         confidence: task.confidence,
         ...source,
       });

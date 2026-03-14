@@ -17,6 +17,7 @@ import { createClaudeCodeAdapter } from './adapters/claude-code';
 import { createOpenClawAdapter } from './adapters/openclaw';
 import { getSessionManager, type Thread, type Session } from './adapters/session-manager';
 import { getTaskStore, type Task as ExtractedTask } from './persistence/task-store';
+import { getExtractor, type ExtractionResult } from './extractor';
 
 interface ManagedAdapter {
   implementation: AdapterImplementation;
@@ -201,7 +202,7 @@ export class CommandCenterServer {
         const result = await managed.implementation.send({
           message: 'Run `pwd` and report the current working directory. Just show the path, nothing else.',
           cwd,
-          taskOptions: { taskType: 'execution', effort: 'low', maxTurns: 1 },
+          taskOptions: { effort: 'low', maxTurns: 1 },
         });
         return c.json({ ok: true, ...result, requestedCwd: cwd });
       } catch (error) {
@@ -261,6 +262,39 @@ export class CommandCenterServer {
       await managed.implementation.destroy();
       this.adapters.delete(id);
       return c.json({ ok: true });
+    });
+
+    // ============ Task Extraction ============
+    // Uses @anthropic-ai/claude-agent-sdk for task extraction from terminal output
+
+    // Extract tasks from terminal output
+    this.app.post('/extract', async (c) => {
+      const { output } = await c.req.json<{ output: string }>();
+      
+      if (!output) {
+        return c.json({ ok: false, error: 'output is required' }, 400);
+      }
+
+      try {
+        const extractor = getExtractor();
+        const result = await extractor.extract(output);
+        return c.json({ ok: true, ...result });
+      } catch (error) {
+        return c.json({ 
+          ok: false, 
+          error: error instanceof Error ? error.message : 'Extraction failed' 
+        }, 500);
+      }
+    });
+
+    // Get extractor status
+    this.app.get('/extract/status', (c) => {
+      const extractor = getExtractor();
+      return c.json({ 
+        ok: true, 
+        ready: extractor.ready,
+        busy: extractor.busy,
+      });
     });
 
     // ============ Agent Channel Routes ============
@@ -649,7 +683,6 @@ Format your response as plain text only:
           const { turnId } = await claudeAdapter!.implementation.send({ 
             message: planPrompt,
             taskOptions: {
-              taskType: 'planning',
               effort: 'low',
               thinking: { type: 'disabled' },
               maxTurns: 1,
@@ -721,7 +754,6 @@ Format your response as plain text only:
           const { turnId } = await claudeAdapter.implementation.send({ 
             message: executePrompt,
             taskOptions: {
-              taskType: 'execution',
               effort: 'high',
               thinking: { type: 'adaptive' },
               // No maxTurns limit for execution - let it work through the task
