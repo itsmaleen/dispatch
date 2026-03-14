@@ -147,6 +147,36 @@ export class TaskStore {
     return row ? this.rowToTask(row) : null;
   }
 
+  /**
+   * Find an existing task for the same thread/agent and text so we can update its status
+   * (e.g. mark as doing or completed instead of creating a duplicate).
+   * Matching is by exact text hash. "Fix X" vs "Fixed X" may not match unless normalization is added later.
+   */
+  findExistingForStatusUpdate(
+    threadId: string,
+    agentId: string,
+    text: string,
+    forStatus: 'doing' | 'completed'
+  ): Task | null {
+    const hash = this.hashText(text);
+    const statusCondition =
+      forStatus === 'completed'
+        ? "AND status IN ('pending', 'doing')"
+        : "AND status = 'pending'";
+    const stmt = this.db.prepare(`
+      SELECT * FROM tasks
+      WHERE text_hash = ?
+        AND thread_id = ?
+        AND agent_id = ?
+        AND created_at > datetime('now', '-1 day')
+        ${statusCondition}
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `);
+    const row = stmt.get(hash, threadId, agentId) as TaskRow | undefined;
+    return row ? this.rowToTask(row) : null;
+  }
+
   /** Create a task (with deduplication) */
   createTask(input: CreateTaskInput): Task | null {
     // Check for duplicate

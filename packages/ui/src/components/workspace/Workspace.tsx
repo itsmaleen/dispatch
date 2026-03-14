@@ -705,6 +705,24 @@ export function Workspace() {
     const event = data.event;
     if (!event) return;
 
+    // Server-authoritative task list (extractor + task store)
+    if (event.type === 'tasks.updated' && Array.isArray(event.payload)) {
+      const tasks = event.payload as Array<{ id: string; text: string; status: string; threadId?: string; agentName?: string }>;
+      const steps: PlanStep[] = tasks.map((t) => ({
+        id: t.id,
+        text: t.text,
+        agent: t.agentName ?? null,
+        status: t.status === 'doing' ? 'running' : t.status === 'completed' ? 'completed' : 'pending',
+        source: 'extracted',
+        threadId: t.threadId,
+      }));
+      setPlanSteps(prev => {
+        const manual = prev.filter(s => s.source === 'manual' || s.source === 'plan');
+        return [...steps, ...manual];
+      });
+      return;
+    }
+
     // Support both adapterId (legacy) and threadId (Phase 2/3)
     const adapterId = event.adapterId;
     const threadId = event.threadId;

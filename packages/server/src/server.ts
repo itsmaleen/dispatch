@@ -1237,6 +1237,17 @@ Format your response as plain text only:
       });
     });
 
+    sessionManager.on('tasks.updated', (tasks: ExtractedTask[]) => {
+      this.broadcastRaw({
+        type: 'event',
+        event: {
+          type: 'tasks.updated',
+          payload: tasks,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    });
+
     return new Promise<void>((resolve, reject) => {
       // Create HTTP server with Hono handler
       this.httpServer = createServer(async (req, res) => {

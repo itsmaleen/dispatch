@@ -388,20 +388,42 @@ export class SessionManager extends EventEmitter {
 
     console.log(`[SessionManager] Extracted ${result.tasks.length} tasks:`, counts);
 
-    // Store tasks
+    // Add or update tasks by status
     for (const task of result.tasks) {
-      // Map status to category (status uses 'planned' but store uses 'planned')
-      const category = task.status === 'doing' ? 'doing'
-        : task.status === 'planned' ? 'planned'
-        : task.status === 'completed' ? 'completed'
-        : 'suggested';
-
-      taskStore.createTask({
+      const base = {
         text: task.text,
-        category,
         confidence: task.confidence,
         ...source,
-      });
+      };
+
+      if (task.status === 'completed') {
+        const existing = taskStore.findExistingForStatusUpdate(
+          source.threadId,
+          source.agentId,
+          task.text,
+          'completed'
+        );
+        if (existing) {
+          taskStore.completeTask(existing.id);
+        } else {
+          taskStore.createTask({ ...base, category: 'completed' });
+        }
+      } else if (task.status === 'doing') {
+        const existing = taskStore.findExistingForStatusUpdate(
+          source.threadId,
+          source.agentId,
+          task.text,
+          'doing'
+        );
+        if (existing) {
+          taskStore.startTask(existing.id);
+        } else {
+          taskStore.createTask({ ...base, category: 'doing' });
+        }
+      } else {
+        const category = task.status === 'planned' ? 'planned' : 'suggested';
+        taskStore.createTask({ ...base, category });
+      }
     }
 
     // Emit event for UI
