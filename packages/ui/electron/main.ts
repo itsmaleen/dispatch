@@ -150,9 +150,14 @@ function resolveServerCwd(): string {
  * Follows T3 Code pattern of passing config via env.
  */
 function buildServerEnv(): NodeJS.ProcessEnv {
+  // Get monorepo root for node_modules/.bin
+  const monorepoRoot = path.resolve(__dirname, "../../..");
+  const nodeModulesBin = path.join(monorepoRoot, "node_modules", ".bin");
+  
   // Augment PATH for GUI launches (Spotlight doesn't inherit shell PATH)
   const extraPaths = [
-    path.join(os.homedir(), ".local/bin"),      // claude CLI default location
+    nodeModulesBin,                              // monorepo binaries (tsx, etc.)
+    path.join(os.homedir(), ".local/bin"),       // claude CLI default location
     path.join(os.homedir(), ".cargo/bin"),       // Rust tools
     "/usr/local/bin",
     "/opt/homebrew/bin",
@@ -217,9 +222,10 @@ async function startServer(): Promise<boolean> {
       stdio: ["ignore", "pipe", "pipe"],
     });
   } else {
-    // Development: use bun to run TypeScript directly
-    const bunPath = process.platform === "win32" ? "bun.cmd" : "bun";
-    child = spawn(bunPath, ["run", serverEntry], {
+    // Development: use tsx to run TypeScript with Node.js
+    // (bun doesn't support better-sqlite3 native module)
+    const tsxPath = process.platform === "win32" ? "tsx.cmd" : "tsx";
+    child = spawn(tsxPath, [serverEntry], {
       cwd,
       env,
       stdio: ["ignore", "pipe", "pipe"],
