@@ -52,10 +52,13 @@ export class CommandCenterServer {
   private clients = new Set<WebSocket>();
   private connectedAgents = new Map<string, ConnectedAgent>();
   private tasks = new Map<string, Task>();
-  private port: number;
+  private _port: number;
+  
+  /** Actual port the server is listening on (may differ from requested if port was in use) */
+  get port(): number { return this._port; }
 
   constructor(port = 3333) {
-    this.port = port;
+    this._port = port;
     this.app = new Hono();
     this.setupRoutes();
   }
@@ -65,7 +68,7 @@ export class CommandCenterServer {
     this.app.use('*', cors({ origin: '*', allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'], allowHeaders: ['Content-Type', 'Authorization'] }));
 
     // Health check
-    this.app.get('/health', (c) => c.json({ ok: true, port: this.port }));
+    this.app.get('/health', (c) => c.json({ ok: true, port: this._port }));
 
     // Check Claude Code CLI availability
     this.app.get('/check/claude-code', async (c) => {
@@ -1251,7 +1254,7 @@ Format your response as plain text only:
     return new Promise<void>((resolve, reject) => {
       // Create HTTP server with Hono handler
       this.httpServer = createServer(async (req, res) => {
-        const url = new URL(req.url ?? '/', `http://localhost:${this.port}`);
+        const url = new URL(req.url ?? '/', `http://localhost:${this._port}`);
         
         // Read body for POST requests
         let body: string | undefined;
@@ -1286,8 +1289,16 @@ Format your response as plain text only:
       // Setup WebSocket server on same http server
       this.wss = new WebSocketServer({ server: this.httpServer });
       
+      // Handle WSS errors (prevents crash on EADDRINUSE during port retry)
+      this.wss.on('error', (err: NodeJS.ErrnoException) => {
+        // EADDRINUSE is handled by the port retry loop - ignore here
+        if (err.code !== 'EADDRINUSE') {
+          console.error('[WSS] Error:', err.message);
+        }
+      });
+      
       this.wss.on('connection', (ws, req) => {
-        const url = new URL(req.url ?? '/', `http://localhost:${this.port}`);
+        const url = new URL(req.url ?? '/', `http://localhost:${this._port}`);
         const isChannel = url.pathname === '/channel';
         
         if (isChannel) {
@@ -1310,7 +1321,7 @@ Format your response as plain text only:
       });
       
       // Try to bind to requested port; on EADDRINUSE try next port (dynamic port)
-      const startPort = this.port;
+      const startPort = this._port;
       const maxAttempts = 100;
       const tryListen = (port: number): Promise<void> =>
         new Promise((resolve, reject) => {
@@ -1321,7 +1332,7 @@ Format your response as plain text only:
           const onListen = () => {
             this.httpServer!.removeListener('error', onError);
             const addr = this.httpServer!.address();
-            this.port = typeof addr === 'object' && addr !== null && 'port' in addr ? addr.port : port;
+            this._port = typeof addr === 'object' && addr !== null && 'port' in addr ? addr.port : port;
             resolve();
           };
           this.httpServer!.once('error', onError);
@@ -1334,7 +1345,7 @@ Format your response as plain text only:
         for (let p = startPort; p < startPort + maxAttempts; p++) {
           try {
             await tryListen(p);
-            console.log(`Command Center server running on http://localhost:${this.port}`);
+            console.log(`Command Center server running on http://localhost:${this._port}`);
             // Optionally write port to file for dev tooling (e.g. ACC_PORT_FILE)
             const portFile = process.env.ACC_PORT_FILE;
             if (portFile) {
@@ -1343,7 +1354,7 @@ Format your response as plain text only:
                 const path = await import('path');
                 const dir = path.dirname(portFile);
                 if (dir !== '.') fs.mkdirSync(dir, { recursive: true });
-                fs.writeFileSync(portFile, String(this.port), 'utf8');
+                fs.writeFileSync(portFile, String(this._port), 'utf8');
               } catch {
                 // Ignore port file write errors
               }

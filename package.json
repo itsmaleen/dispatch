@@ -12,15 +12,20 @@
   ],
   "scripts": {
     "dev": "turbo dev",
+    "dev:clean": "./scripts/clean-dev.sh && turbo dev",
     "build": "turbo build",
     "install:app": "./scripts/build-and-install.sh",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
-    "clean": "turbo clean && rm -rf node_modules"
+    "clean": "turbo clean && rm -rf node_modules",
+    "clean:dev": "./scripts/clean-dev.sh"
   },
   "devDependencies": {
     "turbo": "^2.5.0",
     "typescript": "^5.8.0"
   },
-  "packageManager": "bun@1.2.0"
+  "packageManager": "bun@1.2.0",
+  "dependencies": {
+    "electron": "^41.0.2"
+  }
 }
