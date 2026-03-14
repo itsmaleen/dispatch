@@ -3,11 +3,13 @@
   "checkpoint_id": "d7c439f950c5",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 2,
+  "checkpoints_count": 21,
   "files_touched": [
     "packages/server/src/adapters/session-manager.ts",
     "packages/server/src/server.ts",
-    "packages/ui/src/components/workspace/Workspace.tsx"
+    "packages/ui/src/components/demo/WorkspaceDemo.tsx",
+    "packages/ui/src/components/workspace/Workspace.tsx",
+    "packages/ui/src/index.css"
   ],
   "sessions": [
     {
@@ -15,6 +17,12 @@
       "transcript": "/d7/c439f950c5/0/full.jsonl",
       "content_hash": "/d7/c439f950c5/0/content_hash.txt",
       "prompt": "/d7/c439f950c5/0/prompt.txt"
+    },
+    {
+      "metadata": "/d7/c439f950c5/1/metadata.json",
+      "transcript": "/d7/c439f950c5/1/full.jsonl",
+      "content_hash": "/d7/c439f950c5/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
