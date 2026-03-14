@@ -1,0 +1,46 @@
+#!/bin/bash
+# Build and install Agent Command Center to /Applications
+# Run from project root: ./scripts/build-and-install.sh
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+RELEASE_DIR="$PROJECT_DIR/packages/ui/release"
+APP_NAME="Agent Command Center"
+DMG_NAME="$APP_NAME-0.1.0-arm64.dmg"
+
+echo "🔨 Building Agent Command Center..."
+cd "$PROJECT_DIR"
+bun run build
+
+echo "📦 Installing to /Applications..."
+cd "$RELEASE_DIR"
+
+# Mount DMG
+VOLUME_NAME=$(hdiutil attach "$DMG_NAME" -nobrowse 2>/dev/null | grep "Volumes" | awk -F'\t' '{print $NF}')
+
+if [ -z "$VOLUME_NAME" ]; then
+    echo "❌ Failed to mount DMG"
+    exit 1
+fi
+
+echo "   Mounted: $VOLUME_NAME"
+
+# Remove old app if exists
+if [ -d "/Applications/$APP_NAME.app" ]; then
+    echo "   Removing old version..."
+    rm -rf "/Applications/$APP_NAME.app"
+fi
+
+# Copy new app
+echo "   Copying to /Applications..."
+cp -R "$VOLUME_NAME/$APP_NAME.app" /Applications/
+
+# Unmount
+hdiutil detach "$VOLUME_NAME" -quiet
+
+echo "✅ Installed to /Applications/$APP_NAME.app"
+echo ""
+echo "To run: open '/Applications/$APP_NAME.app'"
+echo "Or use Spotlight: Cmd+Space → 'Agent Command Center'"
