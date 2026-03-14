@@ -1,0 +1,21 @@
+make minor aesthetic change on the widget terminal that as it grows because of text the icon on the left hand side stays vertically centered
+
+---
+
+no this was incorrect, I wanted the change to be in ChatInput as the chat textbox grows because of text
+
+---
+
+perfect can you commit these changes with an accurate commit message following proper standard
+
+---
+
+rework the title/head bar of the electron app. Can't have any content on the top left because the mac minimize, close and expand buttons overlap. So rework the layout of those and we should think about a better name for this for now. Maybe something a bit non obvious but obvious and cool (e.g. nightmarket -> agentic service marketplace)
+
+---
+
+instead of a lobster icon, use something that makes more sense
+
+---
+
+git commit with proper message (following standard)

@@ -1,0 +1,52 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "20b52bbf5626",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 10,
+  "files_touched": [
+    ".gitignore",
+    "README.md",
+    "docs/ACC-CHANNEL-PLUGIN.md",
+    "docs/OPENCLAW-INTEGRATION.md",
+    "docs/TESTING.md",
+    "docs/UI-PLAN.md",
+    "packages/acc-channel/README.md",
+    "packages/acc-channel/index.ts",
+    "packages/acc-channel/openclaw.plugin.json",
+    "packages/acc-channel/package.json",
+    "packages/acc-channel/src/channel.ts",
+    "packages/acc-channel/src/index.ts",
+    "packages/contracts/src/index.ts",
+    "packages/server/package.json",
+    "packages/server/run.ts",
+    "packages/server/src/index.ts",
+    "packages/server/src/run.ts",
+    "packages/ui/electron/main.ts",
+    "packages/ui/electron/preload.ts",
+    "packages/ui/package.json",
+    "packages/ui/scripts/prepare-server-bundle.mjs",
+    "packages/ui/src/App.tsx",
+    "packages/ui/src/components/demo/WorkspaceDemo.tsx",
+    "packages/ui/src/components/home/HomePage.tsx",
+    "packages/ui/src/stores/app.ts",
+    "packages/ui/vite.config.ts",
+    "scripts/build-and-install.sh",
+    "scripts/start-server.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/20/b52bbf5626/0/metadata.json",
+      "transcript": "/20/b52bbf5626/0/full.jsonl",
+      "content_hash": "/20/b52bbf5626/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}

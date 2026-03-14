@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "0774c03cf8c3",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/ui/src/components/demo/WorkspaceDemo.tsx",
+    "packages/ui/src/components/workspace/Workspace.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/07/74c03cf8c3/0/metadata.json",
+      "transcript": "/07/74c03cf8c3/0/full.jsonl",
+      "content_hash": "/07/74c03cf8c3/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
