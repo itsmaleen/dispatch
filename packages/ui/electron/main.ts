@@ -127,14 +127,16 @@ function resolveServerEntry(): string | null {
     return null;
   }
   
-  // Development: TypeScript source
+  // Development: pre-built JavaScript (built by tsup --watch)
+  // This matches the T3 Code pattern - always run compiled JS, never TS directly
   const serverDir = path.resolve(__dirname, "../../server");
-  const srcEntry = path.join(serverDir, "src", "run.ts");
-  if (fs.existsSync(srcEntry)) {
-    return srcEntry;
+  const distEntry = path.join(serverDir, "dist", "run.js");
+  if (fs.existsSync(distEntry)) {
+    return distEntry;
   }
   
-  log("Server entry not found at:", srcEntry);
+  log("Server entry not found at:", distEntry);
+  log("Make sure server is building (turbo should run @acc/server dev)");
   return null;
 }
 
@@ -209,36 +211,16 @@ async function startServer(): Promise<boolean> {
   log(`Server entry: ${serverEntry}`);
   log(`Server cwd: ${cwd}`);
 
-  let child: ChildProcess;
-
-  if (app.isPackaged) {
-    // Packaged: use Electron itself as Node runtime (T3 pattern)
-    child = spawn(process.execPath, [serverEntry], {
-      cwd,
-      env: {
-        ...env,
-        ELECTRON_RUN_AS_NODE: "1",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  } else {
-    // Development: use bunx tsx to run TypeScript with Node.js runtime
-    // bunx ensures tsx is found and runs it with Node.js (not Bun)
-    // This works because:
-    // 1. bunx is available (we're in a bun-managed project)
-    // 2. tsx uses Node.js internally, which supports better-sqlite3
-    const bunxPath = path.join(os.homedir(), ".bun", "bin", "bunx");
-    const bunxCmd = fs.existsSync(bunxPath) ? bunxPath : "bunx";
-    
-    log(`Using bunx tsx to run server`);
-    
-    child = spawn(bunxCmd, ["tsx", serverEntry], {
-      cwd,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: true, // Use shell to ensure PATH resolution works
-    });
-  }
+  // T3 Code pattern: ALWAYS use Electron itself as Node runtime
+  // This works in both dev and production because server is pre-built to JS
+  const child = spawn(process.execPath, [serverEntry], {
+    cwd,
+    env: {
+      ...env,
+      ELECTRON_RUN_AS_NODE: "1",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 
   serverProcess = child;
 

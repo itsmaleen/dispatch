@@ -3,18 +3,21 @@
  * Dev script: build electron main/preload and run Electron with Vite dev server.
  * 
  * T3 Code Pattern:
- * - Electron main process spawns the server as a child process
- * - This script just needs to wait for Vite, then start Electron
- * - Server lifecycle is fully managed by Electron
+ * - Server is pre-built to JS (by turbo running @acc/server dev with tsup --watch)
+ * - Electron main process spawns the built server as a child process
+ * - This script waits for Vite AND server build, then starts Electron
  * 
  * Run from packages/ui (bun run scripts/dev-electron.mjs).
  */
 import { spawn, execSync } from 'child_process';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { existsSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..');
+const monorepoRoot = join(root, '../..');
+const serverDist = join(monorepoRoot, 'packages/server/dist/run.js');
 
 // Find Vite dev server (may be on 5173, 5174, etc if port is busy)
 const findViteServer = async (maxAttempts = 30) => {
@@ -32,6 +35,17 @@ const findViteServer = async (maxAttempts = 30) => {
   return null;
 };
 
+// Wait for server build to complete (tsup creates dist/run.js)
+const waitForServerBuild = async (maxAttempts = 60) => {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (existsSync(serverDist)) {
+      return true;
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return false;
+};
+
 console.log('⏳ Waiting for Vite dev server...');
 const vitePort = await findViteServer();
 if (!vitePort) {
@@ -39,6 +53,14 @@ if (!vitePort) {
   process.exit(1);
 }
 console.log(`✅ Vite dev server ready on port ${vitePort}`);
+
+console.log('⏳ Waiting for server build (packages/server/dist/run.js)...');
+const serverBuilt = await waitForServerBuild();
+if (!serverBuilt) {
+  console.error('❌ Server build not found. Make sure turbo is running @acc/server dev');
+  process.exit(1);
+}
+console.log('✅ Server build ready');
 
 // Build electron main and preload with tsc (clean CJS for Electron)
 console.log('📦 Building Electron main/preload...');

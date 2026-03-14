@@ -11,9 +11,7 @@
     "packages/ui"
   ],
   "scripts": {
-    "dev": "turbo dev --filter=@acc/contracts --filter=@acc/ui",
-    "dev:all": "turbo dev",
-    "dev:server": "turbo dev --filter=@acc/server",
+    "dev": "turbo dev",
     "build": "turbo build",
     "install:app": "./scripts/build-and-install.sh",
     "lint": "turbo lint",
