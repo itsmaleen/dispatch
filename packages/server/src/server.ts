@@ -16,6 +16,7 @@ import { AdapterEventEmitter } from './adapters/types';
 import { createClaudeCodeAdapter } from './adapters/claude-code';
 import { createOpenClawAdapter } from './adapters/openclaw';
 import { getSessionManager, type Thread, type Session } from './adapters/session-manager';
+import { getTaskStore, type Task as ExtractedTask } from './persistence/task-store';
 
 interface ManagedAdapter {
   implementation: AdapterImplementation;
@@ -441,6 +442,100 @@ export class CommandCenterServer {
           error: error instanceof Error ? error.message : 'Fork failed',
         }, 500);
       }
+    });
+
+    // ============ Extracted Tasks API ============
+
+    // List extracted tasks
+    this.app.get('/extracted-tasks', (c) => {
+      const status = c.req.query('status');
+      const agentId = c.req.query('agent');
+      const threadId = c.req.query('thread');
+      const includeCompleted = c.req.query('includeCompleted') === 'true';
+      const limit = parseInt(c.req.query('limit') ?? '50');
+
+      const store = getTaskStore();
+      const tasks = store.listTasks({
+        status: status as ExtractedTask['status'] | undefined,
+        agentId,
+        threadId,
+        limit,
+        includeCompleted,
+      });
+
+      return c.json({ ok: true, tasks });
+    });
+
+    // Get task counts
+    this.app.get('/extracted-tasks/counts', (c) => {
+      const store = getTaskStore();
+      const counts = store.getCounts();
+      return c.json({ ok: true, counts });
+    });
+
+    // Get active tasks (what agents are doing now)
+    this.app.get('/extracted-tasks/active', (c) => {
+      const store = getTaskStore();
+      const tasks = store.getActiveTasks();
+      return c.json({ ok: true, tasks });
+    });
+
+    // Get pending tasks (planned but not started)
+    this.app.get('/extracted-tasks/pending', (c) => {
+      const store = getTaskStore();
+      const tasks = store.getPendingTasks();
+      return c.json({ ok: true, tasks });
+    });
+
+    // Get suggested tasks
+    this.app.get('/extracted-tasks/suggested', (c) => {
+      const store = getTaskStore();
+      const tasks = store.getSuggestedTasks();
+      return c.json({ ok: true, tasks });
+    });
+
+    // Get recently completed
+    this.app.get('/extracted-tasks/completed', (c) => {
+      const limit = parseInt(c.req.query('limit') ?? '10');
+      const store = getTaskStore();
+      const tasks = store.getRecentlyCompleted(limit);
+      return c.json({ ok: true, tasks });
+    });
+
+    // Update task status
+    this.app.patch('/extracted-tasks/:id', async (c) => {
+      const id = c.req.param('id');
+      const { status } = await c.req.json<{ status: ExtractedTask['status'] }>();
+      
+      const store = getTaskStore();
+      store.updateStatus(id, status);
+      
+      const task = store.getTask(id);
+      return c.json({ ok: true, task });
+    });
+
+    // Dismiss a suggested task
+    this.app.post('/extracted-tasks/:id/dismiss', (c) => {
+      const id = c.req.param('id');
+      const store = getTaskStore();
+      store.dismissTask(id);
+      return c.json({ ok: true });
+    });
+
+    // Complete a task
+    this.app.post('/extracted-tasks/:id/complete', (c) => {
+      const id = c.req.param('id');
+      const store = getTaskStore();
+      store.completeTask(id);
+      return c.json({ ok: true });
+    });
+
+    // Start a task (mark as doing)
+    this.app.post('/extracted-tasks/:id/start', (c) => {
+      const id = c.req.param('id');
+      const store = getTaskStore();
+      store.startTask(id);
+      return c.json({ ok: true });
     });
 
     // ============ Task Flow Routes ============

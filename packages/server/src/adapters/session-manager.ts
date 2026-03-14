@@ -13,6 +13,8 @@ import {
   type Message,
   type SqliteThreadStore,
 } from '../persistence/sqlite-store';
+import { getTaskClassifier, type ClassificationResult } from '../services/task-classifier';
+import { getTaskStore, type Task } from '../persistence/task-store';
 
 /** Active session bound to a thread */
 export interface Session {
@@ -250,6 +252,14 @@ export class SessionManager extends EventEmitter {
       
       this.emit('turn.completed', thread.id, turnId, session.outputBuffer, usage);
 
+      // Classify and extract tasks (async, don't block)
+      this.classifyAndStoreTasks(session.outputBuffer, {
+        threadId: thread.id,
+        turnId,
+        agentId: 'claude-code',  // TODO: get from session
+        agentName: 'Claude Code',
+      }).catch(err => console.error('[SessionManager] Task classification failed:', err));
+
     } catch (error) {
       // Handle SDK exit code quirk - if we have output, treat as success
       if (session.outputBuffer.length > 0) {
@@ -269,6 +279,14 @@ export class SessionManager extends EventEmitter {
         session.currentTurnId = undefined;
         
         this.emit('turn.completed', thread.id, turnId, session.outputBuffer, usage);
+
+        // Classify and extract tasks (async, don't block)
+        this.classifyAndStoreTasks(session.outputBuffer, {
+          threadId: thread.id,
+          turnId,
+          agentId: 'claude-code',
+          agentName: 'Claude Code',
+        }).catch(err => console.error('[SessionManager] Task classification failed:', err));
       } else {
         session.status = 'error';
         this.emit('turn.error', thread.id, turnId, error instanceof Error ? error : new Error(String(error)));
@@ -338,6 +356,82 @@ export class SessionManager extends EventEmitter {
     }
 
     return result;
+  }
+
+  /** Classify agent output and store extracted tasks */
+  private async classifyAndStoreTasks(
+    output: string,
+    source: { threadId: string; turnId: string; agentId: string; agentName: string }
+  ): Promise<void> {
+    const classifier = getTaskClassifier();
+    const taskStore = getTaskStore();
+
+    // First, complete any "doing" tasks from this agent (turn ended)
+    const completed = taskStore.completeActiveTasks(source.threadId, source.agentId);
+    if (completed > 0) {
+      console.log(`[SessionManager] Auto-completed ${completed} active tasks`);
+    }
+
+    // Classify the output
+    const result = await classifier.classify(output);
+    
+    const totalTasks = 
+      result.doing.length + 
+      result.planned.length + 
+      result.suggested.length + 
+      result.completed.length;
+
+    if (totalTasks === 0) {
+      console.log('[SessionManager] No tasks extracted from output');
+      return;
+    }
+
+    console.log(`[SessionManager] Extracted ${totalTasks} tasks:`, {
+      doing: result.doing.length,
+      planned: result.planned.length,
+      suggested: result.suggested.length,
+      completed: result.completed.length,
+    });
+
+    // Store tasks
+    for (const task of result.doing) {
+      taskStore.createTask({
+        text: task.text,
+        category: 'doing',
+        confidence: task.confidence,
+        ...source,
+      });
+    }
+
+    for (const task of result.planned) {
+      taskStore.createTask({
+        text: task.text,
+        category: 'planned',
+        confidence: task.confidence,
+        ...source,
+      });
+    }
+
+    for (const task of result.suggested) {
+      taskStore.createTask({
+        text: task.text,
+        category: 'suggested',
+        confidence: task.confidence,
+        ...source,
+      });
+    }
+
+    for (const task of result.completed) {
+      taskStore.createTask({
+        text: task.text,
+        category: 'completed',
+        confidence: task.confidence,
+        ...source,
+      });
+    }
+
+    // Emit event for UI
+    this.emit('tasks.updated', taskStore.listTasks({ limit: 20 }));
   }
 
   /** Close a session */
