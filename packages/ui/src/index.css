@@ -28,6 +28,52 @@
   background: theme('colors.zinc.600');
 }
 
+/* Terminal title bar highlight pulse (when hovering Run → existing terminal) */
+@keyframes terminal-highlight-pulse {
+  0%, 100% {
+    background-color: rgb(124 58 237 / 0.4);
+    border-color: rgb(167 139 250 / 0.6);
+  }
+  50% {
+    background-color: rgb(124 58 237 / 0.65);
+    border-color: rgb(167 139 250 / 0.9);
+  }
+}
+
+/* Same timing for the outer terminal border so title bar and full border pulse together */
+@keyframes terminal-border-pulse {
+  0%, 100% {
+    border-color: rgb(167 139 250 / 0.55);
+  }
+  50% {
+    border-color: rgb(167 139 250 / 0.9);
+  }
+}
+
+.terminal-title-highlight-pulse {
+  animation: terminal-highlight-pulse 2.2s ease-in-out infinite;
+}
+
+.terminal-outer-highlight-pulse {
+  animation: terminal-border-pulse 2.2s ease-in-out infinite;
+}
+
+/* Minimized terminal tab highlight pulse (same timing as terminal) */
+@keyframes terminal-tab-highlight-pulse {
+  0%, 100% {
+    background-color: rgb(124 58 237 / 0.2);
+    box-shadow: 0 0 0 1px rgb(167 139 250 / 0.4);
+  }
+  50% {
+    background-color: rgb(124 58 237 / 0.4);
+    box-shadow: 0 0 0 1px rgb(167 139 250 / 0.75);
+  }
+}
+
+.terminal-tab-highlight-pulse {
+  animation: terminal-tab-highlight-pulse 2.2s ease-in-out infinite;
+}
+
 /* Terminal styling */
 .xterm {
   padding: 8px;

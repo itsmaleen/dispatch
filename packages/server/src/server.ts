@@ -340,6 +340,7 @@ export class CommandCenterServer {
     // Create session for thread (or resume existing)
     this.app.post('/threads/:id/session', async (c) => {
       const id = c.req.param('id');
+      console.log(`[threads/${id}] Session create request`);
       const { cwd, name, worktreePath, resume } = await c.req.json<{
         cwd: string;
         name?: string;
@@ -377,6 +378,12 @@ export class CommandCenterServer {
     // Send message to thread session
     this.app.post('/threads/:id/send', async (c) => {
       const id = c.req.param('id');
+      const manager = getSessionManager();
+      const session = manager.getSession(id);
+      if (!session) {
+        console.log(`[threads/${id}] Send rejected: no active session`);
+        return c.json({ ok: false, error: 'No active session for thread' }, 400);
+      }
       const options = await c.req.json<{
         message: string;
         effort?: 'low' | 'medium' | 'high' | 'max';
@@ -384,15 +391,7 @@ export class CommandCenterServer {
         maxTurns?: number;
         model?: string;
       }>();
-
-      const manager = getSessionManager();
-      const session = manager.getSession(id);
-      
-      if (!session) {
-        return c.json({ ok: false, error: 'No active session for thread' }, 400);
-      }
-
-      console.log(`[threads/${id}] Send:`, { message: options.message.slice(0, 50) });
+      console.log(`[threads/${id}] Send:`, { message: options?.message?.slice(0, 50) ?? '(no message)' });
 
       try {
         const result = await manager.send(id, options);
@@ -1083,7 +1082,7 @@ Format your response as plain text only:
       });
     });
 
-    sessionManager.on('turn.completed', (threadId, turnId, result) => {
+    sessionManager.on('turn.completed', (threadId, turnId, result, usage) => {
       this.broadcastRaw({
         type: 'event',
         event: {
@@ -1091,7 +1090,7 @@ Format your response as plain text only:
           threadId,
           turnId,
           status: 'completed',
-          payload: { result },
+          payload: { result, usage },
           timestamp: new Date().toISOString(),
         },
       });

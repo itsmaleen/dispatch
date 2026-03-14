@@ -1,9 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import {
-  Send,
   Plus,
-  ChevronDown,
   Play,
   Brain,
   Terminal as TerminalIcon,
@@ -12,10 +10,6 @@ import {
   Sparkles,
   ArrowRight,
   X,
-  MessageSquare,
-  LayoutPanelLeft,
-  Bot,
-  User,
   Minus,
   Maximize2,
   RefreshCw,
@@ -23,6 +17,9 @@ import {
   WifiOff,
   FolderOpen,
   Pencil,
+  MoreVertical,
+  ChevronRight,
+  ChevronLeft,
 } from 'lucide-react';
 import { api } from '../../stores/app';
 import { ChatInput, type UploadedFile } from './ChatInput';
@@ -48,8 +45,13 @@ interface Agent {
 interface PlanStep {
   id: string;
   text: string;
-  agent: string;
-  status?: 'pending' | 'running' | 'completed';
+  agent: string | null;
+  status?: 'pending' | 'running' | 'completed' | 'failed';
+  source?: 'plan' | 'extracted' | 'manual';
+  threadId?: string;
+  turnId?: string;
+  costUsd?: number;
+  durationMs?: number;
 }
 
 interface TerminalLine {
@@ -66,24 +68,17 @@ interface TerminalState {
   lines: TerminalLine[];
   isStreaming: boolean;
   currentTask?: string;
+  /** Plan step id when this terminal is executing a step (for status/cost sync) */
+  currentStepId?: string;
   path?: string; // Override workspace path
   // Thread integration (Phase 2/3)
   threadId?: string;
   sessionActive?: boolean;
 }
 
-interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: string;
-  plan?: PlanStep[];
-  isStreaming?: boolean;
-}
-
 interface MinimizedWidget {
   id: string;
-  type: 'terminal' | 'planning' | 'chat';
+  type: 'terminal' | 'tasks';
   title: string;
   icon: string;
   data?: TerminalState;
@@ -105,6 +100,77 @@ function getAgentIcon(agent: { type: string; name: string }): string {
   if (name.includes('vera')) return '✨';
   if (name.includes('echo')) return '📢';
   return '🤖';
+}
+
+/** Heuristic: extract task-like lines from assistant output (numbered list, "Next steps:", etc.) */
+function extractTasksFromText(text: string, maxTasks = 10): string[] {
+  if (!text || typeof text !== 'string') return [];
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const tasks: string[] = [];
+  let inList = false;
+  const numberBullet = /^\d+[.)]\s*(.+)$/;
+  const dashBullet = /^[-*]\s+(.+)$/;
+
+  for (const line of lines) {
+    const numbered = line.match(numberBullet);
+    if (numbered) {
+      inList = true;
+      tasks.push(numbered[1].trim());
+      continue;
+    }
+    const dashed = line.match(dashBullet);
+    if (dashed && inList) {
+      tasks.push(dashed[1].trim());
+      continue;
+    }
+    if (/^(next steps?|to do|i will|we can|tasks?):?\s*$/i.test(line)) {
+      inList = true;
+      continue;
+    }
+    inList = false;
+  }
+
+  const result = tasks.slice(0, maxTasks).filter(t => t.length > 2);
+  // If no list found but we have substantial text, use first line as a single summary task
+  if (result.length === 0 && text.trim().length > 10) {
+    const first = lines[0];
+    if (first && first.length > 5 && first.length < 200) result.push(first);
+  }
+  return result;
+}
+
+/** Renders step text with markdown-like formatting: **bold** and `code` (as badges for paths/handlers) */
+function PlanStepText({ text }: { text: string }) {
+  const parts: React.ReactNode[] = [];
+  const regex = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+  let lastIndex = 0;
+  let match;
+  let key = 0;
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(<span key={`t-${key++}`}>{text.slice(lastIndex, match.index)}</span>);
+    }
+    const segment = match[1];
+    if (segment.startsWith('**') && segment.endsWith('**')) {
+      parts.push(<strong key={`t-${key++}`} className="font-semibold text-zinc-100">{segment.slice(2, -2)}</strong>);
+    } else if (segment.startsWith('`') && segment.endsWith('`')) {
+      const code = segment.slice(1, -1);
+      const isPath = /[/\\]|\.(ts|tsx|js|jsx|md|json|py)(:\d+)?$|:\d+\)?$/.test(code) || code.includes(':');
+      parts.push(
+        <span
+          key={`t-${key++}`}
+          className={isPath ? 'inline-flex items-center px-1.5 py-0.5 rounded bg-zinc-700/80 text-amber-200/90 font-mono text-[0.85em]' : 'px-1 py-0.5 rounded bg-zinc-800 text-zinc-200 font-mono text-[0.9em]'}
+        >
+          {code}
+        </span>
+      );
+    }
+    lastIndex = regex.lastIndex;
+  }
+  if (lastIndex < text.length) {
+    parts.push(<span key={`t-${key++}`}>{text.slice(lastIndex)}</span>);
+  }
+  return <span className="text-sm text-zinc-200 leading-snug">{parts.length > 0 ? parts : text}</span>;
 }
 
 // ============================================================================
@@ -181,11 +247,13 @@ function TerminalWidget({
   onClose,
   onMinimize,
   onSendMessage,
+  isHighlighted,
 }: {
   terminal: TerminalState;
   onClose?: () => void;
   onMinimize?: () => void;
   onSendMessage: (terminalId: string, message: string, files?: UploadedFile[]) => void;
+  isHighlighted?: boolean;
 }) {
   const outputRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -201,9 +269,21 @@ function TerminalWidget({
   };
 
   return (
-    <div className="h-full bg-[#0d1117] border border-zinc-800 rounded-lg flex flex-col overflow-hidden">
+    <div
+      className={`h-full bg-[#0d1117] border rounded-lg flex flex-col overflow-hidden transition-[border-color] duration-300 ${
+        isHighlighted
+          ? 'border-violet-400/60 terminal-outer-highlight-pulse'
+          : 'border-zinc-800'
+      }`}
+    >
       {/* Title Bar */}
-      <div className="flex-shrink-0 px-3 py-2 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between">
+      <div
+        className={`flex-shrink-0 px-3 py-2 border-b flex items-center justify-between transition-[background-color,border-color] duration-300 ${
+          isHighlighted
+            ? 'bg-violet-600/50 border-violet-400/70 terminal-title-highlight-pulse'
+            : 'bg-zinc-900 border-zinc-800'
+        }`}
+      >
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1.5 mr-2">
             <button onClick={onClose} className="group w-3 h-3 rounded-full bg-red-500/80 hover:bg-red-500 flex items-center justify-center">
@@ -283,210 +363,269 @@ function AgentStatusWidget({ agent, terminalCount }: { agent: Agent; terminalCou
 }
 
 // ============================================================================
-// PLANNING WIDGET
+// TASKS WIDGET
 // ============================================================================
 
-function PlanningWidget({
+/** Terminal summary for Run submenu */
+interface TerminalOption {
+  id: string;
+  label: string;
+  agentIcon: string;
+}
+
+function TasksWidget({
   steps,
   agents,
+  terminals,
+  highlightedTerminalId,
   onExecute,
   isExecuting,
   onStepAgentChange,
   onSendStepToTerminal,
+  onTerminalOptionHover,
+  onMenuClose,
+  onAddStep,
   onMinimize,
 }: {
   steps: PlanStep[];
   agents: Agent[];
+  terminals: TerminalOption[];
+  highlightedTerminalId?: string | null;
   onExecute: () => void;
   isExecuting: boolean;
-  onStepAgentChange: (stepId: string, agentId: string) => void;
-  onSendStepToTerminal: (step: PlanStep) => void;
+  onStepAgentChange: (stepId: string, agentId: string | null) => void;
+  onSendStepToTerminal: (step: PlanStep, terminalId?: string) => void;
+  onTerminalOptionHover?: (terminalId: string | null) => void;
+  onMenuClose?: () => void;
+  onAddStep?: (text: string, agentId: string | null) => void;
   onMinimize?: () => void;
 }) {
   const [editingStep, setEditingStep] = useState<string | null>(null);
+  const [stepMenuOpen, setStepMenuOpen] = useState<string | null>(null);
+  const [runSubmenuStepId, setRunSubmenuStepId] = useState<string | null>(null);
+  const [showAddInput, setShowAddInput] = useState(false);
+  const [newTaskText, setNewTaskText] = useState('');
+  const [newTaskAgent, setNewTaskAgent] = useState<string | null>(null);
+  const stepMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const closeMenu = (e: MouseEvent) => {
+      if (stepMenuRef.current && !stepMenuRef.current.contains(e.target as Node)) {
+        setStepMenuOpen(null);
+        setRunSubmenuStepId(null);
+        onMenuClose?.();
+      }
+    };
+    if (stepMenuOpen) {
+      document.addEventListener('mousedown', closeMenu);
+      return () => document.removeEventListener('mousedown', closeMenu);
+    }
+  }, [stepMenuOpen, onMenuClose]);
+
+  const handleAddStep = () => {
+    if (newTaskText.trim() && onAddStep) {
+      onAddStep(newTaskText.trim(), newTaskAgent);
+      setNewTaskText('');
+      setNewTaskAgent(null);
+      setShowAddInput(false);
+    }
+  };
 
   return (
     <div className="h-full bg-zinc-900 border border-zinc-800 rounded-lg flex flex-col overflow-hidden">
-      <div className="flex-shrink-0 px-3 py-2 border-b border-zinc-800 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Sparkles className="w-4 h-4 text-violet-400" />
-          <span className="text-sm font-medium">Planning</span>
-          <span className="text-xs text-zinc-600">({steps.length} steps)</span>
+      <div className="flex-shrink-0 px-3 py-2 border-b border-zinc-800 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          {onMinimize && (
+            <div className="flex items-center gap-1.5 mr-2">
+              <button onClick={onMinimize} className="group w-3 h-3 rounded-full bg-yellow-500/80 hover:bg-yellow-500 flex items-center justify-center" title="Minimize">
+                <Minus className="w-2 h-2 text-yellow-900 opacity-0 group-hover:opacity-100" />
+              </button>
+            </div>
+          )}
+          <Sparkles className="w-4 h-4 text-violet-400 flex-shrink-0" />
+          <span className="text-sm font-medium truncate">Tasks</span>
+          <span className="text-xs text-zinc-600 flex-shrink-0">({steps.length})</span>
         </div>
-        {onMinimize && (
-          <button onClick={onMinimize} className="p-1 text-zinc-500 hover:text-zinc-300 rounded">
-            <Minus className="w-3.5 h-3.5" />
+        {onAddStep && (
+          <button
+            onClick={() => setShowAddInput(true)}
+            className="flex-shrink-0 flex items-center gap-1 px-2 py-1 text-xs text-zinc-400 hover:text-violet-400 hover:bg-zinc-800 rounded transition-colors"
+            title="Add task"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add task</span>
           </button>
         )}
       </div>
 
+      {showAddInput && onAddStep && (
+        <div className="flex-shrink-0 p-2 border-b border-zinc-800 space-y-1.5">
+          <input
+            type="text"
+            value={newTaskText}
+            onChange={(e) => setNewTaskText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAddStep(); }
+              if (e.key === 'Escape') { setShowAddInput(false); setNewTaskText(''); }
+            }}
+            placeholder="Task description..."
+            className="w-full px-2 py-1 text-xs bg-zinc-800 border border-zinc-600 rounded text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-violet-500"
+            autoFocus
+          />
+          <div className="flex items-center gap-1">
+            <select
+              value={newTaskAgent ?? ''}
+              onChange={(e) => setNewTaskAgent(e.target.value || null)}
+              className="text-[10px] bg-zinc-800 border border-zinc-600 rounded px-1 py-0.5"
+            >
+              <option value="">Unassigned</option>
+              {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+            <button onClick={handleAddStep} className="text-[10px] text-violet-400 hover:text-violet-300 px-1.5">Add</button>
+            <button onClick={() => { setShowAddInput(false); setNewTaskText(''); }} className="text-[10px] text-zinc-500 hover:text-zinc-300">Cancel</button>
+          </div>
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
         {steps.length === 0 ? (
           <div className="h-full flex items-center justify-center text-zinc-600 text-sm">
-            No plan yet. Use chat to create one.
+            No tasks yet. Add tasks or they will appear from terminal output.
           </div>
         ) : (
-          steps.map((step, idx) => (
-            <div key={step.id} className={`flex items-start gap-2 p-2 rounded border ${
-              step.status === 'running' ? 'bg-violet-500/10 border-violet-500/30' :
-              step.status === 'completed' ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-zinc-800/50 border-zinc-700/50'
-            }`}>
+          steps.map((step, idx) => {
+            const stepHoverLines = [
+              `Agent: ${step.agent ? (agents.find(a => a.id === step.agent)?.name ?? step.agent) : 'Unassigned'}`,
+              step.costUsd != null ? `Cost: $${step.costUsd.toFixed(4)}` : null,
+              step.durationMs != null ? `Duration: ${(step.durationMs / 1000).toFixed(1)}s` : null,
+              `Source: ${step.source === 'extracted' ? 'Terminal' : step.source === 'manual' ? 'Manual' : step.source === 'plan' ? 'Plan' : 'Plan'}`,
+            ].filter(Boolean);
+            return (
+            <div
+              key={step.id}
+              title={stepHoverLines.join('\n')}
+              className={`flex items-start gap-2 p-2 rounded border ${
+                step.status === 'running' ? 'bg-violet-500/10 border-violet-500/30' :
+                step.status === 'completed' ? 'bg-emerald-500/10 border-emerald-500/30' :
+                step.status === 'failed' ? 'bg-red-500/10 border-red-500/30' : 'bg-zinc-800/50 border-zinc-700/50'
+              }`}
+            >
               <span className="text-xs text-zinc-500 w-5">{idx + 1}.</span>
               <div className="flex-1 min-w-0">
-                <p className="text-sm text-zinc-200">{step.text}</p>
+                <PlanStepText text={step.text} />
                 <div className="flex items-center gap-2 mt-1">
                   {editingStep === step.id ? (
                     <select
-                      value={step.agent}
-                      onChange={(e) => { onStepAgentChange(step.id, e.target.value); setEditingStep(null); }}
+                      value={step.agent ?? ''}
+                      onChange={(e) => { onStepAgentChange(step.id, e.target.value || null); setEditingStep(null); }}
                       onBlur={() => setEditingStep(null)}
                       autoFocus
                       className="text-[10px] bg-zinc-800 border border-zinc-600 rounded px-1 py-0.5"
                     >
+                      <option value="">Unassigned</option>
                       {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                     </select>
                   ) : (
                     <button onClick={() => setEditingStep(step.id)} className="text-[10px] text-zinc-500 hover:text-zinc-300">
-                      {agents.find(a => a.id === step.agent)?.name || step.agent}
+                      {step.agent ? (agents.find(a => a.id === step.agent)?.name ?? step.agent) : 'Unassigned'}
                     </button>
                   )}
-                  <button onClick={() => onSendStepToTerminal(step)} className="text-[10px] text-violet-400 hover:text-violet-300">
-                    → Terminal
-                  </button>
                 </div>
               </div>
-              {step.status === 'running' && <Loader2 className="w-3.5 h-3.5 text-violet-400 animate-spin" />}
-              {step.status === 'completed' && <Check className="w-3.5 h-3.5 text-emerald-400" />}
+              <div className="relative flex items-center gap-0.5 shrink-0" ref={stepMenuOpen === step.id ? stepMenuRef : undefined}>
+                {step.status === 'running' && <Loader2 className="w-3.5 h-3.5 text-violet-400 animate-spin" />}
+                {step.status === 'completed' && <Check className="w-3.5 h-3.5 text-emerald-400" />}
+                {step.status === 'failed' && <X className="w-3.5 h-3.5 text-red-400" />}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const closing = stepMenuOpen === step.id;
+                    setStepMenuOpen(closing ? null : step.id);
+                    if (closing) onMenuClose?.();
+                    setRunSubmenuStepId(null);
+                  }}
+                  className="p-1 text-zinc-500 hover:text-zinc-300 rounded"
+                  title="Task actions"
+                >
+                  <MoreVertical className="w-3.5 h-3.5" />
+                </button>
+                {stepMenuOpen === step.id && (
+                  <div className="absolute top-full right-0 mt-0.5 py-1 bg-zinc-800 border border-zinc-700 rounded shadow-lg z-10 min-w-[200px]">
+                    {runSubmenuStepId === step.id ? (
+                      <>
+                        <button
+                          onClick={() => { setRunSubmenuStepId(null); onTerminalOptionHover?.(null); }}
+                          className="w-full px-3 py-1.5 text-left text-xs text-zinc-400 hover:bg-zinc-700 flex items-center gap-2"
+                        >
+                          <ChevronLeft className="w-3.5 h-3.5 shrink-0" />
+                          Back
+                        </button>
+                        <div className="border-t border-zinc-700 my-0.5" />
+                        <button
+                          onClick={() => {
+                            onSendStepToTerminal(step);
+                            setStepMenuOpen(null);
+                            setRunSubmenuStepId(null);
+                            onTerminalOptionHover?.(null);
+                          }}
+                          className="w-full px-3 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-700 flex items-center gap-2"
+                        >
+                          <Plus className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+                          New terminal
+                        </button>
+                        {terminals.map((t) => (
+                          <button
+                            key={t.id}
+                            onClick={() => {
+                              onSendStepToTerminal(step, t.id);
+                              setStepMenuOpen(null);
+                              setRunSubmenuStepId(null);
+                              onTerminalOptionHover?.(null);
+                            }}
+                            onMouseEnter={() => onTerminalOptionHover?.(t.id)}
+                            onMouseLeave={() => onTerminalOptionHover?.(null)}
+                            onFocus={() => onTerminalOptionHover?.(t.id)}
+                            onBlur={() => onTerminalOptionHover?.(null)}
+                            className={`w-full px-3 py-1.5 text-left text-xs text-zinc-300 flex items-center gap-2 transition-colors ${
+                              highlightedTerminalId === t.id
+                                ? 'bg-violet-500/20 text-violet-200'
+                                : 'hover:bg-zinc-700'
+                            }`}
+                          >
+                            <span className="shrink-0">{t.agentIcon}</span>
+                            <span className="truncate">{t.label}</span>
+                          </button>
+                        ))}
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => setRunSubmenuStepId(step.id)}
+                        className="w-full px-3 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-700 flex items-center justify-between gap-2"
+                      >
+                        <span className="flex items-center gap-2">
+                          <TerminalIcon className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+                          Run
+                        </span>
+                        <ChevronRight className="w-3.5 h-3.5 shrink-0 text-zinc-500" />
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
-          ))
+            );
+          })
         )}
       </div>
 
       <div className="flex-shrink-0 p-2 border-t border-zinc-800">
         <button
           onClick={onExecute}
-          disabled={isExecuting || steps.length === 0}
+          disabled={isExecuting || steps.length === 0 || !steps.some(s => s.agent)}
           className="w-full px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-700 disabled:text-zinc-500 rounded-lg text-xs font-medium flex items-center justify-center gap-2"
         >
-          {isExecuting ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Executing...</> : <><Play className="w-3.5 h-3.5" /> Execute Plan</>}
+          {isExecuting ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Executing...</> : <><Play className="w-3.5 h-3.5" /> Run tasks</>}
         </button>
-      </div>
-    </div>
-  );
-}
-
-// ============================================================================
-// ORCHESTRATOR CHAT
-// ============================================================================
-
-function OrchestratorChat({
-  messages,
-  onSendMessage,
-  onExecutePlan,
-  onMinimize,
-  isStreaming,
-}: {
-  messages: ChatMessage[];
-  onSendMessage: (text: string) => void;
-  onExecutePlan: (plan: PlanStep[]) => void;
-  onMinimize?: () => void;
-  isStreaming: boolean;
-}) {
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  const handleSend = (message: string, files?: UploadedFile[]) => {
-    let content = message;
-    if (files && files.length > 0) {
-      const fileNames = files.map(f => f.name).join(', ');
-      content = `${message}\n📎 Attached: ${fileNames}`;
-    }
-    onSendMessage(content);
-  };
-
-  return (
-    <div className="h-full bg-zinc-900 rounded-lg border border-zinc-800 flex flex-col overflow-hidden">
-      <div className="flex-shrink-0 px-3 py-2 border-b border-zinc-800 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Bot className="w-4 h-4 text-violet-400" />
-          <span className="text-xs font-medium text-zinc-300">Orchestrator</span>
-        </div>
-        {onMinimize && (
-          <button onClick={onMinimize} className="p-1 text-zinc-500 hover:text-zinc-300 rounded">
-            <Minus className="w-3.5 h-3.5" />
-          </button>
-        )}
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        {messages.length === 0 && (
-          <div className="h-full flex flex-col items-center justify-center text-center px-4">
-            <Sparkles className="w-8 h-8 text-violet-400/50 mb-2" />
-            <p className="text-sm text-zinc-400">Describe your task</p>
-            <p className="text-xs text-zinc-600">I'll create a plan and coordinate the agents.</p>
-          </div>
-        )}
-
-        {messages.map((msg) => (
-          <div key={msg.id} className={`flex gap-2 ${msg.role === 'user' ? 'justify-end' : ''}`}>
-            {msg.role === 'assistant' && (
-              <div className="w-6 h-6 rounded-full bg-violet-500/20 flex items-center justify-center flex-shrink-0">
-                <Bot className="w-3.5 h-3.5 text-violet-400" />
-              </div>
-            )}
-            <div className="max-w-[85%]">
-              <div className={`px-3 py-2 rounded-lg text-sm ${msg.role === 'user' ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-200'}`}>
-                {msg.content}
-              </div>
-              {msg.plan && (
-                <div className="mt-2 bg-zinc-800/50 border border-zinc-700 rounded-lg p-2">
-                  <div className="text-[10px] text-zinc-500 mb-1">Proposed Plan</div>
-                  {msg.plan.map((step, i) => (
-                    <div key={step.id} className="flex gap-2 text-xs">
-                      <span className="text-zinc-600">{i + 1}.</span>
-                      <span className="text-zinc-300">{step.text}</span>
-                    </div>
-                  ))}
-                  <button onClick={() => onExecutePlan(msg.plan!)} className="mt-2 w-full px-2 py-1 bg-indigo-600 hover:bg-indigo-500 rounded text-[10px] flex items-center justify-center gap-1">
-                    <Play className="w-3 h-3" /> Execute
-                  </button>
-                </div>
-              )}
-              <div className="text-[10px] text-zinc-600 mt-1">{msg.timestamp}</div>
-            </div>
-            {msg.role === 'user' && (
-              <div className="w-6 h-6 rounded-full bg-zinc-700 flex items-center justify-center flex-shrink-0">
-                <User className="w-3.5 h-3.5 text-zinc-400" />
-              </div>
-            )}
-          </div>
-        ))}
-
-        {isStreaming && (
-          <div className="flex gap-2">
-            <div className="w-6 h-6 rounded-full bg-violet-500/20 flex items-center justify-center">
-              <Bot className="w-3.5 h-3.5 text-violet-400" />
-            </div>
-            <div className="bg-zinc-800 px-3 py-2 rounded-lg flex gap-1">
-              <div className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-bounce" />
-              <div className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-              <div className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-            </div>
-          </div>
-        )}
-        <div ref={messagesEndRef} />
-      </div>
-
-      <div className="flex-shrink-0 p-2 border-t border-zinc-800">
-        <ChatInput
-          onSend={handleSend}
-          placeholder="Describe your task..."
-          disabled={isStreaming}
-          showPrompt={false}
-        />
       </div>
     </div>
   );
@@ -510,18 +649,17 @@ export function Workspace() {
   // Terminals state
   const [terminals, setTerminals] = useState<TerminalState[]>([]);
   const [minimizedWidgets, setMinimizedWidgets] = useState<MinimizedWidget[]>([]);
+  const [highlightedTerminalId, setHighlightedTerminalId] = useState<string | null>(null);
 
-  // Planning state
+  // Tasks state
   const [planSteps, setPlanSteps] = useState<PlanStep[]>([]);
   const [isExecuting, setIsExecuting] = useState(false);
-
-  // Chat state
-  const [rightPanelMode, setRightPanelMode] = useState<'planning' | 'chat'>('chat');
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [isChatStreaming, setIsChatStreaming] = useState(false);
+  const [tasksWidgetMinimized, setTasksWidgetMinimized] = useState(false);
 
   // WebSocket ref
   const wsRef = useRef<WebSocket | null>(null);
+  const terminalsRef = useRef<TerminalState[]>(terminals);
+  terminalsRef.current = terminals;
 
   // Fetch agents on mount
   const fetchAgents = useCallback(async () => {
@@ -605,35 +743,104 @@ export function Workspace() {
       // Process SDK message types for thread sessions
       if (msg.type === 'stream_event') {
         const streamEvent = msg.event;
+        const blockIndex = streamEvent?.index;
+
+        // content_block_start: thinking or tool_use → add terminal line
+        if (streamEvent?.type === 'content_block_start') {
+          const block = streamEvent.content_block;
+          const blockType = block?.type;
+          const blockId = block?.id ?? `block_${blockIndex ?? 0}`;
+
+          if (blockType === 'thinking') {
+            const line: TerminalLine = {
+              id: `thinking-${blockId}`,
+              type: 'thinking',
+              content: 'Thinking...',
+              timestamp: makeTimestamp(),
+              isStreaming: true,
+            };
+            setTerminals(prev => prev.map(t =>
+              matchesTerminal(t) ? { ...t, lines: [...t.lines, line], isStreaming: true } : t
+            ));
+          } else if (blockType === 'tool_use' || blockType === 'server_tool_use') {
+            const toolName = block?.name ?? 'Tool';
+            const line: TerminalLine = {
+              id: `tool-${blockId}`,
+              type: 'tool_call',
+              content: toolName,
+              timestamp: makeTimestamp(),
+              isStreaming: true,
+            };
+            setTerminals(prev => prev.map(t =>
+              matchesTerminal(t) ? { ...t, lines: [...t.lines, line], isStreaming: true } : t
+            ));
+          }
+        }
+
+        // content_block_delta: text_delta, thinking_delta, or input_json_delta
         if (streamEvent?.type === 'content_block_delta') {
           const delta = streamEvent.delta;
-          if (delta?.type === 'text_delta' && delta.text) {
-            // Append text delta to terminal
+          const deltaType = delta?.type;
+
+          if (deltaType === 'text_delta' && delta.text) {
+            // Append text delta to terminal output
             setTerminals(prev => prev.map(t => {
               if (!matchesTerminal(t)) return t;
-              
               const lastLine = t.lines[t.lines.length - 1];
               if (lastLine?.type === 'output' && lastLine.isStreaming) {
                 return {
                   ...t,
-                  lines: t.lines.map((l, i) => 
-                    i === t.lines.length - 1 
+                  lines: t.lines.map((l, i) =>
+                    i === t.lines.length - 1
                       ? { ...l, content: l.content + delta.text }
                       : l
                   ),
                 };
-              } else {
+              }
+              return {
+                ...t,
+                lines: [...t.lines, {
+                  id: `${Date.now()}`,
+                  type: 'output' as const,
+                  content: delta.text,
+                  timestamp: makeTimestamp(),
+                  isStreaming: true,
+                }],
+              };
+            }));
+          } else if (deltaType === 'thinking_delta' && delta.thinking) {
+            // Append to last thinking line or create one
+            setTerminals(prev => prev.map(t => {
+              if (!matchesTerminal(t)) return t;
+              let idx = -1;
+              for (let i = t.lines.length - 1; i >= 0; i--) {
+                if (t.lines[i].type === 'thinking') {
+                  idx = i;
+                  break;
+                }
+              }
+              if (idx >= 0) {
                 return {
                   ...t,
-                  lines: [...t.lines, {
-                    id: `${Date.now()}`,
-                    type: 'output' as const,
-                    content: delta.text,
-                    timestamp: makeTimestamp(),
-                    isStreaming: true,
-                  }],
+                  lines: t.lines.map((l, i) =>
+                    i === idx
+                      ? { ...l, content: l.content + delta.thinking, isStreaming: true }
+                      : l
+                  ),
+                  isStreaming: true,
                 };
               }
+              return {
+                ...t,
+                lines: [...t.lines, {
+                  id: `thinking-${Date.now()}`,
+                  type: 'thinking' as const,
+                  content: delta.thinking,
+                  timestamp: makeTimestamp(),
+                  isStreaming: true,
+                }],
+                isStreaming: true,
+              };
             }));
           }
         }
@@ -698,15 +905,53 @@ export function Workspace() {
       }));
     }
 
-    // Handle turn/item completion
+    // Handle turn/item completion: update terminal streaming state and sync plan step + cost
     if (event.type === 'turn.completed' || event.type === 'item.completed') {
+      const matchedTerminal = terminalsRef.current.find(matchesTerminal);
+      const stepIdToComplete = matchedTerminal?.currentStepId;
+      const usage = event.type === 'turn.completed' ? event.payload?.usage : undefined;
+
       setTerminals(prev => prev.map(t =>
-        matchesTerminal(t) ? {
+        !matchesTerminal(t) ? t : {
           ...t,
           isStreaming: false,
+          currentStepId: undefined,
           lines: t.lines.map(l => ({ ...l, isStreaming: false })),
-        } : t
+        }
       ));
+
+      if (stepIdToComplete && usage) {
+        setPlanSteps(prev => prev.map(s =>
+          s.id === stepIdToComplete
+            ? { ...s, status: 'completed' as const, costUsd: usage.costUsd ?? s.costUsd }
+            : s
+        ));
+      }
+
+      // Extract suggested tasks from assistant result and merge as unassigned steps
+      if (event.type === 'turn.completed' && event.payload?.result) {
+        const extracted = extractTasksFromText(event.payload.result);
+        if (extracted.length > 0) {
+          setPlanSteps(prev => {
+            const existingNormalized = new Set(prev.map(s => s.text.trim().toLowerCase()));
+            const newSteps: PlanStep[] = extracted
+              .filter(t => {
+                const n = t.trim().toLowerCase();
+                if (existingNormalized.has(n)) return false;
+                existingNormalized.add(n);
+                return true;
+              })
+              .map((text, i) => ({
+                id: `step-extracted-${Date.now()}-${i}`,
+                text: text.trim(),
+                agent: null as string | null,
+                status: 'pending' as const,
+                source: 'extracted' as const,
+              }));
+            return prev.length === 0 && newSteps.length > 0 ? newSteps : [...prev, ...newSteps];
+          });
+        }
+      }
     }
   }, []);
 
@@ -770,7 +1015,7 @@ export function Workspace() {
     const terminal = terminals.find(t => t.id === terminalId);
     if (!terminal) return;
 
-    const cwd = terminal.path || workspacePath || process.cwd?.() || '/';
+    const cwd = terminal.path || workspacePath || (typeof process !== 'undefined' && typeof process.cwd === 'function' ? process.cwd() : null) || '/';
 
     // Build prompt content with file info
     let promptContent = message;
@@ -779,12 +1024,21 @@ export function Workspace() {
       promptContent = `${message}\n📎 Attached: ${fileNames}`;
     }
 
-    // Add prompt line
+    // Add prompt line and extract current task into plan widget (so it shows and syncs on completion)
+    const extractedStepId = `step-extracted-${Date.now()}`;
+    setPlanSteps(prev => [...prev, {
+      id: extractedStepId,
+      text: message,
+      agent: terminal.agent.id,
+      status: 'running',
+      source: 'extracted',
+    }]);
     setTerminals(prev => prev.map(t =>
       t.id === terminalId ? {
         ...t,
         isStreaming: true,
         currentTask: message,
+        currentStepId: extractedStepId,
         lines: [...t.lines, { id: `${Date.now()}`, type: 'prompt', content: promptContent, timestamp: makeTimestamp() }]
       } : t
     ));
@@ -805,23 +1059,45 @@ export function Workspace() {
         });
         const sessionData = await sessionRes.json();
         
-        if (sessionData.ok) {
-          setTerminals(prev => prev.map(t =>
-            t.id === terminalId ? { ...t, threadId, sessionActive: true } : t
-          ));
+        if (!sessionData.ok) {
+          throw new Error(sessionData.error || 'Failed to create session');
         }
+        setTerminals(prev => prev.map(t =>
+          t.id === terminalId ? { ...t, threadId, sessionActive: true, currentStepId: extractedStepId } : t
+        ));
       }
 
       // Send via thread API (persistent session)
-      const res = await fetch(`${API_URL}/threads/${threadId}/send`, {
+      let res = await fetch(`${API_URL}/threads/${threadId}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message }),
       });
-      const data = await res.json();
+      let data = await res.json();
 
-      // Response comes via WebSocket events, not HTTP response
-      // The streaming updates will be handled by the WebSocket listener
+      // If server restarted, session is gone; create session and retry send once
+      if (!data.ok && data.error === 'No active session for thread' && terminal.threadId) {
+        setTerminals(prev => prev.map(t =>
+          t.id === terminalId ? { ...t, threadId: undefined, sessionActive: false } : t
+        ));
+        const sessionRes = await fetch(`${API_URL}/threads/${threadId}/session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cwd, name: `${terminal.agent.name} - ${new Date().toLocaleString()}` }),
+        });
+        const sessionData = await sessionRes.json();
+        if (!sessionData.ok) throw new Error(sessionData.error || 'Failed to create session');
+        setTerminals(prev => prev.map(t =>
+          t.id === terminalId ? { ...t, threadId, sessionActive: true } : t
+        ));
+        res = await fetch(`${API_URL}/threads/${threadId}/send`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message }),
+        });
+        data = await res.json();
+      }
+
       if (!data.ok) {
         throw new Error(data.error || 'Send failed');
       }
@@ -831,19 +1107,40 @@ export function Workspace() {
         t.id === terminalId ? {
           ...t,
           isStreaming: false,
+          currentStepId: undefined,
           lines: [...t.lines, { id: `${Date.now()}`, type: 'error', content: `Error: ${err}`, timestamp: makeTimestamp() }]
         } : t
+      ));
+      setPlanSteps(prev => prev.map(s =>
+        s.id === extractedStepId ? { ...s, status: 'failed' as const } : s
       ));
     }
   };
 
-  const handleSendStepToTerminal = (step: PlanStep) => {
-    const agent = agents.find(a => a.id === step.agent) || agents[0];
+  const handleSendStepToTerminal = (step: PlanStep, terminalId?: string) => {
+    const agent = step.agent ? agents.find(a => a.id === step.agent) : agents[0];
     if (!agent) return;
 
-    const existingTerminal = terminals.find(t => t.agent.id === agent.id);
-    if (existingTerminal) {
-      handleTerminalMessage(existingTerminal.id, step.text);
+    if (terminalId) {
+      const terminal = terminals.find(t => t.id === terminalId);
+      if (terminal) {
+        setTerminals(prev => prev.map(t =>
+          t.id === terminalId ? { ...t, currentTask: step.text, currentStepId: step.id } : t
+        ));
+        handleTerminalMessage(terminalId, step.text);
+      } else {
+        const minimized = minimizedWidgets.find(w => w.type === 'terminal' && w.id === terminalId && w.data);
+        if (minimized?.data) {
+          const restored: TerminalState = {
+            ...minimized.data,
+            currentTask: step.text,
+            currentStepId: step.id,
+          };
+          setMinimizedWidgets(prev => prev.filter(w => w.id !== terminalId));
+          setTerminals(prev => [...prev, restored]);
+          setTimeout(() => handleTerminalMessage(terminalId, step.text), 0);
+        }
+      }
     } else {
       const newTerminal: TerminalState = {
         id: `terminal-${Date.now()}`,
@@ -851,6 +1148,7 @@ export function Workspace() {
         lines: [{ id: `${Date.now()}`, type: 'system', content: `Session started — ${agent.name}`, timestamp: makeTimestamp() }],
         isStreaming: false,
         currentTask: step.text,
+        currentStepId: step.id,
       };
       setTerminals(prev => [...prev, newTerminal]);
       setTimeout(() => handleTerminalMessage(newTerminal.id, step.text), 100);
@@ -859,146 +1157,44 @@ export function Workspace() {
     setPlanSteps(prev => prev.map(s => s.id === step.id ? { ...s, status: 'running' } : s));
   };
 
-  // Planning handlers
+  // Tasks handlers
   const handleExecute = () => {
+    const stepsWithAgent = planSteps.filter(s => s.agent);
+    if (stepsWithAgent.length === 0) return;
     setIsExecuting(true);
     let idx = 0;
     const exec = () => {
-      if (idx < planSteps.length) {
-        setPlanSteps(prev => prev.map((s, i) => ({ ...s, status: i === idx ? 'running' : i < idx ? 'completed' : 'pending' })));
-        handleSendStepToTerminal(planSteps[idx]);
+      if (idx < stepsWithAgent.length) {
+        const step = stepsWithAgent[idx];
+        const stepIdsCompleted = new Set(stepsWithAgent.slice(0, idx).map(s => s.id));
+        setPlanSteps(prev => prev.map(s =>
+          s.id === step.id ? { ...s, status: 'running' as const }
+            : stepIdsCompleted.has(s.id) ? { ...s, status: 'completed' as const }
+            : s
+        ));
+        handleSendStepToTerminal(step);
         idx++;
         setTimeout(exec, 3000);
       } else {
-        setPlanSteps(prev => prev.map(s => ({ ...s, status: 'completed' })));
+        setPlanSteps(prev => prev.map(s => (s.agent ? { ...s, status: 'completed' as const } : s)));
         setIsExecuting(false);
       }
     };
     exec();
   };
 
-  const handleStepAgentChange = (stepId: string, agentId: string) => {
+  const handleStepAgentChange = (stepId: string, agentId: string | null) => {
     setPlanSteps(prev => prev.map(s => s.id === stepId ? { ...s, agent: agentId } : s));
   };
 
-  // Chat handlers
-  const handleChatMessage = async (text: string) => {
-    const userMsg: ChatMessage = { id: `${Date.now()}`, role: 'user', content: text, timestamp: makeTimestamp() };
-    setChatMessages(prev => [...prev, userMsg]);
-    setIsChatStreaming(true);
-
-    const lower = text.toLowerCase();
-
-    // Execute command - run the last plan
-    if (lower.includes('run it') || lower.includes('execute') || lower.includes('go ahead') || lower.includes('do it')) {
-      const lastPlan = [...chatMessages].reverse().find(m => m.plan);
-      if (lastPlan?.plan) {
-        setPlanSteps(lastPlan.plan);
-        setTimeout(() => handleExecute(), 100);
-        setChatMessages(prev => [...prev, { id: `${Date.now()}`, role: 'assistant', content: '🚀 Executing plan. Watch the terminals!', timestamp: makeTimestamp() }]);
-      } else {
-        setChatMessages(prev => [...prev, { id: `${Date.now()}`, role: 'assistant', content: 'No plan to execute yet. Describe a task first!', timestamp: makeTimestamp() }]);
-      }
-      setIsChatStreaming(false);
-      return;
-    }
-
-    // Status query
-    if (lower.includes('status') || lower.includes('progress') || lower.includes('what\'s happening')) {
-      const busy = terminals.filter(t => t.isStreaming);
-      const msg = busy.length > 0
-        ? `Currently ${busy.length} terminal(s) active:\n${busy.map(t => `• ${t.agent.name}: ${t.currentTask || 'working...'}`).join('\n')}`
-        : planSteps.some(s => s.status === 'running')
-          ? `Executing plan: ${planSteps.filter(s => s.status === 'completed').length}/${planSteps.length} steps done`
-          : 'All quiet. Ready for a new task!';
-      setChatMessages(prev => [...prev, { id: `${Date.now()}`, role: 'assistant', content: msg, timestamp: makeTimestamp() }]);
-      setIsChatStreaming(false);
-      return;
-    }
-
-    // Detect if this is a simple question vs a task
-    const isQuestion = lower.includes('?') || 
-                       lower.startsWith('what') || 
-                       lower.startsWith('how') || 
-                       lower.startsWith('why') ||
-                       lower.startsWith('can you') ||
-                       lower.startsWith('tell me') ||
-                       lower.length < 30;
-
-    // For simple questions, use task API with quick settings
-    if (isQuestion && !lower.includes('build') && !lower.includes('create') && !lower.includes('implement') && !lower.includes('add')) {
-      try {
-        // Use the task API but with a simple response prompt
-        const { taskId } = await api.createTask(text);
-        const res = await fetch(`${API_URL}/tasks/${taskId}/plan`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agent: agents[0]?.id || 'claude-code-local' }),
-        });
-        const data = await res.json();
-        
-        if (data.ok && data.plan) {
-          // Simple questions get direct answers, not plan format
-          setChatMessages(prev => [...prev, { 
-            id: `${Date.now()}`, 
-            role: 'assistant', 
-            content: data.plan, 
-            timestamp: makeTimestamp() 
-          }]);
-        } else {
-          setChatMessages(prev => [...prev, { 
-            id: `${Date.now()}`, 
-            role: 'assistant', 
-            content: data.error || 'I couldn\'t process that. Try rephrasing?', 
-            timestamp: makeTimestamp() 
-          }]);
-        }
-        setIsChatStreaming(false);
-        return;
-      } catch (err) {
-        console.error('Question failed:', err);
-        // Fall through to generate plan
-      }
-    }
-
-    // For tasks, generate a plan
-    setChatMessages(prev => [...prev, { id: `${Date.now()}-thinking`, role: 'assistant', content: 'Creating a plan...', timestamp: makeTimestamp(), isStreaming: true }]);
-    await generatePlan(text);
-  };
-
-  const generatePlan = async (text: string) => {
-    try {
-      const { taskId } = await api.createTask(text);
-      const planResult = await api.planTask(taskId, agents[0]?.id);
-      
-      const steps = planResult.plan.split('\n').filter(Boolean).map((line, i) => ({
-        id: `step-${Date.now()}-${i}`,
-        text: line.replace(/^\d+\.\s*/, ''),
-        agent: agents[i % agents.length]?.id || 'claude-code-local',
-      }));
-
-      setChatMessages(prev => [...prev, {
-        id: `${Date.now()}`,
-        role: 'assistant',
-        content: 'Here\'s my plan. Say "run it" to execute.',
-        timestamp: makeTimestamp(),
-        plan: steps,
-      }]);
-    } catch (err) {
-      setChatMessages(prev => [...prev, {
-        id: `${Date.now()}`,
-        role: 'assistant',
-        content: `Error creating plan: ${err}`,
-        timestamp: makeTimestamp(),
-      }]);
-    }
-    setIsChatStreaming(false);
-  };
-
-  const handleExecutePlanFromChat = (plan: PlanStep[]) => {
-    setPlanSteps(plan);
-    setRightPanelMode('planning');
-    setTimeout(handleExecute, 100);
+  const handleAddStep = (text: string, agentId: string | null) => {
+    setPlanSteps(prev => [...prev, {
+      id: `step-${Date.now()}-${prev.length}`,
+      text,
+      agent: agentId,
+      status: 'pending',
+      source: 'manual',
+    }]);
   };
 
   // Minimize/restore handlers
@@ -1006,11 +1202,8 @@ export function Workspace() {
     setMinimizedWidgets(prev => prev.filter(w => w.id !== widget.id));
     if (widget.type === 'terminal' && widget.data) {
       setTerminals(prev => [...prev, widget.data!]);
-    } else if (widget.type === 'chat') {
-      setRightPanelMode('chat');
-    } else if (widget.type === 'planning') {
-      setRightPanelMode('planning');
     }
+    // Tasks widget restore: right panel is always tasks; no mode to set
   };
 
   const getTerminalCount = (agentId: string) => terminals.filter(t => t.agent.id === agentId).length;
@@ -1068,7 +1261,7 @@ export function Workspace() {
             >
               <FolderOpen className="w-3.5 h-3.5" />
               <span className="max-w-[200px] truncate">
-                {workspacePath || 'No folder selected'}
+                {workspacePath || 'Set workspace path'}
               </span>
               <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
             </button>
@@ -1081,19 +1274,18 @@ export function Workspace() {
           <button onClick={() => handleNewTerminal()} disabled={agents.length === 0} className="flex items-center gap-1.5 px-3 py-1 text-xs bg-zinc-800 hover:bg-zinc-700 rounded">
             <Plus className="w-3.5 h-3.5" /> Terminal
           </button>
-          <div className="flex bg-zinc-800 rounded overflow-hidden">
-            <button onClick={() => setRightPanelMode('planning')} className={`px-3 py-1 text-xs flex items-center gap-1.5 ${rightPanelMode === 'planning' ? 'bg-indigo-600 text-white' : 'text-zinc-400'}`}>
-              <LayoutPanelLeft className="w-3.5 h-3.5" /> Plan
-            </button>
-            <button onClick={() => setRightPanelMode('chat')} className={`px-3 py-1 text-xs flex items-center gap-1.5 ${rightPanelMode === 'chat' ? 'bg-violet-600 text-white' : 'text-zinc-400'}`}>
-              <MessageSquare className="w-3.5 h-3.5" /> Chat
-            </button>
-          </div>
         </div>
       </div>
 
       {/* Workspace Grid */}
       <div className="flex-1 p-2 overflow-hidden">
+        {!workspacePath ? (
+          <div className="h-full flex flex-col items-center justify-center text-center px-4">
+            <FolderOpen className="w-12 h-12 text-zinc-600 mb-3" />
+            <p className="text-sm font-medium text-zinc-300 mb-1">Set a workspace path to get started</p>
+            <p className="text-xs text-zinc-500 max-w-sm">Click the path in the header above to choose your project folder. Agents run in this workspace.</p>
+          </div>
+        ) : (
         <PanelGroup direction="horizontal">
           {/* Left: Terminals */}
           <Panel defaultSize={60} minSize={30}>
@@ -1116,6 +1308,7 @@ export function Workspace() {
                         onClose={() => handleCloseTerminal(terminal.id)}
                         onMinimize={() => handleMinimizeTerminal(terminal)}
                         onSendMessage={handleTerminalMessage}
+                        isHighlighted={highlightedTerminalId === terminal.id}
                       />
                     </div>
                     {index < terminals.length - 1 && <PanelResizeHandle className="h-1 bg-zinc-800 hover:bg-zinc-700" />}
@@ -1127,64 +1320,103 @@ export function Workspace() {
 
           <PanelResizeHandle className="w-1 bg-zinc-800 hover:bg-zinc-700" />
 
-          {/* Right: Planning or Chat */}
+          {/* Right: Tasks (agent status + tasks widget) */}
           <Panel defaultSize={40} minSize={20}>
-            {rightPanelMode === 'planning' ? (
-              <PanelGroup direction="vertical">
-                <Panel defaultSize={25} minSize={12}>
-                  <div className="h-full p-1 flex gap-2">
-                    {agents.slice(0, 2).map(agent => (
-                      <AgentStatusWidget
-                        key={agent.id}
-                        agent={{ ...agent, status: terminals.some(t => t.agent.id === agent.id && t.isStreaming) ? 'busy' : agent.status }}
-                        terminalCount={getTerminalCount(agent.id)}
-                      />
-                    ))}
-                    {agents.length === 0 && (
-                      <div className="flex-1 bg-zinc-900 border border-zinc-800 rounded-lg flex items-center justify-center">
-                        <div className="text-center">
-                          <WifiOff className="w-5 h-5 text-zinc-600 mx-auto mb-1" />
-                          <p className="text-xs text-zinc-500">No agents</p>
-                        </div>
+            <PanelGroup direction="vertical">
+              <Panel defaultSize={25} minSize={12}>
+                <div className="h-full p-1 flex gap-2">
+                  {agents.slice(0, 2).map(agent => (
+                    <AgentStatusWidget
+                      key={agent.id}
+                      agent={{ ...agent, status: terminals.some(t => t.agent.id === agent.id && t.isStreaming) ? 'busy' : agent.status }}
+                      terminalCount={getTerminalCount(agent.id)}
+                    />
+                  ))}
+                  {agents.length === 0 && (
+                    <div className="flex-1 bg-zinc-900 border border-zinc-800 rounded-lg flex items-center justify-center">
+                      <div className="text-center">
+                        <WifiOff className="w-5 h-5 text-zinc-600 mx-auto mb-1" />
+                        <p className="text-xs text-zinc-500">No agents</p>
                       </div>
-                    )}
-                  </div>
-                </Panel>
-                <PanelResizeHandle className="h-1 bg-zinc-800 hover:bg-zinc-700" />
-                <Panel defaultSize={75} minSize={30}>
-                  <div className="h-full p-1">
-                    <PlanningWidget
+                    </div>
+                  )}
+                </div>
+              </Panel>
+              <PanelResizeHandle className="h-1 bg-zinc-800 hover:bg-zinc-700" />
+              <Panel defaultSize={75} minSize={30}>
+                <div className="h-full p-1 flex flex-col">
+                  {tasksWidgetMinimized ? (
+                    <div className="flex-shrink-0 h-9 bg-zinc-900 border border-zinc-800 rounded-lg flex items-center justify-between px-3">
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="w-4 h-4 text-violet-400" />
+                        <span className="text-sm font-medium text-zinc-300">Tasks</span>
+                        <span className="text-xs text-zinc-600">({planSteps.length})</span>
+                      </div>
+                      <button
+                        onClick={() => setTasksWidgetMinimized(false)}
+                        className="p-1 rounded hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200"
+                        title="Restore"
+                      >
+                        <Maximize2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex-1 min-h-0">
+                      <TasksWidget
                       steps={planSteps}
                       agents={agents}
+                      terminals={[
+                        ...terminals.map((t) => {
+                          const sameAgent = terminals.filter(x => x.agent.id === t.agent.id);
+                          const idx = sameAgent.findIndex(x => x.id === t.id) + 1;
+                          const suffix = sameAgent.length > 1 ? ` — ${idx}` : '';
+                          return {
+                            id: t.id,
+                            label: `${t.agent.name}${suffix}`,
+                            agentIcon: t.agent.icon,
+                          };
+                        }),
+                        ...minimizedWidgets
+                          .filter((w): w is MinimizedWidget & { type: 'terminal'; data: TerminalState } => w.type === 'terminal' && !!w.data)
+                          .map((w) => ({
+                            id: w.id,
+                            label: `${w.title} (minimized)`,
+                            agentIcon: w.icon,
+                          })),
+                      ]}
+                      highlightedTerminalId={highlightedTerminalId}
                       onExecute={handleExecute}
                       isExecuting={isExecuting}
                       onStepAgentChange={handleStepAgentChange}
                       onSendStepToTerminal={handleSendStepToTerminal}
-                      onMinimize={() => { setMinimizedWidgets(prev => [...prev, { id: 'planning', type: 'planning', title: 'Planning', icon: '📋' }]); setRightPanelMode('chat'); }}
+                      onTerminalOptionHover={setHighlightedTerminalId}
+                      onMenuClose={() => setHighlightedTerminalId(null)}
+                      onAddStep={handleAddStep}
+                      onMinimize={() => setTasksWidgetMinimized(true)}
                     />
-                  </div>
-                </Panel>
-              </PanelGroup>
-            ) : (
-              <div className="h-full p-1">
-                <OrchestratorChat
-                  messages={chatMessages}
-                  onSendMessage={handleChatMessage}
-                  onExecutePlan={handleExecutePlanFromChat}
-                  onMinimize={() => { setMinimizedWidgets(prev => [...prev, { id: 'chat', type: 'chat', title: 'Orchestrator', icon: '🤖' }]); setRightPanelMode('planning'); }}
-                  isStreaming={isChatStreaming}
-                />
-              </div>
-            )}
+                    </div>
+                  )}
+                </div>
+              </Panel>
+            </PanelGroup>
           </Panel>
         </PanelGroup>
+        )}
       </div>
 
       {/* Minimized Widgets Tab Bar */}
       {minimizedWidgets.length > 0 && (
         <div className="flex-shrink-0 h-9 bg-zinc-900 border-t border-zinc-800 px-2 flex items-center gap-1">
           {minimizedWidgets.map(widget => (
-            <div key={widget.id} onClick={() => handleRestoreWidget(widget)} className="flex items-center gap-1 px-2 py-1 bg-zinc-800 hover:bg-zinc-700 rounded text-xs cursor-pointer group">
+            <div
+              key={widget.id}
+              onClick={() => handleRestoreWidget(widget)}
+              className={`flex items-center gap-1 px-2 py-1 rounded text-xs cursor-pointer group transition-all duration-150 ${
+                widget.type === 'terminal' && highlightedTerminalId === widget.id
+                  ? 'ring-1 ring-violet-400/50 terminal-tab-highlight-pulse'
+                  : 'bg-zinc-800 hover:bg-zinc-700'
+              }`}
+            >
               <span>{widget.icon}</span>
               <span className="text-zinc-300 max-w-[100px] truncate">{widget.title}</span>
               <button onClick={(e) => { e.stopPropagation(); setMinimizedWidgets(prev => prev.filter(w => w.id !== widget.id)); }} className="text-zinc-500 hover:text-red-400 opacity-0 group-hover:opacity-100">

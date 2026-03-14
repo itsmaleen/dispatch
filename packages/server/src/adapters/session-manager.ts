@@ -28,7 +28,7 @@ export interface Session {
 export interface SessionEvents {
   'message': (threadId: string, message: SDKMessage) => void;
   'turn.started': (threadId: string, turnId: string) => void;
-  'turn.completed': (threadId: string, turnId: string, result: string) => void;
+  'turn.completed': (threadId: string, turnId: string, result: string, usage?: { inputTokens: number; outputTokens: number; costUsd?: number }) => void;
   'turn.error': (threadId: string, turnId: string, error: Error) => void;
   'session.created': (threadId: string) => void;
   'session.closed': (threadId: string) => void;
@@ -248,7 +248,7 @@ export class SessionManager extends EventEmitter {
       session.status = 'idle';
       session.currentTurnId = undefined;
       
-      this.emit('turn.completed', thread.id, turnId, session.outputBuffer);
+      this.emit('turn.completed', thread.id, turnId, session.outputBuffer, usage);
 
     } catch (error) {
       // Handle SDK exit code quirk - if we have output, treat as success
@@ -268,7 +268,7 @@ export class SessionManager extends EventEmitter {
         session.status = 'idle';
         session.currentTurnId = undefined;
         
-        this.emit('turn.completed', thread.id, turnId, session.outputBuffer);
+        this.emit('turn.completed', thread.id, turnId, session.outputBuffer, usage);
       } else {
         session.status = 'error';
         this.emit('turn.error', thread.id, turnId, error instanceof Error ? error : new Error(String(error)));
