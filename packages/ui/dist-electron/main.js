@@ -67,6 +67,8 @@ const PORT_FILE_TIMEOUT_MS = 5000;
 let mainWindow = null;
 let serverProcess = null;
 let serverPort = DEFAULT_SERVER_PORT;
+let serverApiUrl = "";
+let serverWsUrl = "";
 let restartAttempt = 0;
 let restartTimer = null;
 let isQuitting = false;
@@ -201,6 +203,11 @@ async function startServer() {
     }
     // Find available port
     serverPort = await findAvailablePort(DEFAULT_SERVER_PORT);
+    // Set URLs for preload to read (T3 pattern - avoids race condition)
+    serverApiUrl = `http://127.0.0.1:${serverPort}`;
+    serverWsUrl = `ws://127.0.0.1:${serverPort}`;
+    process.env.ACC_SERVER_API_URL = serverApiUrl;
+    process.env.ACC_SERVER_WS_URL = serverWsUrl;
     log(`Starting server on port ${serverPort}...`);
     const cwd = resolveServerCwd();
     // Augment PATH for GUI launches (Spotlight doesn't inherit shell PATH)
@@ -248,9 +255,14 @@ async function startServer() {
     serverProcess = child;
     // Wait for server to write actual port (in case it bound to a different port due to EADDRINUSE)
     const actualPort = await readPortFile(portFilePath);
-    if (actualPort !== null) {
+    if (actualPort !== null && actualPort !== serverPort) {
         serverPort = actualPort;
-        log(`Server bound to port ${serverPort}`);
+        // Update URLs with actual port
+        serverApiUrl = `http://127.0.0.1:${serverPort}`;
+        serverWsUrl = `ws://127.0.0.1:${serverPort}`;
+        process.env.ACC_SERVER_API_URL = serverApiUrl;
+        process.env.ACC_SERVER_WS_URL = serverWsUrl;
+        log(`Server bound to port ${serverPort} (updated URLs)`);
     }
     // Log server output in production
     if (electron_1.app.isPackaged) {

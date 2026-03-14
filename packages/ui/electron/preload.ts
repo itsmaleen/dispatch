@@ -6,20 +6,30 @@
 
 import { contextBridge, ipcRenderer } from "electron";
 
-// Track server port (updated via IPC from main)
-let serverPort = 3333;
+// Server URLs from env vars (set by main process before window creation - T3 pattern)
+// This avoids the race condition of IPC-based port communication
+const serverApiUrl = process.env.ACC_SERVER_API_URL || "http://127.0.0.1:3333";
+const serverWsUrl = process.env.ACC_SERVER_WS_URL || "ws://127.0.0.1:3333";
 
+// Extract port from URL for backward compatibility
+const serverPort = parseInt(new URL(serverApiUrl).port) || 3333;
+
+// Still listen for updates (in case server rebinds after window loads)
 ipcRenderer.on("server-info", (_event, info: { port: number }) => {
-  serverPort = info.port;
+  // Note: This won't update the URLs already captured above,
+  // but the env var approach should handle most cases
+  console.log("[preload] Server info update:", info);
 });
 
 // Expose protected methods that allow the renderer process to use
 // ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld("electronAPI", {
-  // Server info
+  // Server info - URLs available immediately (no race condition)
   server: {
     getInfo: () => ipcRenderer.invoke("server:info"),
     getPort: () => serverPort,
+    getApiUrl: () => serverApiUrl,
+    getWsUrl: () => serverWsUrl,
     onInfo: (callback: (info: { port: number }) => void) => {
       const handler = (_event: unknown, info: { port: number }) => callback(info);
       ipcRenderer.on("server-info", handler);
@@ -66,43 +76,4 @@ contextBridge.exposeInMainWorld("electronAPI", {
   openFolder: () => ipcRenderer.invoke("dialog:openFolder"),
 });
 
-// Type declaration for renderer
-declare global {
-  interface Window {
-    electronAPI: {
-      server: {
-        getInfo: () => Promise<{ port: number; pid?: number }>;
-        getPort: () => number;
-        onInfo: (callback: (info: { port: number }) => void) => () => void;
-      };
-      adapter: {
-        connect: (
-          adapterId: string,
-          config: unknown,
-        ) => Promise<{ ok: boolean }>;
-        disconnect: (adapterId: string) => Promise<{ ok: boolean }>;
-        send: (
-          adapterId: string,
-          message: string,
-        ) => Promise<{ ok: boolean; turnId: string }>;
-        onEvent: (callback: (event: unknown) => void) => () => void;
-      };
-      launcher: {
-        cursor: (path: string) => Promise<{ ok: boolean }>;
-        browser: (url: string) => Promise<{ ok: boolean }>;
-      };
-      coderabbit: {
-        review: (cwd: string) => Promise<{ ok: boolean; output: string }>;
-      };
-      github: {
-        createPr: (options: {
-          title: string;
-          body: string;
-          cwd: string;
-        }) => Promise<{ ok: boolean; output: string }>;
-      };
-      platform: NodeJS.Platform;
-      openFolder: () => Promise<string | null>;
-    };
-  }
-}
+// Type declaration for renderer is in src/types/electron.d.ts

@@ -314,12 +314,4 @@ function getTimeAgo(timestamp: number): string {
   return `${days}d ago`;
 }
 
-// Type declaration for Electron API (partial; full type in electron/preload.ts)
-declare global {
-  interface Window {
-    electronAPI?: {
-      server?: { getPort: () => number };
-      openFolder: () => Promise<string | null>;
-    };
-  }
-}
+// Type declaration for Electron API is in src/types/electron.d.ts

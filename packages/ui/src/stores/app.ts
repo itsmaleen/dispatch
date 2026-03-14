@@ -4,9 +4,13 @@ import { persist } from 'zustand/middleware';
 const DEFAULT_SERVER_PORT = 3333;
 const PORT_DISCOVERY_MAX = 50; // try 3333..3362
 
-// Dynamic API URL - uses Electron's server port or discovered port in dev
+// Dynamic API URL - uses Electron's server URLs (set via env var, no race condition)
 function getApiUrl(): string {
-  // In Electron, get port from preload
+  // In Electron, get URL directly from preload (available immediately)
+  if (typeof window !== 'undefined' && window.electronAPI?.server?.getApiUrl) {
+    return window.electronAPI.server.getApiUrl();
+  }
+  // Fallback: use port from preload
   if (typeof window !== 'undefined' && window.electronAPI?.server) {
     const port = window.electronAPI.server.getPort();
     return `http://localhost:${port}`;
@@ -17,6 +21,16 @@ function getApiUrl(): string {
     return `http://localhost:${port}`;
   }
   return `http://localhost:${DEFAULT_SERVER_PORT}`;
+}
+
+// Dynamic WebSocket URL - uses Electron's server URLs (set via env var, no race condition)
+function getWsUrlInternal(): string {
+  // In Electron, get URL directly from preload (available immediately)
+  if (typeof window !== 'undefined' && window.electronAPI?.server?.getWsUrl) {
+    return window.electronAPI.server.getWsUrl();
+  }
+  // Fallback: convert API URL to WS URL
+  return getApiUrl().replace('http', 'ws');
 }
 
 /** Probe ports 3333..3333+PORT_DISCOVERY_MAX and set store when server is found. Call when in browser dev. */
@@ -40,7 +54,7 @@ export async function discoverServerPort(): Promise<number> {
 
 // Export for use in other modules
 export const getServerUrl = getApiUrl;
-export const getWsUrl = () => getApiUrl().replace('http', 'ws');
+export const getWsUrl = getWsUrlInternal;
 
 export interface Project {
   path: string;

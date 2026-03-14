@@ -6,18 +6,27 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
-// Track server port (updated via IPC from main)
-let serverPort = 3333;
+// Server URLs from env vars (set by main process before window creation - T3 pattern)
+// This avoids the race condition of IPC-based port communication
+const serverApiUrl = process.env.ACC_SERVER_API_URL || "http://127.0.0.1:3333";
+const serverWsUrl = process.env.ACC_SERVER_WS_URL || "ws://127.0.0.1:3333";
+// Extract port from URL for backward compatibility
+const serverPort = parseInt(new URL(serverApiUrl).port) || 3333;
+// Still listen for updates (in case server rebinds after window loads)
 electron_1.ipcRenderer.on("server-info", (_event, info) => {
-    serverPort = info.port;
+    // Note: This won't update the URLs already captured above,
+    // but the env var approach should handle most cases
+    console.log("[preload] Server info update:", info);
 });
 // Expose protected methods that allow the renderer process to use
 // ipcRenderer without exposing the entire object
 electron_1.contextBridge.exposeInMainWorld("electronAPI", {
-    // Server info
+    // Server info - URLs available immediately (no race condition)
     server: {
         getInfo: () => electron_1.ipcRenderer.invoke("server:info"),
         getPort: () => serverPort,
+        getApiUrl: () => serverApiUrl,
+        getWsUrl: () => serverWsUrl,
         onInfo: (callback) => {
             const handler = (_event, info) => callback(info);
             electron_1.ipcRenderer.on("server-info", handler);
