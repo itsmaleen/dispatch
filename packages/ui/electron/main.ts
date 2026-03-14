@@ -191,13 +191,6 @@ async function startServer(): Promise<boolean> {
 
   // Find available port
   serverPort = await findAvailablePort(DEFAULT_SERVER_PORT);
-  
-  // Set URLs for preload to read (T3 pattern - avoids race condition)
-  serverApiUrl = `http://127.0.0.1:${serverPort}`;
-  serverWsUrl = `ws://127.0.0.1:${serverPort}`;
-  process.env.ACC_SERVER_API_URL = serverApiUrl;
-  process.env.ACC_SERVER_WS_URL = serverWsUrl;
-  
   log(`Starting server on port ${serverPort}...`);
 
   const cwd = resolveServerCwd();
@@ -253,12 +246,7 @@ async function startServer(): Promise<boolean> {
   const actualPort = await readPortFile(portFilePath);
   if (actualPort !== null && actualPort !== serverPort) {
     serverPort = actualPort;
-    // Update URLs with actual port
-    serverApiUrl = `http://127.0.0.1:${serverPort}`;
-    serverWsUrl = `ws://127.0.0.1:${serverPort}`;
-    process.env.ACC_SERVER_API_URL = serverApiUrl;
-    process.env.ACC_SERVER_WS_URL = serverWsUrl;
-    log(`Server bound to port ${serverPort} (updated URLs)`);
+    log(`Server bound to actual port ${serverPort}`);
   }
 
   // Log server output in production
@@ -403,6 +391,14 @@ async function ensureServerThenCreateWindow(): Promise<void> {
   } else {
     await startServer();
   }
+  
+  // ALWAYS set env vars before creating window (T3 pattern)
+  // The preload script reads these at load time
+  serverApiUrl = `http://127.0.0.1:${serverPort}`;
+  serverWsUrl = `ws://127.0.0.1:${serverPort}`;
+  process.env.ACC_SERVER_API_URL = serverApiUrl;
+  process.env.ACC_SERVER_WS_URL = serverWsUrl;
+  log(`Set server URLs: API=${serverApiUrl} WS=${serverWsUrl}`);
   
   createWindow();
 }
