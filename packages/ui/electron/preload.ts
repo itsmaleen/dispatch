@@ -14,6 +14,14 @@ const serverWsUrl = process.env.ACC_SERVER_WS_URL || "ws://127.0.0.1:3333";
 // Extract port from URL for backward compatibility
 const serverPort = parseInt(new URL(serverApiUrl).port) || 3333;
 
+// Debug logging
+console.log("[preload] Server URLs from env:");
+console.log("[preload]   ACC_SERVER_API_URL env:", process.env.ACC_SERVER_API_URL);
+console.log("[preload]   ACC_SERVER_WS_URL env:", process.env.ACC_SERVER_WS_URL);
+console.log("[preload]   Resolved API URL:", serverApiUrl);
+console.log("[preload]   Resolved WS URL:", serverWsUrl);
+console.log("[preload]   Resolved port:", serverPort);
+
 // Still listen for updates (in case server rebinds after window loads)
 ipcRenderer.on("server-info", (_event, info: { port: number }) => {
   // Note: This won't update the URLs already captured above,

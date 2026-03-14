@@ -399,6 +399,7 @@ async function ensureServerThenCreateWindow(): Promise<void> {
   process.env.ACC_SERVER_API_URL = serverApiUrl;
   process.env.ACC_SERVER_WS_URL = serverWsUrl;
   log(`Set server URLs: API=${serverApiUrl} WS=${serverWsUrl}`);
+  log(`Env vars set: ACC_SERVER_API_URL=${process.env.ACC_SERVER_API_URL} ACC_SERVER_WS_URL=${process.env.ACC_SERVER_WS_URL}`);
   
   createWindow();
 }
