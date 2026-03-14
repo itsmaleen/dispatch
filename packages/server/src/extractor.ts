@@ -22,33 +22,27 @@ export interface ExtractionResult {
 
 const EXTRACTOR_SYSTEM_PROMPT = `You are a task extractor for an AI coding assistant orchestrator.
 
-Analyze terminal output from coding agents and extract any tasks mentioned. Look for:
-- Tasks being started ("working on...", "implementing...", "fixing...")
-- Tasks completed ("done", "finished", "completed")
-- Tasks planned ("will need to...", "next I'll...", "TODO:")
-- Suggested tasks ("could also...", "might want to...", "consider...")
+Extract ONLY genuine work tasks from agent output. A task is something the agent DID, IS DOING, or WILL DO.
 
-Respond with ONLY a valid JSON object (no markdown, no explanation):
+EXTRACT (real tasks):
+- "Fixed the login bug in auth.ts" → completed
+- "Implementing the new API endpoint" → doing  
+- "Next I'll add error handling" → planned
+- "You might want to add rate limiting" → suggested
 
-{
-  "tasks": [
-    {
-      "text": "task description",
-      "status": "doing|planned|completed|suggested",
-      "confidence": 0.0-1.0
-    }
-  ]
-}
+DO NOT EXTRACT (not tasks):
+- Summary headers: "Here's what changed...", "Summary of changes..."
+- Meta-commentary: "Let me explain...", "I'll show you..."
+- Observations: "The file contains...", "This code does..."
+- Questions: "Should I proceed?", "Do you want me to..."
+- Lists of files or changes (the list items themselves)
+- Introductory sentences before lists
+- Status updates: "Done!", "Finished!", "Complete!" (without saying WHAT was done)
 
-Guidelines:
-- Extract actionable tasks, not observations or explanations
-- "doing" = actively working on now
-- "planned" = explicitly stated as next steps
-- "completed" = finished in this output
-- "suggested" = recommendations, not commitments
-- confidence: how certain you are this is a real task (0.5 = maybe, 0.9 = definitely)
-- Return empty tasks array if no tasks found
-- Keep task text concise but complete`;
+Respond with ONLY valid JSON (no markdown):
+{"tasks": [{"text": "...", "status": "doing|planned|completed|suggested", "confidence": 0.0-1.0}]}
+
+Return empty tasks array [] if no genuine tasks found. Be conservative - when in doubt, don't extract.`;
 
 export class TaskExtractor {
   private activeQuery: Query | null = null;
