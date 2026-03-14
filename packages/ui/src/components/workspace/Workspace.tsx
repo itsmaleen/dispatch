@@ -1268,21 +1268,28 @@ export function Workspace() {
   return (
     <div className="h-full flex flex-col bg-zinc-950">
       {/* Header */}
-      <div className="h-11 flex-shrink-0 bg-zinc-900 border-b border-zinc-800 px-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <span className="text-lg">🦞</span>
-          <span className="text-sm font-medium text-zinc-200">ACC</span>
+      <div className="h-11 flex-shrink-0 bg-zinc-900 border-b border-zinc-800 px-4 flex items-center justify-between drag-region">
+        {/* Left: macOS traffic lights spacing */}
+        <div className="w-20" />
+
+        {/* Center: Title & Workspace Path */}
+        <div className="flex items-center gap-3 flex-1 justify-center">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">📡</span>
+            <span className="text-sm font-semibold text-zinc-100 tracking-wide">Dispatch</span>
+          </div>
+
           <span className="text-zinc-700">|</span>
-          
+
           {/* Workspace Path */}
           {isEditingPath ? (
-            <form 
+            <form
               onSubmit={(e) => {
                 e.preventDefault();
                 setWorkspacePath(pathInput.trim() || null);
                 setIsEditingPath(false);
               }}
-              className="flex items-center gap-1"
+              className="flex items-center gap-1 no-drag"
             >
               <FolderOpen className="w-3.5 h-3.5 text-zinc-500" />
               <input
@@ -1314,7 +1321,7 @@ export function Workspace() {
                 setPathInput(workspacePath || '');
                 setIsEditingPath(true);
               }}
-              className="flex items-center gap-1.5 px-2 py-0.5 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 rounded transition-colors group"
+              className="flex items-center gap-1.5 px-2 py-0.5 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 rounded transition-colors group no-drag"
             >
               <FolderOpen className="w-3.5 h-3.5" />
               <span className="max-w-[200px] truncate">
@@ -1324,7 +1331,9 @@ export function Workspace() {
             </button>
           )}
         </div>
-        <div className="flex items-center gap-2">
+
+        {/* Right: Actions */}
+        <div className="flex items-center gap-2 no-drag">
           <button onClick={fetchAgents} disabled={isLoadingAgents} className="p-1.5 text-zinc-400 hover:text-zinc-200 rounded">
             <RefreshCw className={`w-4 h-4 ${isLoadingAgents ? 'animate-spin' : ''}`} />
           </button>

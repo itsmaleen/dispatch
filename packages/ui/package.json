@@ -41,8 +41,8 @@
     "vite": "^6.2.0"
   },
   "build": {
-    "appId": "com.agentcommandcenter.app",
-    "productName": "Agent Command Center",
+    "appId": "com.dispatch.app",
+    "productName": "Dispatch",
     "directories": {
       "output": "release"
     },
