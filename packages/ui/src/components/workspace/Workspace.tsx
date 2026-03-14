@@ -129,43 +129,6 @@ function tryExtractToolDetail(json: string): string | undefined {
   }
 }
 
-/** Heuristic: extract task-like lines from assistant output (numbered list, "Next steps:", etc.) */
-function extractTasksFromText(text: string, maxTasks = 10): string[] {
-  if (!text || typeof text !== 'string') return [];
-  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  const tasks: string[] = [];
-  let inList = false;
-  const numberBullet = /^\d+[.)]\s*(.+)$/;
-  const dashBullet = /^[-*]\s+(.+)$/;
-
-  for (const line of lines) {
-    const numbered = line.match(numberBullet);
-    if (numbered) {
-      inList = true;
-      tasks.push(numbered[1].trim());
-      continue;
-    }
-    const dashed = line.match(dashBullet);
-    if (dashed && inList) {
-      tasks.push(dashed[1].trim());
-      continue;
-    }
-    if (/^(next steps?|to do|i will|we can|tasks?):?\s*$/i.test(line)) {
-      inList = true;
-      continue;
-    }
-    inList = false;
-  }
-
-  const result = tasks.slice(0, maxTasks).filter(t => t.length > 2);
-  // If no list found but we have substantial text, use first line as a single summary task
-  if (result.length === 0 && text.trim().length > 10) {
-    const first = lines[0];
-    if (first && first.length > 5 && first.length < 200) result.push(first);
-  }
-  return result;
-}
-
 /** Renders step text with markdown-like formatting: **bold** and `code` (as badges for paths/handlers) */
 function PlanStepText({ text }: { text: string }) {
   const parts: React.ReactNode[] = [];
@@ -517,7 +480,7 @@ function TasksWidget({
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
         {steps.length === 0 ? (
           <div className="h-full flex items-center justify-center text-zinc-600 text-sm">
-            No tasks yet. Add tasks or they will appear from terminal output.
+            No tasks yet. Add tasks manually or send a message to track the current step.
           </div>
         ) : (
           steps.map((step, idx) => {
@@ -786,7 +749,8 @@ export function Workspace() {
         if (streamEvent?.type === 'content_block_start') {
           const block = streamEvent.content_block;
           const blockType = block?.type;
-          const blockId = block?.id ?? `block_${blockIndex ?? 0}`;
+          const eventId = msg.uuid ?? crypto.randomUUID();
+          const blockId = block?.id ?? eventId;
 
           if (blockType === 'thinking') {
             const line: TerminalLine = {
@@ -840,7 +804,7 @@ export function Workspace() {
               return {
                 ...t,
                 lines: [...t.lines, {
-                  id: `${Date.now()}`,
+                  id: msg.uuid ?? crypto.randomUUID(),
                   type: 'output' as const,
                   content: delta.text,
                   timestamp: makeTimestamp(),
@@ -873,7 +837,7 @@ export function Workspace() {
               return {
                 ...t,
                 lines: [...t.lines, {
-                  id: `thinking-${Date.now()}`,
+                  id: `thinking-${msg.uuid ?? crypto.randomUUID()}`,
                   type: 'thinking' as const,
                   content: delta.thinking,
                   timestamp: makeTimestamp(),
@@ -994,30 +958,8 @@ export function Workspace() {
         ));
       }
 
-      // Extract suggested tasks from assistant result and merge as unassigned steps
-      if (event.type === 'turn.completed' && event.payload?.result) {
-        const extracted = extractTasksFromText(event.payload.result);
-        if (extracted.length > 0) {
-          setPlanSteps(prev => {
-            const existingNormalized = new Set(prev.map(s => s.text.trim().toLowerCase()));
-            const newSteps: PlanStep[] = extracted
-              .filter(t => {
-                const n = t.trim().toLowerCase();
-                if (existingNormalized.has(n)) return false;
-                existingNormalized.add(n);
-                return true;
-              })
-              .map((text, i) => ({
-                id: `step-extracted-${Date.now()}-${i}`,
-                text: text.trim(),
-                agent: null as string | null,
-                status: 'pending' as const,
-                source: 'extracted' as const,
-              }));
-            return prev.length === 0 && newSteps.length > 0 ? newSteps : [...prev, ...newSteps];
-          });
-        }
-      }
+      // Do NOT auto-extract tasks from assistant result here — heuristic added list items and
+      // intro text as "tasks". Extracted tasks come only from the server (extractor + task store).
     }
   }, []);
 
