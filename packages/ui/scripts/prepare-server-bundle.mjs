@@ -29,13 +29,24 @@ async function main() {
   const pkg = JSON.parse(await readFile(join(serverDir, 'package.json'), 'utf-8'));
   delete pkg.devDependencies;
   pkg.scripts = { start: 'node dist/run.js' };
+  
+  // Remove workspace: protocol dependencies (not supported by npm)
+  // @acc/contracts will be inlined manually below
+  if (pkg.dependencies) {
+    for (const [name, version] of Object.entries(pkg.dependencies)) {
+      if (typeof version === 'string' && version.startsWith('workspace:')) {
+        delete pkg.dependencies[name];
+      }
+    }
+  }
   await writeFile(join(bundleDir, 'package.json'), JSON.stringify(pkg, null, 2));
 
-  // Copy server node_modules - dereference symlinks so bundle is self-contained
-  // bun uses symlinks in node_modules/.bun/, we need actual files for the packaged app
-  await cp(join(serverDir, 'node_modules'), join(bundleDir, 'node_modules'), { 
-    recursive: true,
-    dereference: true,  // Follow symlinks and copy actual files
+  // Install production dependencies fresh in the bundle
+  // This avoids issues with bun's hoisted/symlinked node_modules structure
+  console.log('Installing server dependencies...');
+  execSync('npm install --omit=dev --ignore-scripts --legacy-peer-deps', {
+    cwd: bundleDir,
+    stdio: 'inherit',
   });
 
   // Replace @acc/contracts symlink with real package so the bundle is self-contained
