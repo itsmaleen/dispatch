@@ -1,8 +1,10 @@
 import { CommandCenterServer } from './server';
 
-const server = new CommandCenterServer(3333);
+const port = parseInt(process.env.ACC_SERVER_PORT || '3333', 10);
+const server = new CommandCenterServer(port);
+
 server.start().then(() => {
-  console.log('Server started on port 3333');
+  console.log(`Server started on port ${port}`);
 }).catch(console.error);
 
 process.on('SIGINT', async () => {

@@ -1,7 +1,20 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-const API_URL = 'http://localhost:3333';
+// Dynamic API URL - uses Electron's server port or falls back to default
+function getApiUrl(): string {
+  // In Electron, get port from preload
+  if (typeof window !== 'undefined' && window.electronAPI?.server) {
+    const port = window.electronAPI.server.getPort();
+    return `http://localhost:${port}`;
+  }
+  // Fallback for dev/browser
+  return 'http://localhost:3333';
+}
+
+// Export for use in other modules
+export const getServerUrl = getApiUrl;
+export const getWsUrl = () => getApiUrl().replace('http', 'ws');
 
 export interface Project {
   path: string;
@@ -68,7 +81,7 @@ export interface ThreadSummary {
 export const api = {
   async checkHealth(): Promise<boolean> {
     try {
-      const res = await fetch(`${API_URL}/health`, { signal: AbortSignal.timeout(2000) });
+      const res = await fetch(`${getApiUrl()}/health`, { signal: AbortSignal.timeout(2000) });
       return res.ok;
     } catch {
       return false;
@@ -77,7 +90,7 @@ export const api = {
 
   async checkClaudeCode(): Promise<{ available: boolean; version?: string }> {
     try {
-      const res = await fetch(`${API_URL}/check/claude-code`);
+      const res = await fetch(`${getApiUrl()}/check/claude-code`);
       const data = await res.json();
       return { available: data.available, version: data.version };
     } catch {
@@ -87,7 +100,7 @@ export const api = {
 
   async initClaudeCode(): Promise<{ ok: boolean; error?: string }> {
     try {
-      const res = await fetch(`${API_URL}/adapters/claude-code/init`, { method: 'POST' });
+      const res = await fetch(`${getApiUrl()}/adapters/claude-code/init`, { method: 'POST' });
       const data = await res.json();
       return { ok: data.ok, error: data.error };
     } catch (err) {
@@ -96,7 +109,7 @@ export const api = {
   },
 
   async createTask(message: string, agent?: string): Promise<{ taskId: string }> {
-    const res = await fetch(`${API_URL}/tasks`, {
+    const res = await fetch(`${getApiUrl()}/tasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, agent }),
@@ -107,14 +120,14 @@ export const api = {
   },
 
   async getTask(taskId: string): Promise<Task> {
-    const res = await fetch(`${API_URL}/tasks/${taskId}`);
+    const res = await fetch(`${getApiUrl()}/tasks/${taskId}`);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error);
     return data.task;
   },
 
   async planTask(taskId: string, agent?: string): Promise<{ plan: string; agent: string }> {
-    const url = new URL(`${API_URL}/tasks/${taskId}/plan`);
+    const url = new URL(`${getApiUrl()}/tasks/${taskId}/plan`);
     const res = await fetch(url.toString(), { 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -126,7 +139,7 @@ export const api = {
   },
 
   async executeTask(taskId: string, agent?: string): Promise<{ result: string }> {
-    const res = await fetch(`${API_URL}/tasks/${taskId}/execute`, { 
+    const res = await fetch(`${getApiUrl()}/tasks/${taskId}/execute`, { 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agent }),
@@ -138,7 +151,7 @@ export const api = {
 
   async getAgents(): Promise<Agent[]> {
     try {
-      const res = await fetch(`${API_URL}/agents`);
+      const res = await fetch(`${getApiUrl()}/agents`);
       const data = await res.json();
       return data.agents || [];
     } catch {
@@ -148,7 +161,7 @@ export const api = {
 
   async getAdapters(): Promise<Array<{ id: string; kind: string; state: { status: string } }>> {
     try {
-      const res = await fetch(`${API_URL}/adapters`);
+      const res = await fetch(`${getApiUrl()}/adapters`);
       const data = await res.json();
       return data.adapters || [];
     } catch {
@@ -158,21 +171,21 @@ export const api = {
 
   // Thread API (Phase 2/3)
   async listThreads(): Promise<ThreadSummary[]> {
-    const res = await fetch(`${API_URL}/threads`);
+    const res = await fetch(`${getApiUrl()}/threads`);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error);
     return data.threads;
   },
 
   async getThread(threadId: string): Promise<{ thread: Thread; session: { status: string; currentTurnId?: string } | null }> {
-    const res = await fetch(`${API_URL}/threads/${threadId}`);
+    const res = await fetch(`${getApiUrl()}/threads/${threadId}`);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error);
     return { thread: data.thread, session: data.session };
   },
 
   async createSession(threadId: string, options: { cwd: string; name?: string; worktreePath?: string; resume?: boolean }): Promise<{ threadId: string; session: { status: string; cwd: string } }> {
-    const res = await fetch(`${API_URL}/threads/${threadId}/session`, {
+    const res = await fetch(`${getApiUrl()}/threads/${threadId}/session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(options),
@@ -189,7 +202,7 @@ export const api = {
     maxTurns?: number;
     model?: string;
   }): Promise<{ turnId: string }> {
-    const res = await fetch(`${API_URL}/threads/${threadId}/send`, {
+    const res = await fetch(`${getApiUrl()}/threads/${threadId}/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(options),
@@ -200,15 +213,15 @@ export const api = {
   },
 
   async closeSession(threadId: string): Promise<void> {
-    await fetch(`${API_URL}/threads/${threadId}/close`, { method: 'POST' });
+    await fetch(`${getApiUrl()}/threads/${threadId}/close`, { method: 'POST' });
   },
 
   async deleteThread(threadId: string): Promise<void> {
-    await fetch(`${API_URL}/threads/${threadId}`, { method: 'DELETE' });
+    await fetch(`${getApiUrl()}/threads/${threadId}`, { method: 'DELETE' });
   },
 
   async forkThread(threadId: string, options: { name?: string; fromTurnId?: string }): Promise<Thread> {
-    const res = await fetch(`${API_URL}/threads/${threadId}/fork`, {
+    const res = await fetch(`${getApiUrl()}/threads/${threadId}/fork`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(options),

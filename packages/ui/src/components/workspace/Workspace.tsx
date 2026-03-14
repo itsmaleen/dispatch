@@ -21,15 +21,16 @@ import {
   ChevronRight,
   ChevronLeft,
 } from 'lucide-react';
-import { api } from '../../stores/app';
+import { api, getServerUrl, getWsUrl } from '../../stores/app';
 import { ChatInput, type UploadedFile } from './ChatInput';
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
-const API_URL = 'http://localhost:3333';
-const WS_URL = 'ws://localhost:3333/events';
+// Dynamic URLs - resolved at runtime for Electron compatibility
+const getApiUrl = () => getServerUrl();
+const getWebSocketUrl = () => `${getWsUrl()}/events`;
 
 type AgentStatus = 'ready' | 'busy' | 'offline';
 type TerminalLineType = 'prompt' | 'thinking' | 'tool_call' | 'tool_result' | 'output' | 'error' | 'info' | 'command' | 'system';
@@ -697,7 +698,7 @@ export function Workspace() {
       const ccStatus = await api.checkClaudeCode();
       
       // Fetch OpenClaw agents
-      const res = await fetch(`${API_URL}/agents`);
+      const res = await fetch(`${getApiUrl()}/agents`);
       const data = await res.json();
       const openclawAgents = (data.agents || []).map((a: any) => ({
         id: a.name,
@@ -1014,8 +1015,8 @@ export function Workspace() {
 
   // WebSocket connection for streaming events
   useEffect(() => {
-    console.log('[WS] Connecting to', WS_URL);
-    const ws = new WebSocket(WS_URL);
+    console.log('[WS] Connecting to', getWebSocketUrl());
+    const ws = new WebSocket(getWebSocketUrl());
     wsRef.current = ws;
 
     ws.onopen = () => console.log('[WS] Connected');
@@ -1054,7 +1055,7 @@ export function Workspace() {
     // Close thread session if exists
     if (terminal?.threadId) {
       try {
-        await fetch(`${API_URL}/threads/${terminal.threadId}/close`, { method: 'POST' });
+        await fetch(`${getApiUrl()}/threads/${terminal.threadId}/close`, { method: 'POST' });
       } catch (err) {
         console.warn('Failed to close thread session:', err);
       }
@@ -1106,7 +1107,7 @@ export function Workspace() {
       // Create thread/session if needed (Phase 2/3)
       if (!threadId) {
         threadId = `thread-${terminalId}`;
-        const sessionRes = await fetch(`${API_URL}/threads/${threadId}/session`, {
+        const sessionRes = await fetch(`${getApiUrl()}/threads/${threadId}/session`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
@@ -1125,7 +1126,7 @@ export function Workspace() {
       }
 
       // Send via thread API (persistent session)
-      let res = await fetch(`${API_URL}/threads/${threadId}/send`, {
+      let res = await fetch(`${getApiUrl()}/threads/${threadId}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message }),
@@ -1137,7 +1138,7 @@ export function Workspace() {
         setTerminals(prev => prev.map(t =>
           t.id === terminalId ? { ...t, threadId: undefined, sessionActive: false } : t
         ));
-        const sessionRes = await fetch(`${API_URL}/threads/${threadId}/session`, {
+        const sessionRes = await fetch(`${getApiUrl()}/threads/${threadId}/session`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ cwd, name: `${terminal.agent.name} - ${new Date().toLocaleString()}` }),
@@ -1147,7 +1148,7 @@ export function Workspace() {
         setTerminals(prev => prev.map(t =>
           t.id === terminalId ? { ...t, threadId, sessionActive: true } : t
         ));
-        res = await fetch(`${API_URL}/threads/${threadId}/send`, {
+        res = await fetch(`${getApiUrl()}/threads/${threadId}/send`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message }),

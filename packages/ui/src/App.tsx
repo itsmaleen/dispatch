@@ -6,7 +6,7 @@ import { AgentsPanel } from "./components/agents/AgentsPanel";
 import { WidgetDemo } from "./components/demo/WidgetDemo";
 import { WorkspaceDemo } from "./components/demo/WorkspaceDemo";
 import { Workspace } from "./components/workspace/Workspace";
-import { useAppStore, api, type Task } from "./stores/app";
+import { useAppStore, api, getServerUrl, type Task } from "./stores/app";
 import { Settings, FolderOpen, Users, Layout } from "lucide-react";
 
 type View =
@@ -17,7 +17,8 @@ type View =
   | "workspace"
   | "workspace-real";
 
-const ACC_SERVER_URL = "localhost:3333";
+// Dynamic server URL (from Electron or default)
+const getAccServerUrl = () => getServerUrl().replace('http://', '');
 
 export function App() {
   const {
@@ -292,7 +293,7 @@ export function App() {
       <AgentsPanel
         isOpen={showAgentsPanel}
         onClose={() => setShowAgentsPanel(false)}
-        serverUrl={ACC_SERVER_URL}
+        serverUrl={getAccServerUrl()}
       />
     </div>
   );

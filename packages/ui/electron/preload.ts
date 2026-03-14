@@ -6,9 +6,27 @@
 
 import { contextBridge, ipcRenderer } from "electron";
 
+// Track server port (updated via IPC from main)
+let serverPort = 3333;
+
+ipcRenderer.on("server-info", (_event, info: { port: number }) => {
+  serverPort = info.port;
+});
+
 // Expose protected methods that allow the renderer process to use
 // ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld("electronAPI", {
+  // Server info
+  server: {
+    getInfo: () => ipcRenderer.invoke("server:info"),
+    getPort: () => serverPort,
+    onInfo: (callback: (info: { port: number }) => void) => {
+      const handler = (_event: unknown, info: { port: number }) => callback(info);
+      ipcRenderer.on("server-info", handler);
+      return () => ipcRenderer.removeListener("server-info", handler);
+    },
+  },
+
   // Adapter operations
   adapter: {
     connect: (adapterId: string, config: unknown) =>
@@ -52,6 +70,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
 declare global {
   interface Window {
     electronAPI: {
+      server: {
+        getInfo: () => Promise<{ port: number; pid?: number }>;
+        getPort: () => number;
+        onInfo: (callback: (info: { port: number }) => void) => () => void;
+      };
       adapter: {
         connect: (
           adapterId: string,

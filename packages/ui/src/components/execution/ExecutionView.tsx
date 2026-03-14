@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ArrowLeft, Loader2, CheckCircle, XCircle, Clock, Zap, Activity } from 'lucide-react';
-import { api, useAppStore } from '../../stores/app';
+import { api, useAppStore, getWsUrl } from '../../stores/app';
 import { ActivityLog, type ActivityEntry } from './ActivityLog';
 
 interface ExecutionViewProps {
@@ -12,7 +12,8 @@ interface ExecutionViewProps {
   onComplete: () => void;
 }
 
-const WS_URL = 'ws://localhost:3333';
+// Dynamic WebSocket URL for Electron compatibility
+const getWebSocketUrl = () => getWsUrl();
 
 export function ExecutionView({ taskId, initialStatus, initialResult, initialAgent, onBack, onComplete }: ExecutionViewProps) {
   const { updateTask } = useAppStore();
@@ -100,7 +101,7 @@ export function ExecutionView({ taskId, initialStatus, initialResult, initialAge
   useEffect(() => {
     if (isAlreadyDone) return;
 
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocket(getWebSocketUrl());
     wsRef.current = ws;
 
     ws.onmessage = (e) => {
