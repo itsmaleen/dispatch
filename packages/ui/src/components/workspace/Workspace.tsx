@@ -60,6 +60,8 @@ interface TerminalLine {
   content: string;
   timestamp?: string;
   isStreaming?: boolean;
+  /** Block index for tool_call lines (used to match input_json_delta updates) */
+  blockIndex?: number;
 }
 
 interface TerminalState {
@@ -100,6 +102,30 @@ function getAgentIcon(agent: { type: string; name: string }): string {
   if (name.includes('vera')) return '✨';
   if (name.includes('echo')) return '📢';
   return '🤖';
+}
+
+/** Extract human-readable detail (path, command, etc.) from tool input JSON (full or partial) */
+function tryExtractToolDetail(json: string): string | undefined {
+  try {
+    const input = JSON.parse(json);
+    if (input.path) return input.path;
+    if (input.file_path) return input.file_path;
+    if (input.file) return input.file;
+    if (input.command) {
+      const cmd = String(input.command);
+      return cmd.length > 60 ? cmd.slice(0, 57) + '...' : cmd;
+    }
+    if (input.pattern) return input.pattern;
+    if (input.query) return input.query;
+    if (input.regex) return input.regex;
+    return undefined;
+  } catch {
+    const pathMatch = json.match(/"(?:path|file_path|file)"\s*:\s*"([^"]+)"/);
+    if (pathMatch) return pathMatch[1];
+    const cmdMatch = json.match(/"command"\s*:\s*"([^"]{1,60})/);
+    if (cmdMatch) return cmdMatch[1] + (json.includes(cmdMatch[0] + '"') ? '' : '...');
+    return undefined;
+  }
 }
 
 /** Heuristic: extract task-like lines from assistant output (numbered list, "Next steps:", etc.) */
@@ -660,6 +686,8 @@ export function Workspace() {
   const wsRef = useRef<WebSocket | null>(null);
   const terminalsRef = useRef<TerminalState[]>(terminals);
   terminalsRef.current = terminals;
+  /** Accumulate tool input JSON per block index (for input_json_delta) */
+  const toolInputByBlockRef = useRef<Record<number, string>>({});
 
   // Fetch agents on mount
   const fetchAgents = useCallback(async () => {
@@ -764,12 +792,15 @@ export function Workspace() {
             ));
           } else if (blockType === 'tool_use' || blockType === 'server_tool_use') {
             const toolName = block?.name ?? 'Tool';
+            const idx = blockIndex ?? 0;
+            toolInputByBlockRef.current[idx] = '';
             const line: TerminalLine = {
               id: `tool-${blockId}`,
               type: 'tool_call',
               content: toolName,
               timestamp: makeTimestamp(),
               isStreaming: true,
+              blockIndex: idx,
             };
             setTerminals(prev => prev.map(t =>
               matchesTerminal(t) ? { ...t, lines: [...t.lines, line], isStreaming: true } : t
@@ -842,6 +873,31 @@ export function Workspace() {
                 isStreaming: true,
               };
             }));
+          } else if (deltaType === 'input_json_delta' && delta.partial_json != null) {
+            // Accumulate tool input JSON and update tool_call line with human-readable detail
+            const blockIdx = streamEvent?.index;
+            if (typeof blockIdx === 'number') {
+              const acc = (toolInputByBlockRef.current[blockIdx] || '') + delta.partial_json;
+              toolInputByBlockRef.current[blockIdx] = acc;
+              const detail = tryExtractToolDetail(acc);
+              if (detail != null) {
+                setTerminals(prev => prev.map(t => {
+                  if (!matchesTerminal(t)) return t;
+                  const lineIdx = t.lines.findIndex(
+                    (l) => l.type === 'tool_call' && l.blockIndex === blockIdx
+                  );
+                  if (lineIdx < 0) return t;
+                  const line = t.lines[lineIdx];
+                  const baseContent = line.content.includes(': ') ? line.content.split(': ')[0] : line.content;
+                  return {
+                    ...t,
+                    lines: t.lines.map((l, i) =>
+                      i === lineIdx ? { ...l, content: `${baseContent}: ${detail}` } : l
+                    ),
+                  };
+                }));
+              }
+            }
           }
         }
       }
@@ -907,6 +963,7 @@ export function Workspace() {
 
     // Handle turn/item completion: update terminal streaming state and sync plan step + cost
     if (event.type === 'turn.completed' || event.type === 'item.completed') {
+      if (event.type === 'turn.completed') toolInputByBlockRef.current = {};
       const matchedTerminal = terminalsRef.current.find(matchesTerminal);
       const stepIdToComplete = matchedTerminal?.currentStepId;
       const usage = event.type === 'turn.completed' ? event.payload?.usage : undefined;
