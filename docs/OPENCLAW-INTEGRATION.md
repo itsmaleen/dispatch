@@ -1,6 +1,6 @@
 # OpenClaw Integration Guide
 
-This guide explains how to connect an OpenClaw instance to the Agent Command Center (ACC).
+This guide explains how to connect an OpenClaw instance to Dispatch (ACC).
 
 ## Architecture
 

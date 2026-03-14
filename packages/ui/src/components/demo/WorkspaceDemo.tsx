@@ -882,7 +882,7 @@ export function WorkspaceDemo() {
       <div className="h-11 flex-shrink-0 bg-zinc-900 border-b border-zinc-800 px-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <span className="text-lg">{'\u{1F99E}'}</span>
-          <span className="text-sm font-medium text-zinc-200">Agent Command Center</span>
+          <span className="text-sm font-medium text-zinc-200">Dispatch</span>
           <span className="text-zinc-600">{'\u2022'}</span>
           <span className="text-sm text-zinc-500">agent-command-center</span>
         </div>

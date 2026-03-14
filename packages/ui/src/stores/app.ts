@@ -66,6 +66,15 @@ export interface ThreadSummary {
 
 // API functions
 export const api = {
+  async checkHealth(): Promise<boolean> {
+    try {
+      const res = await fetch(`${API_URL}/health`, { signal: AbortSignal.timeout(2000) });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+
   async checkClaudeCode(): Promise<{ available: boolean; version?: string }> {
     try {
       const res = await fetch(`${API_URL}/check/claude-code`);
@@ -128,9 +137,13 @@ export const api = {
   },
 
   async getAgents(): Promise<Agent[]> {
-    const res = await fetch(`${API_URL}/agents`);
-    const data = await res.json();
-    return data.agents || [];
+    try {
+      const res = await fetch(`${API_URL}/agents`);
+      const data = await res.json();
+      return data.agents || [];
+    } catch {
+      return [];
+    }
   },
 
   async getAdapters(): Promise<Array<{ id: string; kind: string; state: { status: string } }>> {
@@ -215,6 +228,7 @@ interface AppState {
   agents: Agent[];
   claudeCodeAvailable: boolean;
   claudeCodeVersion: string | null;
+  serverOffline: boolean;
   
   // Tasks
   tasks: Task[];
@@ -246,6 +260,7 @@ export const useAppStore = create<AppState>()(
       agents: [],
       claudeCodeAvailable: false,
       claudeCodeVersion: null,
+      serverOffline: false,
       tasks: [],
       activeTaskId: null,
       widgetLayouts: {},
@@ -309,19 +324,20 @@ export const useAppStore = create<AppState>()(
       },
 
       refreshAgentStatus: async () => {
-        // Check Claude Code
+        const ok = await api.checkHealth();
+        set({ serverOffline: !ok });
+        if (!ok) return;
+
         const ccStatus = await api.checkClaudeCode();
-        set({ 
-          claudeCodeAvailable: ccStatus.available, 
-          claudeCodeVersion: ccStatus.version ?? null 
+        set({
+          claudeCodeAvailable: ccStatus.available,
+          claudeCodeVersion: ccStatus.version ?? null,
         });
 
-        // If available, ensure adapter is initialized
         if (ccStatus.available) {
           await api.initClaudeCode();
         }
 
-        // Fetch OpenClaw agents
         const agents = await api.getAgents();
         set({
           agents: agents.map((a: any) => ({

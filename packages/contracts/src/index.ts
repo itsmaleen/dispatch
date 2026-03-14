@@ -1,4 +1,4 @@
-// Agent Command Center - Shared Contracts
+// Dispatch - Shared Contracts
 
 export * from './adapter';
 export * from './events';

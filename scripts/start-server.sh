@@ -21,7 +21,7 @@ fi
 # Start server
 echo "🚀 Starting ACC server..."
 cd "$SERVER_DIR"
-nohup bun run run.ts > "$LOG_FILE" 2>&1 &
+nohup bun run src/run.ts > "$LOG_FILE" 2>&1 &
 echo $! > "$PID_FILE"
 
 sleep 2

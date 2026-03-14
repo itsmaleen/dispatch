@@ -1,6 +1,18 @@
-import { useState } from 'react';
-import { useAppStore, type Project, type Agent, type Task } from '../../stores/app';
-import { FolderOpen, ArrowRight, Folder, Users, Clock, Zap } from 'lucide-react';
+import { useState } from "react";
+import {
+  useAppStore,
+  type Project,
+  type Agent,
+  type Task,
+} from "../../stores/app";
+import {
+  FolderOpen,
+  ArrowRight,
+  Folder,
+  Users,
+  Clock,
+  Zap,
+} from "lucide-react";
 
 interface HomePageProps {
   onStartTask: (message: string) => void;
@@ -8,37 +20,38 @@ interface HomePageProps {
 }
 
 export function HomePage({ onStartTask, onOpenTask }: HomePageProps) {
-  const { currentProject, recentProjects, agents, tasks, setProject } = useAppStore();
-  const [pathInput, setPathInput] = useState('');
-  const [taskInput, setTaskInput] = useState('');
+  const { currentProject, recentProjects, agents, tasks, setProject } =
+    useAppStore();
+  const [pathInput, setPathInput] = useState("");
+  const [taskInput, setTaskInput] = useState("");
 
   const handleOpenFolder = async () => {
     // Use Electron's dialog via IPC
     if (window.electronAPI?.openFolder) {
       const path = await window.electronAPI.openFolder();
       if (path) {
-        const name = path.split('/').pop() || path;
+        const name = path.split("/").pop() || path;
         setProject({ path, name, lastOpened: Date.now() });
       }
     } else {
       // Fallback for browser dev
-      console.log('Open folder dialog (Electron only)');
+      console.log("Open folder dialog (Electron only)");
     }
   };
 
   const handlePathSubmit = () => {
     if (pathInput.trim()) {
       const path = pathInput.trim();
-      const name = path.split('/').pop() || path;
+      const name = path.split("/").pop() || path;
       setProject({ path, name, lastOpened: Date.now() });
-      setPathInput('');
+      setPathInput("");
     }
   };
 
   const handleTaskSubmit = () => {
     if (taskInput.trim()) {
       onStartTask(taskInput.trim());
-      setTaskInput('');
+      setTaskInput("");
     }
   };
 
@@ -55,7 +68,7 @@ export function HomePage({ onStartTask, onOpenTask }: HomePageProps) {
           <div className="text-center space-y-4">
             <div className="text-6xl">🦞</div>
             <h1 className="text-2xl font-semibold text-zinc-100">
-              Welcome to Agent Command Center
+              Welcome to Dispatch
             </h1>
             <p className="text-zinc-400">
               Open a project to start working with AI agents
@@ -77,7 +90,7 @@ export function HomePage({ onStartTask, onOpenTask }: HomePageProps) {
               type="text"
               value={pathInput}
               onChange={(e) => setPathInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handlePathSubmit()}
+              onKeyDown={(e) => e.key === "Enter" && handlePathSubmit()}
               placeholder="/path/to/project"
               className="w-full px-4 py-3 bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
             />
@@ -108,8 +121,12 @@ export function HomePage({ onStartTask, onOpenTask }: HomePageProps) {
                   >
                     <Folder className="w-5 h-5 text-zinc-400" />
                     <div className="flex-1 min-w-0">
-                      <div className="text-zinc-100 truncate">{project.name}</div>
-                      <div className="text-xs text-zinc-500 truncate">{project.path}</div>
+                      <div className="text-zinc-100 truncate">
+                        {project.name}
+                      </div>
+                      <div className="text-xs text-zinc-500 truncate">
+                        {project.path}
+                      </div>
                     </div>
                   </button>
                 ))}
@@ -122,7 +139,7 @@ export function HomePage({ onStartTask, onOpenTask }: HomePageProps) {
   }
 
   // Project loaded - Active state
-  const connectedAgents = agents.filter((a) => a.status !== 'offline');
+  const connectedAgents = agents.filter((a) => a.status !== "offline");
   const recentTasks = tasks.slice(0, 5);
 
   return (
@@ -144,7 +161,7 @@ export function HomePage({ onStartTask, onOpenTask }: HomePageProps) {
               value={taskInput}
               onChange={(e) => setTaskInput(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
+                if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   handleTaskSubmit();
                 }
@@ -166,9 +183,9 @@ export function HomePage({ onStartTask, onOpenTask }: HomePageProps) {
           {/* Example tasks */}
           <div className="flex flex-wrap gap-2 justify-center">
             {[
-              'Fix the login bug in auth.ts',
-              'Add dark mode to settings',
-              'Review PR #42',
+              "Fix the login bug in auth.ts",
+              "Add dark mode to settings",
+              "Review PR #42",
             ].map((example) => (
               <button
                 key={example}
@@ -213,7 +230,11 @@ export function HomePage({ onStartTask, onOpenTask }: HomePageProps) {
           <div className="space-y-2">
             {recentTasks.length > 0 ? (
               recentTasks.map((task) => (
-                <TaskCard key={task.id} task={task} onClick={onOpenTask ? () => onOpenTask(task) : undefined} />
+                <TaskCard
+                  key={task.id}
+                  task={task}
+                  onClick={onOpenTask ? () => onOpenTask(task) : undefined}
+                />
               ))
             ) : (
               <div className="text-zinc-500 text-sm">No tasks yet</div>
@@ -227,9 +248,9 @@ export function HomePage({ onStartTask, onOpenTask }: HomePageProps) {
 
 function AgentCard({ agent }: { agent: Agent }) {
   const statusColor = {
-    idle: 'bg-green-500',
-    busy: 'bg-amber-500',
-    offline: 'bg-zinc-500',
+    idle: "bg-green-500",
+    busy: "bg-amber-500",
+    offline: "bg-zinc-500",
   }[agent.status];
 
   return (
@@ -238,8 +259,8 @@ function AgentCard({ agent }: { agent: Agent }) {
       <div>
         <div className="text-zinc-100 font-medium">{agent.name}</div>
         <div className="text-xs text-zinc-500">
-          {agent.status === 'busy' && agent.currentFiles
-            ? agent.currentFiles.join(', ')
+          {agent.status === "busy" && agent.currentFiles
+            ? agent.currentFiles.join(", ")
             : agent.status}
         </div>
       </div>
@@ -254,22 +275,23 @@ function TaskCard({
   task: { id: string; message: string; status: string; createdAt: number };
   onClick?: () => void;
 }) {
-  const statusIcon = {
-    planning: '📝',
-    executing: '🔄',
-    review: '👀',
-    completed: '✅',
-    failed: '❌',
-  }[task.status] || '⏳';
+  const statusIcon =
+    {
+      planning: "📝",
+      executing: "🔄",
+      review: "👀",
+      completed: "✅",
+      failed: "❌",
+    }[task.status] || "⏳";
 
   const timeAgo = getTimeAgo(task.createdAt);
 
   return (
     <div
-      role={onClick ? 'button' : undefined}
+      role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
       onClick={onClick}
-      onKeyDown={onClick ? (e) => e.key === 'Enter' && onClick() : undefined}
+      onKeyDown={onClick ? (e) => e.key === "Enter" && onClick() : undefined}
       className="flex items-start gap-3 px-3 py-2 bg-zinc-800/50 hover:bg-zinc-800 rounded-lg cursor-pointer transition-colors"
     >
       <span>{statusIcon}</span>
@@ -283,7 +305,7 @@ function TaskCard({
 
 function getTimeAgo(timestamp: number): string {
   const seconds = Math.floor((Date.now() - timestamp) / 1000);
-  if (seconds < 60) return 'just now';
+  if (seconds < 60) return "just now";
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);

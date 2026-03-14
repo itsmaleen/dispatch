@@ -9,6 +9,7 @@ out/
 
 # Electron
 release/
+server-bundle/
 
 # Logs
 *.log

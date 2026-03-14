@@ -1,4 +1,4 @@
-import { CommandCenterServer } from './src/server';
+import { CommandCenterServer } from './server';
 
 const server = new CommandCenterServer(3333);
 server.start().then(() => {

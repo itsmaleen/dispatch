@@ -1,4 +1,4 @@
-# Agent Command Center
+# Dispatch
 
 Orchestrate AI coding agents from a unified interface. Built around four pillars: **Task Alignment**, **Steerability**, **Verifiability**, and **Adaptability**.
 
@@ -21,10 +21,39 @@ bun install
 cd packages/contracts && bun run build
 
 # Start server (port 3333)
-cd packages/server && bun run.ts
+cd packages/server && bun run run.ts
 
 # Start UI (separate terminal)
 cd packages/ui && bun dev
+```
+
+When you run the Electron app (dev or installed), it will auto-start the server if it’s not already running.
+
+## Build
+
+Build all packages (contracts, server, UI):
+
+```bash
+bun install
+bun run build
+```
+
+Build the Electron app and install it to `/Applications` (macOS):
+
+```bash
+bun run install:app
+```
+
+This produces a DMG under `packages/ui/release/`, mounts it, and copies **Dispatch.app** to `/Applications`. Then run the app from Spotlight (Cmd+Space → “Dispatch”) or:
+
+```bash
+open '/Applications/Dispatch.app'
+```
+
+The server does not auto-start when running the installed app (it’s not bundled). Start it manually if needed:
+
+```bash
+./scripts/start-server.sh
 ```
 
 ## Architecture
@@ -113,8 +142,8 @@ bun run typecheck
 # Run server in watch mode
 cd packages/server && bun run dev
 
-# Run Electron app
-cd packages/ui && bun run electron:dev
+# Run Electron app (Vite + Electron)
+cd packages/ui && bun dev
 ```
 
 ## Stack

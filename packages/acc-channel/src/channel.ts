@@ -1,7 +1,7 @@
 /**
  * ACC Channel Implementation
  * 
- * WebSocket-based channel for Agent Command Center integration.
+ * WebSocket-based channel for Dispatch integration.
  */
 
 import type {
@@ -112,10 +112,10 @@ export const accChannelPlugin: ChannelPlugin = {
   
   meta: {
     id: "acc",
-    label: "Agent Command Center",
+    label: "Dispatch",
     selectionLabel: "ACC (WebSocket)",
     docsPath: "/channels/acc",
-    blurb: "Connect OpenClaw to Agent Command Center via WebSocket.",
+    blurb: "Connect OpenClaw to Dispatch via WebSocket.",
     aliases: ["acc", "command-center"],
   },
 

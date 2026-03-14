@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build and install Agent Command Center to /Applications
+# Build and install Dispatch to /Applications
 # Run from project root: ./scripts/build-and-install.sh
 
 set -e
@@ -7,10 +7,10 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 RELEASE_DIR="$PROJECT_DIR/packages/ui/release"
-APP_NAME="Agent Command Center"
+APP_NAME="Dispatch"
 DMG_NAME="$APP_NAME-0.1.0-arm64.dmg"
 
-echo "🔨 Building Agent Command Center..."
+echo "🔨 Building Dispatch..."
 cd "$PROJECT_DIR"
 bun run build
 
@@ -43,4 +43,4 @@ hdiutil detach "$VOLUME_NAME" -quiet
 echo "✅ Installed to /Applications/$APP_NAME.app"
 echo ""
 echo "To run: open '/Applications/$APP_NAME.app'"
-echo "Or use Spotlight: Cmd+Space → 'Agent Command Center'"
+echo "Or use Spotlight: Cmd+Space → 'Dispatch'"

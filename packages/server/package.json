@@ -5,8 +5,8 @@
   "type": "module",
   "main": "./dist/index.js",
   "scripts": {
-    "dev": "tsx watch run.ts",
-    "build": "tsup src/index.ts --format esm --dts",
+    "dev": "tsx watch src/run.ts",
+    "build": "tsup src/index.ts src/run.ts --format esm --dts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "watch-output": "node scripts/watch-output.mjs"

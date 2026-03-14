@@ -1,6 +1,26 @@
 # ACC Channel Plugin
 
-Native OpenClaw channel plugin for Agent Command Center.
+Native OpenClaw channel plugin for Dispatch.
+
+## Build
+
+From the **repo root** (recommended; installs workspace deps and builds this package):
+
+```bash
+cd agent-command-center   # or your clone path
+bun install
+bun run build
+```
+
+From **this package only** (if the repo is already built):
+
+```bash
+cd packages/acc-channel
+bun install
+bun run build
+```
+
+Output: `dist/index.js` and `dist/index.d.ts`. The plugin is loaded via `dist/index.js` in `package.json` `openclaw.extensions`.
 
 ## Quick Install
 
@@ -14,8 +34,10 @@ openclaw plugins install @acc/channel-plugin
 
 ```bash
 git clone https://github.com/moltyfromclaw/agent-command-center.git
-cd agent-command-center/packages/acc-channel
-pnpm install && pnpm build
+cd agent-command-center
+bun install
+bun run build
+cd packages/acc-channel
 openclaw plugins install .
 ```
 

@@ -1,6 +1,6 @@
 # ACC Channel Plugin for OpenClaw
 
-> Native channel plugin that makes Agent Command Center a first-class OpenClaw surface (like Telegram/Discord).
+> Native channel plugin that makes Dispatch a first-class OpenClaw surface (like Telegram/Discord).
 
 ## Overview
 
@@ -196,7 +196,7 @@ Headers:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Agent Command Center                      │
+│                         Dispatch                             │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
 │  │   Task UI   │  │  Dashboard  │  │   Widgets   │         │
 │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘         │

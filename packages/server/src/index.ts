@@ -1,5 +1,5 @@
 /**
- * Agent Command Center - Server
+ * Dispatch - Server
  * 
  * Provides:
  * - Adapter management (Claude Code, OpenClaw)

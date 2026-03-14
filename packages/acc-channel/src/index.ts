@@ -1,7 +1,7 @@
 /**
  * ACC Channel Plugin for OpenClaw
  * 
- * Connects OpenClaw instances to Agent Command Center for orchestration.
+ * Connects OpenClaw instances to Dispatch for orchestration.
  * Bidirectional WebSocket communication for tasks and streaming responses.
  */
 

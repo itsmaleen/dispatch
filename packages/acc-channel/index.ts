@@ -1,7 +1,7 @@
 /**
  * ACC Channel Plugin for OpenClaw
  * 
- * Native channel integration for Agent Command Center.
+ * Native channel integration for Dispatch.
  * Makes ACC a first-class messaging surface like Telegram/Discord.
  */
 
@@ -12,8 +12,8 @@ import { setAccRuntime } from "./src/runtime.js";
 
 const plugin = {
   id: "acc-channel",
-  name: "Agent Command Center",
-  description: "Native channel plugin for Agent Command Center integration",
+  name: "Dispatch",
+  description: "Native channel plugin for Dispatch integration",
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     setAccRuntime(api.runtime);

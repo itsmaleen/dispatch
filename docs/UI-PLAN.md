@@ -15,7 +15,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  🦞 Agent Command Center                    [Settings] [Agents] │
+│  🦞 Dispatch                                [Settings] [Agents] │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐   │
@@ -323,13 +323,13 @@ Using **shadcn/ui** (already in UI package) + custom:
 ### No Project Loaded (Capy-style blank)
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  🦞 Agent Command Center                              [Agents]  │
+│  🦞 Dispatch                                              [Agents]  │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │                                                                 │
 │                         🦞                                      │
 │                                                                 │
-│              Welcome to Agent Command Center                    │
+│                    Welcome to Dispatch                          │
 │                                                                 │
 │         Open a project to start working with AI agents          │
 │                                                                 │

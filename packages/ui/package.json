@@ -7,8 +7,9 @@
     "dev": "bun run --parallel dev:vite dev:electron",
     "dev:vite": "vite",
     "dev:electron": "bun run scripts/dev-electron.mjs",
-    "build": "vite build && bun run build:electron",
-    "build:electron": "electron-builder",
+    "build": "vite build && node scripts/prepare-server-bundle.mjs && bun run build:electron",
+    "build:electron": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder",
+    "build:electron:sign": "electron-builder",
     "start": "electron .",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/"
@@ -50,9 +51,13 @@
       "dist/**/*",
       "dist-electron/**/*"
     ],
+    "extraResources": [
+      { "from": "server-bundle", "to": "server" }
+    ],
     "mac": {
       "target": ["dmg", "zip"],
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "identity": null
     },
     "win": {
       "target": ["nsis", "zip"]

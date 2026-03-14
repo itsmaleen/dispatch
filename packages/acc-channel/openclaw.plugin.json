@@ -1,7 +1,7 @@
 {
   "id": "acc-channel",
-  "name": "Agent Command Center Channel",
-  "description": "Native channel plugin for Agent Command Center integration",
+  "name": "Dispatch Channel",
+  "description": "Native channel plugin for Dispatch integration",
   "version": "0.1.0",
   "channels": ["acc"],
   "configSchema": {
