@@ -1,15 +1,41 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-// Dynamic API URL - uses Electron's server port or falls back to default
+const DEFAULT_SERVER_PORT = 3333;
+const PORT_DISCOVERY_MAX = 50; // try 3333..3362
+
+// Dynamic API URL - uses Electron's server port or discovered port in dev
 function getApiUrl(): string {
   // In Electron, get port from preload
   if (typeof window !== 'undefined' && window.electronAPI?.server) {
     const port = window.electronAPI.server.getPort();
     return `http://localhost:${port}`;
   }
-  // Fallback for dev/browser
-  return 'http://localhost:3333';
+  // In browser/dev: use discovered port from store, or default
+  if (typeof window !== 'undefined') {
+    const port = useAppStore.getState().serverPort ?? DEFAULT_SERVER_PORT;
+    return `http://localhost:${port}`;
+  }
+  return `http://localhost:${DEFAULT_SERVER_PORT}`;
+}
+
+/** Probe ports 3333..3333+PORT_DISCOVERY_MAX and set store when server is found. Call when in browser dev. */
+export async function discoverServerPort(): Promise<number> {
+  for (let p = DEFAULT_SERVER_PORT; p < DEFAULT_SERVER_PORT + PORT_DISCOVERY_MAX; p++) {
+    try {
+      const res = await fetch(`http://localhost:${p}/health`, { signal: AbortSignal.timeout(500) });
+      if (res.ok) {
+        const data = (await res.json()) as { ok?: boolean; port?: number };
+        const port = typeof data?.port === 'number' ? data.port : p;
+        useAppStore.getState().setServerPort(port);
+        return port;
+      }
+    } catch {
+      // try next port
+    }
+  }
+  useAppStore.getState().setServerPort(DEFAULT_SERVER_PORT);
+  return DEFAULT_SERVER_PORT;
 }
 
 // Export for use in other modules
@@ -233,10 +259,13 @@ export const api = {
 };
 
 interface AppState {
+  // Server (not persisted; discovered in dev when not in Electron)
+  serverPort: number;
+
   // Project
   currentProject: Project | null;
   recentProjects: Project[];
-  
+
   // Agents
   agents: Agent[];
   claudeCodeAvailable: boolean;
@@ -251,6 +280,7 @@ interface AppState {
   widgetLayouts: Record<string, any>;
   
   // Actions
+  setServerPort: (port: number) => void;
   setProject: (project: Project | null) => void;
   addRecentProject: (project: Project) => void;
   setAgents: (agents: Agent[]) => void;
@@ -268,6 +298,7 @@ interface AppState {
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
+      serverPort: DEFAULT_SERVER_PORT,
       currentProject: null,
       recentProjects: [],
       agents: [],
@@ -277,6 +308,8 @@ export const useAppStore = create<AppState>()(
       tasks: [],
       activeTaskId: null,
       widgetLayouts: {},
+
+      setServerPort: (port) => set({ serverPort: port }),
 
       setProject: (project) => {
         set({ currentProject: project });

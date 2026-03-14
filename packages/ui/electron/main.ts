@@ -29,6 +29,8 @@ const RESTART_BACKOFF_BASE_MS = 1000;
 const RESTART_BACKOFF_MAX_MS = 30000;
 const SERVER_STARTUP_TIMEOUT_MS = 10000;
 const LOG_DIR = path.join(os.homedir(), ".acc", "logs");
+const PORT_FILE_POLL_MS = 50;
+const PORT_FILE_TIMEOUT_MS = 5000;
 
 // ============ State ============
 
@@ -91,6 +93,31 @@ async function findAvailablePort(start: number = DEFAULT_SERVER_PORT): Promise<n
   }
   // Fallback to random port
   return start + Math.floor(Math.random() * 1000);
+}
+
+/** Poll for server-written port file (server may bind to different port on EADDRINUSE). */
+async function readPortFile(portFilePath: string): Promise<number | null> {
+  const deadline = Date.now() + PORT_FILE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    try {
+      if (fs.existsSync(portFilePath)) {
+        const raw = fs.readFileSync(portFilePath, "utf8").trim();
+        const port = parseInt(raw, 10);
+        if (Number.isFinite(port) && port > 0 && port < 65536) {
+          try {
+            fs.unlinkSync(portFilePath);
+          } catch {
+            // ignore
+          }
+          return port;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    await new Promise((r) => setTimeout(r, PORT_FILE_POLL_MS));
+  }
+  return null;
 }
 
 // ============ Health Check ============
@@ -177,10 +204,13 @@ async function startServer(): Promise<boolean> {
     path.join(os.homedir(), ".nvm/versions/node/v20.19.0/bin"),
   ].join(path.delimiter);
   
+  // Server may bind to a different port if requested port is in use; it writes actual port to ACC_PORT_FILE
+  const portFilePath = path.join(os.tmpdir(), `acc-server-port-${process.pid}-${Date.now()}.txt`);
   const env = {
     ...process.env,
     PATH: `${extraPaths}${path.delimiter}${process.env.PATH || ""}`,
     ACC_SERVER_PORT: String(serverPort),
+    ACC_PORT_FILE: portFilePath,
     NODE_ENV: isDev ? "development" : "production",
     FORCE_COLOR: "0",
   };
@@ -209,7 +239,14 @@ async function startServer(): Promise<boolean> {
   }
 
   serverProcess = child;
-  
+
+  // Wait for server to write actual port (in case it bound to a different port due to EADDRINUSE)
+  const actualPort = await readPortFile(portFilePath);
+  if (actualPort !== null) {
+    serverPort = actualPort;
+    log(`Server bound to port ${serverPort}`);
+  }
+
   // Log server output in production
   if (app.isPackaged) {
     ensureLogDir();
@@ -354,6 +391,22 @@ async function ensureServerThenCreateWindow(): Promise<void> {
   }
   
   createWindow();
+}
+
+// ============ Single Instance (packaged app: one server, one window) ============
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    // Another instance was launched – focus this one instead of starting a new server
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
 }
 
 // ============ App Lifecycle ============

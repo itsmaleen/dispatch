@@ -65,7 +65,7 @@ export class CommandCenterServer {
     this.app.use('*', cors({ origin: '*', allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'], allowHeaders: ['Content-Type', 'Authorization'] }));
 
     // Health check
-    this.app.get('/health', (c) => c.json({ ok: true }));
+    this.app.get('/health', (c) => c.json({ ok: true, port: this.port }));
 
     // Check Claude Code CLI availability
     this.app.get('/check/claude-code', async (c) => {
@@ -1237,7 +1237,7 @@ Format your response as plain text only:
       });
     });
 
-    return new Promise((resolve) => {
+    return new Promise<void>((resolve, reject) => {
       // Create HTTP server with Hono handler
       this.httpServer = createServer(async (req, res) => {
         const url = new URL(req.url ?? '/', `http://localhost:${this.port}`);
@@ -1298,10 +1298,58 @@ Format your response as plain text only:
         }
       });
       
-      this.httpServer.listen(this.port, () => {
-        console.log(`Command Center server running on http://localhost:${this.port}`);
-        resolve();
-      });
+      // Try to bind to requested port; on EADDRINUSE try next port (dynamic port)
+      const startPort = this.port;
+      const maxAttempts = 100;
+      const tryListen = (port: number): Promise<void> =>
+        new Promise((resolve, reject) => {
+          const onError = (err: NodeJS.ErrnoException) => {
+            this.httpServer!.removeListener('listening', onListen);
+            reject(err);
+          };
+          const onListen = () => {
+            this.httpServer!.removeListener('error', onError);
+            const addr = this.httpServer!.address();
+            this.port = typeof addr === 'object' && addr !== null && 'port' in addr ? addr.port : port;
+            resolve();
+          };
+          this.httpServer!.once('error', onError);
+          this.httpServer!.once('listening', onListen);
+          this.httpServer!.listen(port);
+        });
+
+      (async () => {
+        let lastErr: NodeJS.ErrnoException | undefined;
+        for (let p = startPort; p < startPort + maxAttempts; p++) {
+          try {
+            await tryListen(p);
+            console.log(`Command Center server running on http://localhost:${this.port}`);
+            // Optionally write port to file for dev tooling (e.g. ACC_PORT_FILE)
+            const portFile = process.env.ACC_PORT_FILE;
+            if (portFile) {
+              try {
+                const fs = await import('fs');
+                const path = await import('path');
+                const dir = path.dirname(portFile);
+                if (dir !== '.') fs.mkdirSync(dir, { recursive: true });
+                fs.writeFileSync(portFile, String(this.port), 'utf8');
+              } catch {
+                // Ignore port file write errors
+              }
+            }
+            resolve();
+            return;
+          } catch (err) {
+            lastErr = err as NodeJS.ErrnoException;
+            if (lastErr?.code !== 'EADDRINUSE') {
+              reject(lastErr);
+              return;
+            }
+            console.warn(`Port ${p} in use, trying ${p + 1}...`);
+          }
+        }
+        reject(lastErr ?? new Error('No available port'));
+      })();
     });
   }
 

@@ -6,7 +6,7 @@ import { AgentsPanel } from "./components/agents/AgentsPanel";
 import { WidgetDemo } from "./components/demo/WidgetDemo";
 import { WorkspaceDemo } from "./components/demo/WorkspaceDemo";
 import { Workspace } from "./components/workspace/Workspace";
-import { useAppStore, api, getServerUrl, type Task } from "./stores/app";
+import { useAppStore, api, getServerUrl, discoverServerPort, type Task } from "./stores/app";
 import { Settings, FolderOpen, Users, Layout } from "lucide-react";
 
 type View =
@@ -19,6 +19,10 @@ type View =
 
 // Dynamic server URL (from Electron or default)
 const getAccServerUrl = () => getServerUrl().replace('http://', '');
+
+const isElectron =
+  typeof window !== "undefined" &&
+  !!(window as unknown as { electronAPI?: { server?: unknown } }).electronAPI?.server;
 
 export function App() {
   const {
@@ -36,19 +40,27 @@ export function App() {
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [currentTaskMessage, setCurrentTaskMessage] = useState<string>("");
   const [showAgentsPanel, setShowAgentsPanel] = useState(false);
+  // In browser dev, discover server port (3333, 3334, ...) before making API calls
+  const [serverReady, setServerReady] = useState(isElectron);
   const currentTask = currentTaskId
     ? (tasks.find((t) => t.id === currentTaskId) ?? null)
     : null;
 
+  useEffect(() => {
+    if (isElectron) return;
+    discoverServerPort().then(() => setServerReady(true));
+  }, []);
+
   // Refresh agent status on mount and periodically (slower when server is offline)
   useEffect(() => {
+    if (!serverReady) return;
     refreshAgentStatus();
     const interval = setInterval(
       refreshAgentStatus,
       serverOffline ? 15000 : 5000,
     );
     return () => clearInterval(interval);
-  }, [refreshAgentStatus, serverOffline]);
+  }, [serverReady, refreshAgentStatus, serverOffline]);
 
   // Keyboard shortcut for demo view (Cmd/Ctrl + Shift + D)
   useEffect(() => {
@@ -129,6 +141,18 @@ export function App() {
 
   // Count total available agents (Claude Code + OpenClaw agents)
   const totalAgents = (claudeCodeAvailable ? 1 : 0) + agents.length;
+
+  // In browser dev, wait for server port discovery before rendering
+  if (!serverReady) {
+    return (
+      <div className="h-screen w-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3 text-zinc-400">
+          <div className="w-8 h-8 border-2 border-zinc-600 border-t-zinc-300 rounded-full animate-spin" />
+          <span>Connecting to server...</span>
+        </div>
+      </div>
+    );
+  }
 
   // Workspace-real is full screen, no chrome
   if (view === "workspace-real") {
