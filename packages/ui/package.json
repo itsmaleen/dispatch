@@ -7,7 +7,7 @@
     "dev": "bun run --parallel dev:vite dev:electron",
     "dev:vite": "vite",
     "dev:electron": "bun run scripts/dev-electron.mjs",
-    "build": "vite build && node scripts/prepare-server-bundle.mjs && bun run build:electron",
+    "build": "vite build && bunx tsc -p tsconfig.electron.json && node scripts/prepare-server-bundle.mjs && bun run build:electron",
     "build:electron": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder",
     "build:electron:sign": "electron-builder",
     "start": "electron .",
