@@ -224,8 +224,13 @@ async function startServer(): Promise<boolean> {
   } else {
     // Development: use tsx to run TypeScript with Node.js
     // (bun doesn't support better-sqlite3 native module)
-    const tsxPath = process.platform === "win32" ? "tsx.cmd" : "tsx";
-    child = spawn(tsxPath, [serverEntry], {
+    // Find tsx binary directly in node_modules to avoid PATH issues
+    const monorepoRoot = path.resolve(__dirname, "../../..");
+    const tsxBin = path.join(monorepoRoot, "node_modules", ".bin", "tsx");
+    
+    log(`Using tsx at: ${tsxBin}`);
+    
+    child = spawn(tsxBin, [serverEntry], {
       cwd,
       env,
       stdio: ["ignore", "pipe", "pipe"],
