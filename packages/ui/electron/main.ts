@@ -165,8 +165,21 @@ async function startServer(): Promise<boolean> {
   log(`Starting server on port ${serverPort}...`);
 
   const cwd = resolveServerCwd();
+  
+  // Augment PATH for GUI launches (Spotlight doesn't inherit shell PATH)
+  // Include common locations for claude CLI and other tools
+  const extraPaths = [
+    path.join(os.homedir(), ".local/bin"),      // claude CLI default location
+    path.join(os.homedir(), ".cargo/bin"),       // Rust tools
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+    path.join(os.homedir(), ".nvm/versions/node/v22.15.0/bin"),
+    path.join(os.homedir(), ".nvm/versions/node/v20.19.0/bin"),
+  ].join(path.delimiter);
+  
   const env = {
     ...process.env,
+    PATH: `${extraPaths}${path.delimiter}${process.env.PATH || ""}`,
     ACC_SERVER_PORT: String(serverPort),
     NODE_ENV: isDev ? "development" : "production",
     FORCE_COLOR: "0",
