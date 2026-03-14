@@ -18,5 +18,6 @@
     "clean": {
       "cache": false
     }
-  }
+  },
+  "globalPassThroughEnv": ["ACC_*", "ANTHROPIC_API_KEY"]
 }

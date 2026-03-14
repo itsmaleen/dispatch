@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 /**
  * Dev script: build electron main/preload and run Electron with Vite dev server.
+ * 
+ * T3 Code Pattern:
+ * - Electron main process spawns the server as a child process
+ * - This script just needs to wait for Vite, then start Electron
+ * - Server lifecycle is fully managed by Electron
+ * 
  * Run from packages/ui (bun run scripts/dev-electron.mjs).
  */
 import { spawn, execSync } from 'child_process';
@@ -10,27 +16,32 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..');
 
-// Wait for vite dev server to be ready
-const waitForVite = async (url, maxAttempts = 30) => {
-  for (let i = 0; i < maxAttempts; i++) {
-    try {
-      const res = await fetch(url);
-      if (res.ok) return true;
-    } catch {}
+// Find Vite dev server (may be on 5173, 5174, etc if port is busy)
+const findViteServer = async (maxAttempts = 30) => {
+  const ports = [5173, 5174, 5175, 5176];
+  
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    for (const port of ports) {
+      try {
+        const res = await fetch(`http://localhost:${port}`, { signal: AbortSignal.timeout(500) });
+        if (res.ok) return port;
+      } catch {}
+    }
     await new Promise(r => setTimeout(r, 500));
   }
-  return false;
+  return null;
 };
 
 console.log('⏳ Waiting for Vite dev server...');
-const viteReady = await waitForVite('http://localhost:5173');
-if (!viteReady) {
-  console.error('❌ Vite dev server not responding at localhost:5173');
+const vitePort = await findViteServer();
+if (!vitePort) {
+  console.error('❌ Vite dev server not responding on ports 5173-5176');
   process.exit(1);
 }
-console.log('✅ Vite dev server ready');
+console.log(`✅ Vite dev server ready on port ${vitePort}`);
 
 // Build electron main and preload with tsc (clean CJS for Electron)
+console.log('📦 Building Electron main/preload...');
 execSync('bunx tsc -p tsconfig.electron.json', {
   stdio: 'inherit',
   cwd: root,
@@ -41,9 +52,14 @@ const { createRequire } = await import('module');
 const require = createRequire(import.meta.url);
 const electronBin = require('electron');
 
-const env = { ...process.env, NODE_ENV: 'development' };
+const env = { 
+  ...process.env, 
+  NODE_ENV: 'development',
+  VITE_DEV_SERVER_URL: `http://localhost:${vitePort}`,
+};
 delete env.ELECTRON_RUN_AS_NODE; // required so require('electron') returns API, not path
 
+console.log('🚀 Starting Electron (server will be spawned by main process)...');
 const child = spawn(electronBin, [root], {
   env,
   stdio: 'inherit',

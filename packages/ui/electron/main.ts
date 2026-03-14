@@ -1,16 +1,11 @@
 /**
  * Electron Main Process
  *
- * Handles:
- * - Window management
- * - Server lifecycle (start, restart, cleanup)
- * - IPC with renderer
- * - Native integrations
- *
- * Server startup follows T3 Code pattern:
- * - Uses Electron itself as Node runtime via ELECTRON_RUN_AS_NODE
- * - Proper process tracking with restart logic
- * - Clean shutdown on app quit
+ * T3 Code Pattern:
+ * - Electron ALWAYS spawns the server as a child process
+ * - Dynamic port allocation (reserve before spawning)
+ * - Server lifecycle fully managed by Electron
+ * - Works identically in dev and packaged builds
  */
 
 import { app, BrowserWindow, ipcMain, dialog } from "electron";
@@ -27,18 +22,16 @@ const DEFAULT_SERVER_PORT = 3333;
 const MAX_RESTART_ATTEMPTS = 5;
 const RESTART_BACKOFF_BASE_MS = 1000;
 const RESTART_BACKOFF_MAX_MS = 30000;
-const SERVER_STARTUP_TIMEOUT_MS = 10000;
+const SERVER_STARTUP_TIMEOUT_MS = 15000;
 const LOG_DIR = path.join(os.homedir(), ".acc", "logs");
-const PORT_FILE_POLL_MS = 50;
-const PORT_FILE_TIMEOUT_MS = 5000;
+const STATE_DIR = path.join(os.homedir(), ".acc");
 
 // ============ State ============
 
 let mainWindow: BrowserWindow | null = null;
 let serverProcess: ChildProcess | null = null;
-let serverPort = DEFAULT_SERVER_PORT;
-let serverApiUrl = "";
-let serverWsUrl = "";
+let serverPort = 0; // Dynamically assigned
+let serverAuthToken = "";
 let restartAttempt = 0;
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let isQuitting = false;
@@ -60,86 +53,61 @@ function log(message: string, ...args: unknown[]): void {
   const line = `[${timestamp}] [main] ${message}`;
   console.log(line, ...args);
   
-  if (app.isPackaged) {
-    try {
-      ensureLogDir();
-      fs.appendFileSync(
-        path.join(LOG_DIR, "main.log"),
-        `${line} ${args.map(a => JSON.stringify(a)).join(" ")}\n`
-      );
-    } catch {
-      // Ignore log write errors
-    }
+  try {
+    ensureLogDir();
+    fs.appendFileSync(
+      path.join(LOG_DIR, "main.log"),
+      `${line} ${args.map(a => JSON.stringify(a)).join(" ")}\n`
+    );
+  } catch {
+    // Ignore log write errors
   }
 }
 
 // ============ Port Management ============
 
-async function isPortAvailable(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
+/**
+ * Reserve a port by binding to it, then immediately closing.
+ * This is the T3 Code pattern - guarantees the port is available.
+ */
+async function reservePort(preferredPort: number = DEFAULT_SERVER_PORT): Promise<number> {
+  return new Promise((resolve, reject) => {
     const server = net.createServer();
-    server.once("error", () => resolve(false));
-    server.once("listening", () => {
-      server.close();
-      resolve(true);
-    });
-    server.listen(port, "127.0.0.1");
-  });
-}
-
-async function findAvailablePort(start: number = DEFAULT_SERVER_PORT): Promise<number> {
-  for (let port = start; port < start + 100; port++) {
-    if (await isPortAvailable(port)) {
-      return port;
-    }
-  }
-  // Fallback to random port
-  return start + Math.floor(Math.random() * 1000);
-}
-
-/** Poll for server-written port file (server may bind to different port on EADDRINUSE). */
-async function readPortFile(portFilePath: string): Promise<number | null> {
-  const deadline = Date.now() + PORT_FILE_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    try {
-      if (fs.existsSync(portFilePath)) {
-        const raw = fs.readFileSync(portFilePath, "utf8").trim();
-        const port = parseInt(raw, 10);
-        if (Number.isFinite(port) && port > 0 && port < 65536) {
-          try {
-            fs.unlinkSync(portFilePath);
-          } catch {
-            // ignore
-          }
-          return port;
-        }
+    
+    server.once("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        // Port in use, try next
+        server.close();
+        reservePort(preferredPort + 1).then(resolve).catch(reject);
+      } else {
+        reject(err);
       }
-    } catch {
-      // ignore
-    }
-    await new Promise((r) => setTimeout(r, PORT_FILE_POLL_MS));
-  }
-  return null;
+    });
+    
+    server.once("listening", () => {
+      const addr = server.address();
+      const port = typeof addr === "object" && addr !== null ? addr.port : preferredPort;
+      server.close(() => resolve(port));
+    });
+    
+    server.listen(preferredPort, "127.0.0.1");
+  });
 }
 
 // ============ Health Check ============
 
-async function isServerUp(port: number = serverPort): Promise<boolean> {
-  try {
-    const res = await fetch(`http://localhost:${port}/health`, {
-      signal: AbortSignal.timeout(500),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
-async function waitForServer(maxMs: number = SERVER_STARTUP_TIMEOUT_MS): Promise<boolean> {
+async function waitForServerReady(port: number, maxMs: number = SERVER_STARTUP_TIMEOUT_MS): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < maxMs) {
-    if (await isServerUp()) {
-      return true;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/health`, {
+        signal: AbortSignal.timeout(1000),
+      });
+      if (res.ok) {
+        return true;
+      }
+    } catch {
+      // Not ready yet
     }
     await new Promise((r) => setTimeout(r, 200));
   }
@@ -159,8 +127,7 @@ function resolveServerEntry(): string | null {
     return null;
   }
   
-  // Development: use bun to run TypeScript directly
-  // Return null to signal we should use bun instead
+  // Development: TypeScript source
   const serverDir = path.resolve(__dirname, "../../server");
   const srcEntry = path.join(serverDir, "src", "run.ts");
   if (fs.existsSync(srcEntry)) {
@@ -178,6 +145,35 @@ function resolveServerCwd(): string {
   return path.resolve(__dirname, "../../server");
 }
 
+/**
+ * Build environment variables for the server process.
+ * Follows T3 Code pattern of passing config via env.
+ */
+function buildServerEnv(): NodeJS.ProcessEnv {
+  // Augment PATH for GUI launches (Spotlight doesn't inherit shell PATH)
+  const extraPaths = [
+    path.join(os.homedir(), ".local/bin"),      // claude CLI default location
+    path.join(os.homedir(), ".cargo/bin"),       // Rust tools
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+    path.join(os.homedir(), ".nvm/versions/node/v22.15.0/bin"),
+    path.join(os.homedir(), ".nvm/versions/node/v20.19.0/bin"),
+    path.join(os.homedir(), ".bun/bin"),
+  ].join(path.delimiter);
+
+  return {
+    ...process.env,
+    PATH: `${extraPaths}${path.delimiter}${process.env.PATH || ""}`,
+    ACC_MODE: "desktop",
+    ACC_SERVER_PORT: String(serverPort),
+    ACC_AUTH_TOKEN: serverAuthToken,
+    ACC_STATE_DIR: STATE_DIR,
+    ACC_NO_BROWSER: "1",
+    NODE_ENV: isDev ? "development" : "production",
+    FORCE_COLOR: "0",
+  };
+}
+
 async function startServer(): Promise<boolean> {
   if (isQuitting || serverProcess) {
     return false;
@@ -189,39 +185,29 @@ async function startServer(): Promise<boolean> {
     return false;
   }
 
-  // Find available port
-  serverPort = await findAvailablePort(DEFAULT_SERVER_PORT);
-  log(`Starting server on port ${serverPort}...`);
+  // Reserve port BEFORE spawning (T3 pattern)
+  try {
+    serverPort = await reservePort(DEFAULT_SERVER_PORT);
+    log(`Reserved port ${serverPort}`);
+  } catch (err) {
+    log("Failed to reserve port:", err);
+    return false;
+  }
+
+  // Generate auth token for this session
+  serverAuthToken = crypto.randomBytes(24).toString("hex");
 
   const cwd = resolveServerCwd();
+  const env = buildServerEnv();
   
-  // Augment PATH for GUI launches (Spotlight doesn't inherit shell PATH)
-  // Include common locations for claude CLI and other tools
-  const extraPaths = [
-    path.join(os.homedir(), ".local/bin"),      // claude CLI default location
-    path.join(os.homedir(), ".cargo/bin"),       // Rust tools
-    "/usr/local/bin",
-    "/opt/homebrew/bin",
-    path.join(os.homedir(), ".nvm/versions/node/v22.15.0/bin"),
-    path.join(os.homedir(), ".nvm/versions/node/v20.19.0/bin"),
-  ].join(path.delimiter);
-  
-  // Server may bind to a different port if requested port is in use; it writes actual port to ACC_PORT_FILE
-  const portFilePath = path.join(os.tmpdir(), `acc-server-port-${process.pid}-${Date.now()}.txt`);
-  const env = {
-    ...process.env,
-    PATH: `${extraPaths}${path.delimiter}${process.env.PATH || ""}`,
-    ACC_SERVER_PORT: String(serverPort),
-    ACC_PORT_FILE: portFilePath,
-    NODE_ENV: isDev ? "development" : "production",
-    FORCE_COLOR: "0",
-  };
+  log(`Starting server on port ${serverPort}...`);
+  log(`Server entry: ${serverEntry}`);
+  log(`Server cwd: ${cwd}`);
 
   let child: ChildProcess;
 
   if (app.isPackaged) {
-    // Packaged: use Electron itself as Node runtime
-    // This is the T3 Code pattern - guarantees Node is available
+    // Packaged: use Electron itself as Node runtime (T3 pattern)
     child = spawn(process.execPath, [serverEntry], {
       cwd,
       env: {
@@ -231,36 +217,38 @@ async function startServer(): Promise<boolean> {
       stdio: ["ignore", "pipe", "pipe"],
     });
   } else {
-    // Development: use bun to run TypeScript
-    const bunCmd = process.platform === "win32" ? "bun.cmd" : "bun";
-    child = spawn(bunCmd, ["run", serverEntry], {
+    // Development: use bun to run TypeScript directly
+    const bunPath = process.platform === "win32" ? "bun.cmd" : "bun";
+    child = spawn(bunPath, ["run", serverEntry], {
       cwd,
       env,
-      stdio: "inherit",
+      stdio: ["ignore", "pipe", "pipe"],
     });
   }
 
   serverProcess = child;
 
-  // Wait for server to write actual port (in case it bound to a different port due to EADDRINUSE)
-  const actualPort = await readPortFile(portFilePath);
-  if (actualPort !== null && actualPort !== serverPort) {
-    serverPort = actualPort;
-    log(`Server bound to actual port ${serverPort}`);
-  }
-
-  // Log server output in production
-  if (app.isPackaged) {
-    ensureLogDir();
-    const serverLogPath = path.join(LOG_DIR, "server.log");
-    const serverLogStream = fs.createWriteStream(serverLogPath, { flags: "a" });
-    
-    child.stdout?.pipe(serverLogStream);
-    child.stderr?.pipe(serverLogStream);
-    
-    const boundary = `\n=== Server started at ${new Date().toISOString()} pid=${child.pid} port=${serverPort} ===\n`;
-    serverLogStream.write(boundary);
-  }
+  // Capture server output
+  ensureLogDir();
+  const serverLogPath = path.join(LOG_DIR, "server.log");
+  const serverLogStream = fs.createWriteStream(serverLogPath, { flags: "a" });
+  
+  const boundary = `\n=== Server started at ${new Date().toISOString()} pid=${child.pid} port=${serverPort} ===\n`;
+  serverLogStream.write(boundary);
+  
+  child.stdout?.on("data", (data) => {
+    serverLogStream.write(data);
+    if (isDev) {
+      process.stdout.write(`[server] ${data}`);
+    }
+  });
+  
+  child.stderr?.on("data", (data) => {
+    serverLogStream.write(data);
+    if (isDev) {
+      process.stderr.write(`[server] ${data}`);
+    }
+  });
 
   child.once("spawn", () => {
     log(`Server process spawned (pid=${child.pid})`);
@@ -277,6 +265,9 @@ async function startServer(): Promise<boolean> {
 
   child.on("exit", (code, signal) => {
     log(`Server process exited (code=${code}, signal=${signal})`);
+    serverLogStream.write(`\n=== Server exited code=${code} signal=${signal} ===\n`);
+    serverLogStream.end();
+    
     if (serverProcess === child) {
       serverProcess = null;
     }
@@ -286,7 +277,7 @@ async function startServer(): Promise<boolean> {
   });
 
   // Wait for server to be ready
-  const ready = await waitForServer();
+  const ready = await waitForServerReady(serverPort);
   if (ready) {
     log("Server is ready");
   } else {
@@ -314,9 +305,17 @@ function scheduleRestart(reason: string): void {
 
   log(`Scheduling server restart in ${delayMs}ms (attempt ${restartAttempt}, reason: ${reason})`);
   
-  restartTimer = setTimeout(() => {
+  restartTimer = setTimeout(async () => {
     restartTimer = null;
-    startServer();
+    const started = await startServer();
+    if (started) {
+      // Notify renderer of new server URL
+      mainWindow?.webContents.send("server-info", { 
+        port: serverPort,
+        apiUrl: `http://127.0.0.1:${serverPort}`,
+        wsUrl: `ws://127.0.0.1:${serverPort}`,
+      });
+    }
   }, delayMs);
 }
 
@@ -352,6 +351,14 @@ function stopServer(): void {
 // ============ Window Management ============
 
 function createWindow(): void {
+  // Set env vars BEFORE creating window so preload can access them
+  const apiUrl = `http://127.0.0.1:${serverPort}`;
+  const wsUrl = `ws://127.0.0.1:${serverPort}`;
+  process.env.ACC_SERVER_API_URL = apiUrl;
+  process.env.ACC_SERVER_WS_URL = wsUrl;
+  
+  log(`Server URLs: API=${apiUrl} WS=${wsUrl}`);
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -367,7 +374,9 @@ function createWindow(): void {
   });
 
   if (isDev) {
-    mainWindow.loadURL("http://localhost:5173");
+    // In dev, load from Vite dev server
+    const viteUrl = process.env.VITE_DEV_SERVER_URL || "http://localhost:5173";
+    mainWindow.loadURL(viteUrl);
     mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
@@ -377,34 +386,30 @@ function createWindow(): void {
     mainWindow = null;
   });
 
-  // Pass server port to renderer
+  // Send server info once page loads
   mainWindow.webContents.on("did-finish-load", () => {
-    mainWindow?.webContents.send("server-info", { port: serverPort });
+    mainWindow?.webContents.send("server-info", { 
+      port: serverPort,
+      apiUrl,
+      wsUrl,
+    });
   });
 }
 
-async function ensureServerThenCreateWindow(): Promise<void> {
-  // Check if server is already running (e.g., from previous session or external)
-  if (await isServerUp(DEFAULT_SERVER_PORT)) {
-    serverPort = DEFAULT_SERVER_PORT;
-    log("Server already running on default port");
-  } else {
-    await startServer();
+async function bootstrap(): Promise<void> {
+  log("Bootstrap starting...");
+  
+  // Always start our own server (T3 pattern - no checking for existing)
+  const serverStarted = await startServer();
+  if (!serverStarted) {
+    log("Warning: Server failed to start, app may not work correctly");
   }
   
-  // ALWAYS set env vars before creating window (T3 pattern)
-  // The preload script reads these at load time
-  serverApiUrl = `http://127.0.0.1:${serverPort}`;
-  serverWsUrl = `ws://127.0.0.1:${serverPort}`;
-  process.env.ACC_SERVER_API_URL = serverApiUrl;
-  process.env.ACC_SERVER_WS_URL = serverWsUrl;
-  log(`Set server URLs: API=${serverApiUrl} WS=${serverWsUrl}`);
-  log(`Env vars set: ACC_SERVER_API_URL=${process.env.ACC_SERVER_API_URL} ACC_SERVER_WS_URL=${process.env.ACC_SERVER_WS_URL}`);
-  
   createWindow();
+  log("Bootstrap complete");
 }
 
-// ============ Single Instance (packaged app: one server, one window) ============
+// ============ Single Instance ============
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -412,7 +417,6 @@ if (!gotSingleInstanceLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    // Another instance was launched – focus this one instead of starting a new server
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
@@ -423,11 +427,15 @@ if (!gotSingleInstanceLock) {
 // ============ App Lifecycle ============
 
 app.whenReady().then(() => {
-  ensureServerThenCreateWindow();
+  bootstrap().catch((error) => {
+    log("Bootstrap failed:", error);
+    dialog.showErrorBox("Dispatch failed to start", String(error));
+    app.quit();
+  });
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      ensureServerThenCreateWindow();
+      bootstrap();
     }
   });
 });
@@ -443,19 +451,49 @@ app.on("window-all-closed", () => {
   }
 });
 
+// Handle SIGINT/SIGTERM for clean shutdown
+if (process.platform !== "win32") {
+  process.on("SIGINT", () => {
+    if (isQuitting) return;
+    isQuitting = true;
+    stopServer();
+    app.quit();
+  });
+  
+  process.on("SIGTERM", () => {
+    if (isQuitting) return;
+    isQuitting = true;
+    stopServer();
+    app.quit();
+  });
+}
+
 // ============ IPC Handlers ============
 
-// Sync handler for preload to get server URLs (fallback if env vars don't work)
+// Sync handler for preload to get server URLs
 ipcMain.on("server:get-urls", (event) => {
   event.returnValue = {
-    apiUrl: serverApiUrl || `http://127.0.0.1:${serverPort}`,
-    wsUrl: serverWsUrl || `ws://127.0.0.1:${serverPort}`,
+    apiUrl: `http://127.0.0.1:${serverPort}`,
+    wsUrl: `ws://127.0.0.1:${serverPort}`,
   };
 });
 
 // Get server info
 ipcMain.handle("server:info", () => {
-  return { port: serverPort, pid: serverProcess?.pid };
+  return { 
+    port: serverPort, 
+    pid: serverProcess?.pid,
+    apiUrl: `http://127.0.0.1:${serverPort}`,
+    wsUrl: `ws://127.0.0.1:${serverPort}`,
+  };
+});
+
+// Restart server (for debugging/recovery)
+ipcMain.handle("server:restart", async () => {
+  log("Manual server restart requested");
+  stopServer();
+  await new Promise(r => setTimeout(r, 500));
+  return startServer();
 });
 
 // Adapter management

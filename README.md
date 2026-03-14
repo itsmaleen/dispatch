@@ -20,14 +20,19 @@ bun install
 # Build contracts
 cd packages/contracts && bun run build
 
-# Start server (port 3333)
-cd packages/server && bun run run.ts
-
-# Start UI (separate terminal)
-cd packages/ui && bun dev
+# Start dev (Electron + server)
+bun run dev
 ```
 
-When you run the Electron app (dev or installed), it will auto-start the server if it’s not already running.
+**T3 Code Pattern:** The Electron main process spawns the server as a child process. No need to start the server separately - it's fully managed by Electron.
+
+### Dev Commands
+
+| Command | Description |
+|---------|-------------|
+| `bun run dev` | Start Electron app (spawns server automatically) |
+| `bun run dev:server` | Run server standalone (for debugging) |
+| `bun run dev:all` | Run all packages via turbo (legacy) |
 
 ## Build
 
@@ -44,13 +49,13 @@ Build the Electron app and install it to `/Applications` (macOS):
 bun run install:app
 ```
 
-This produces a DMG under `packages/ui/release/`, mounts it, and copies **Dispatch.app** to `/Applications`. Then run the app from Spotlight (Cmd+Space → “Dispatch”) or:
+This produces a DMG under `packages/ui/release/`, mounts it, and copies **Dispatch.app** to `/Applications`. Then run the app from Spotlight (Cmd+Space → "Dispatch") or:
 
 ```bash
 open '/Applications/Dispatch.app'
 ```
 
-The server does not auto-start when running the installed app (it’s not bundled). Start it manually if needed:
+The server does not auto-start when running the installed app (it's not bundled). Start it manually if needed:
 
 ```bash
 ./scripts/start-server.sh
