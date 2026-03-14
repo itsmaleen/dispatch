@@ -687,6 +687,8 @@ export function Workspace() {
   const wsRef = useRef<WebSocket | null>(null);
   const terminalsRef = useRef<TerminalState[]>(terminals);
   terminalsRef.current = terminals;
+  /** Map threadId → terminalId for immediate lookup (avoids React state race condition) */
+  const threadToTerminalRef = useRef<Record<string, string>>({});
   /** Accumulate tool input JSON per block index (for input_json_delta) */
   const toolInputByBlockRef = useRef<Record<number, string>>({});
 
@@ -756,7 +758,13 @@ export function Workspace() {
     };
 
     const matchesTerminal = (t: TerminalState) => {
-      if (threadId) return t.threadId === threadId;
+      if (threadId) {
+        // Check direct match or ref-based mapping (handles React state race condition)
+        if (t.threadId === threadId) return true;
+        const mappedTerminalId = threadToTerminalRef.current[threadId];
+        if (mappedTerminalId && t.id === mappedTerminalId) return true;
+        return false;
+      }
       if (adapterId) return t.agent.id === adapterId;
       return false;
     };
@@ -1107,6 +1115,10 @@ export function Workspace() {
       // Create thread/session if needed (Phase 2/3)
       if (!threadId) {
         threadId = `thread-${terminalId}`;
+        
+        // Register mapping immediately (before async state update)
+        threadToTerminalRef.current[threadId] = terminalId;
+        
         const sessionRes = await fetch(`${getApiUrl()}/threads/${threadId}/session`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1123,6 +1135,9 @@ export function Workspace() {
         setTerminals(prev => prev.map(t =>
           t.id === terminalId ? { ...t, threadId, sessionActive: true, currentStepId: extractedStepId } : t
         ));
+      } else {
+        // Ensure mapping exists for existing threadId
+        threadToTerminalRef.current[threadId] = terminalId;
       }
 
       // Send via thread API (persistent session)
