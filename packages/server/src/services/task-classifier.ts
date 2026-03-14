@@ -56,16 +56,26 @@ Respond with ONLY valid JSON:
 If no tasks found in a category, use empty array [].`;
 
 export class TaskClassifier {
-  private client: Anthropic;
+  private client: Anthropic | null = null;
   private model = 'claude-3-5-haiku-20241022';  // Fast and cheap
+  private initialized = false;
   
   constructor(apiKey?: string) {
-    this.client = new Anthropic({
-      apiKey: apiKey || process.env.ANTHROPIC_API_KEY,
-    });
+    const key = apiKey || process.env.ANTHROPIC_API_KEY;
+    if (key) {
+      this.client = new Anthropic({ apiKey: key });
+      this.initialized = true;
+    } else {
+      console.log('[TaskClassifier] No API key - task extraction disabled');
+    }
   }
 
   async classify(agentOutput: string): Promise<ClassificationResult> {
+    // Skip if no API key configured
+    if (!this.initialized || !this.client) {
+      return { doing: [], planned: [], suggested: [], completed: [] };
+    }
+    
     // Skip very short outputs
     if (!agentOutput || agentOutput.trim().length < 20) {
       return { doing: [], planned: [], suggested: [], completed: [] };
