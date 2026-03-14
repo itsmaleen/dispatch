@@ -203,11 +203,6 @@ async function startServer() {
     }
     // Find available port
     serverPort = await findAvailablePort(DEFAULT_SERVER_PORT);
-    // Set URLs for preload to read (T3 pattern - avoids race condition)
-    serverApiUrl = `http://127.0.0.1:${serverPort}`;
-    serverWsUrl = `ws://127.0.0.1:${serverPort}`;
-    process.env.ACC_SERVER_API_URL = serverApiUrl;
-    process.env.ACC_SERVER_WS_URL = serverWsUrl;
     log(`Starting server on port ${serverPort}...`);
     const cwd = resolveServerCwd();
     // Augment PATH for GUI launches (Spotlight doesn't inherit shell PATH)
@@ -257,12 +252,7 @@ async function startServer() {
     const actualPort = await readPortFile(portFilePath);
     if (actualPort !== null && actualPort !== serverPort) {
         serverPort = actualPort;
-        // Update URLs with actual port
-        serverApiUrl = `http://127.0.0.1:${serverPort}`;
-        serverWsUrl = `ws://127.0.0.1:${serverPort}`;
-        process.env.ACC_SERVER_API_URL = serverApiUrl;
-        process.env.ACC_SERVER_WS_URL = serverWsUrl;
-        log(`Server bound to port ${serverPort} (updated URLs)`);
+        log(`Server bound to actual port ${serverPort}`);
     }
     // Log server output in production
     if (electron_1.app.isPackaged) {
@@ -382,6 +372,14 @@ async function ensureServerThenCreateWindow() {
     else {
         await startServer();
     }
+    // ALWAYS set env vars before creating window (T3 pattern)
+    // The preload script reads these at load time
+    serverApiUrl = `http://127.0.0.1:${serverPort}`;
+    serverWsUrl = `ws://127.0.0.1:${serverPort}`;
+    process.env.ACC_SERVER_API_URL = serverApiUrl;
+    process.env.ACC_SERVER_WS_URL = serverWsUrl;
+    log(`Set server URLs: API=${serverApiUrl} WS=${serverWsUrl}`);
+    log(`Env vars set: ACC_SERVER_API_URL=${process.env.ACC_SERVER_API_URL} ACC_SERVER_WS_URL=${process.env.ACC_SERVER_WS_URL}`);
     createWindow();
 }
 // ============ Single Instance (packaged app: one server, one window) ============
@@ -418,6 +416,13 @@ electron_1.app.on("window-all-closed", () => {
     }
 });
 // ============ IPC Handlers ============
+// Sync handler for preload to get server URLs (fallback if env vars don't work)
+electron_1.ipcMain.on("server:get-urls", (event) => {
+    event.returnValue = {
+        apiUrl: serverApiUrl || `http://127.0.0.1:${serverPort}`,
+        wsUrl: serverWsUrl || `ws://127.0.0.1:${serverPort}`,
+    };
+});
 // Get server info
 electron_1.ipcMain.handle("server:info", () => {
     return { port: serverPort, pid: serverProcess?.pid };

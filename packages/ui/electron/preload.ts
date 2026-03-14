@@ -6,21 +6,38 @@
 
 import { contextBridge, ipcRenderer } from "electron";
 
-// Server URLs from env vars (set by main process before window creation - T3 pattern)
-// This avoids the race condition of IPC-based port communication
-const serverApiUrl = process.env.ACC_SERVER_API_URL || "http://127.0.0.1:3333";
-const serverWsUrl = process.env.ACC_SERVER_WS_URL || "ws://127.0.0.1:3333";
+// Server URLs - try env vars first, then sync IPC as fallback
+// The main process sets these before creating the window
+let serverApiUrl = process.env.ACC_SERVER_API_URL || "";
+let serverWsUrl = process.env.ACC_SERVER_WS_URL || "";
+
+// If env vars not set, use sync IPC to get the URLs from main process
+if (!serverApiUrl || !serverWsUrl) {
+  try {
+    const info = ipcRenderer.sendSync("server:get-urls");
+    if (info && typeof info === 'object') {
+      serverApiUrl = info.apiUrl || "http://127.0.0.1:3333";
+      serverWsUrl = info.wsUrl || "ws://127.0.0.1:3333";
+    }
+  } catch (e) {
+    console.warn("[preload] Failed to get server URLs via IPC:", e);
+  }
+}
+
+// Final fallback to defaults
+if (!serverApiUrl) serverApiUrl = "http://127.0.0.1:3333";
+if (!serverWsUrl) serverWsUrl = "ws://127.0.0.1:3333";
 
 // Extract port from URL for backward compatibility
 const serverPort = parseInt(new URL(serverApiUrl).port) || 3333;
 
 // Debug logging
-console.log("[preload] Server URLs from env:");
-console.log("[preload]   ACC_SERVER_API_URL env:", process.env.ACC_SERVER_API_URL);
-console.log("[preload]   ACC_SERVER_WS_URL env:", process.env.ACC_SERVER_WS_URL);
-console.log("[preload]   Resolved API URL:", serverApiUrl);
-console.log("[preload]   Resolved WS URL:", serverWsUrl);
-console.log("[preload]   Resolved port:", serverPort);
+console.log("[preload] Server URLs resolution:");
+console.log("[preload]   ENV ACC_SERVER_API_URL:", process.env.ACC_SERVER_API_URL || "(not set)");
+console.log("[preload]   ENV ACC_SERVER_WS_URL:", process.env.ACC_SERVER_WS_URL || "(not set)");
+console.log("[preload]   Final API URL:", serverApiUrl);
+console.log("[preload]   Final WS URL:", serverWsUrl);
+console.log("[preload]   Final port:", serverPort);
 
 // Still listen for updates (in case server rebinds after window loads)
 ipcRenderer.on("server-info", (_event, info: { port: number }) => {

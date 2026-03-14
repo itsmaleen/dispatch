@@ -445,6 +445,14 @@ app.on("window-all-closed", () => {
 
 // ============ IPC Handlers ============
 
+// Sync handler for preload to get server URLs (fallback if env vars don't work)
+ipcMain.on("server:get-urls", (event) => {
+  event.returnValue = {
+    apiUrl: serverApiUrl || `http://127.0.0.1:${serverPort}`,
+    wsUrl: serverWsUrl || `ws://127.0.0.1:${serverPort}`,
+  };
+});
+
 // Get server info
 ipcMain.handle("server:info", () => {
   return { port: serverPort, pid: serverProcess?.pid };
