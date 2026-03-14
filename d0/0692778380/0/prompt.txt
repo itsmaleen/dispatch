@@ -15,3 +15,7 @@ rework the title/head bar of the electron app. Can't have any content on the top
 ---
 
 instead of a lobster icon, use something that makes more sense
+
+---
+
+git commit with proper message (following standard)
