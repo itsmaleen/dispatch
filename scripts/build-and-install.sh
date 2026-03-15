@@ -10,11 +10,7 @@ RELEASE_DIR="$PROJECT_DIR/packages/ui/release"
 APP_NAME="Dispatch"
 DMG_NAME="$APP_NAME-0.1.0-arm64.dmg"
 
-echo "🔨 Building Dispatch..."
-cd "$PROJECT_DIR"
-bun run build
-
-echo "📦 Installing to /Applications..."
+echo "📦 Installing from $RELEASE_DIR/$DMG_NAME..."
 cd "$RELEASE_DIR"
 
 # Mount DMG

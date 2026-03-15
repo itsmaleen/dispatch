@@ -13,7 +13,7 @@
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
-    "install:app": "./scripts/build-and-install.sh",
+    "install:app": "bun run build && ./scripts/build-and-install.sh",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
     "clean": "turbo clean && rm -rf node_modules"
