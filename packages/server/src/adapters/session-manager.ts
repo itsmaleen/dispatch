@@ -220,7 +220,10 @@ export class SessionManager extends EventEmitter {
     let capturedSessionId: string | undefined;
     let usage: { inputTokens: number; outputTokens: number; costUsd?: number } | undefined;
 
+    console.log(`[SessionManager] processQuery starting - cwd: ${sdkOpts.cwd}, message: "${message.slice(0, 50)}..."`);
+
     try {
+      console.log(`[SessionManager] Creating SDK query...`);
       const queryIter = query({
         prompt: message,
         options: {
@@ -230,8 +233,10 @@ export class SessionManager extends EventEmitter {
       });
 
       session.query = queryIter;
+      console.log(`[SessionManager] SDK query created, starting iteration...`);
 
       for await (const event of queryIter) {
+        console.log(`[SessionManager] SDK event: ${event.type}`);
         const result = this.handleSDKMessage(session, event, turnId);
         if (result.sessionId) capturedSessionId = result.sessionId;
         if (result.usage) usage = result.usage;
@@ -265,6 +270,7 @@ export class SessionManager extends EventEmitter {
       }).catch(err => console.error('[SessionManager] Task classification failed:', err));
 
     } catch (error) {
+      console.error(`[SessionManager] processQuery error:`, error);
       // Handle SDK exit code quirk - if we have output, treat as success
       if (session.outputBuffer.length > 0) {
         this.getStore().appendMessage({
