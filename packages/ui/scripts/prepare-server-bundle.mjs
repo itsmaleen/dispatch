@@ -2,8 +2,12 @@
 /**
  * Prepares the server for the packaged Electron app.
  * 
- * Strategy: Copy pre-built server dist + package.json + install deps.
- * Since we use node:sqlite (built-in), no native module rebuilding needed.
+ * Strategy (T3 Code pattern):
+ * 1. Copy pre-built server dist to staging
+ * 2. Generate package.json with resolved dependencies
+ * 3. Run bun install --production (compiles native modules fresh)
+ * 4. Native modules (like better-sqlite3 from claude-agent-sdk) will be 
+ *    rebuilt by electron-builder for Electron's Node ABI
  * 
  * Output: packages/ui/server-bundle/
  */
@@ -20,7 +24,7 @@ const contractsDir = join(root, 'packages/contracts');
 const bundleDir = join(uiRoot, 'server-bundle');
 
 async function main() {
-  console.log('📦 Preparing server bundle for packaged app...');
+  console.log('📦 Preparing server bundle for packaged app (T3 pattern)...');
 
   // Clean and create bundle directory
   await rm(bundleDir, { recursive: true }).catch(() => {});
@@ -52,9 +56,10 @@ async function main() {
   
   await writeFile(join(bundleDir, 'package.json'), JSON.stringify(bundlePkg, null, 2));
 
-  // 3. Install production dependencies
-  console.log('  → Installing production dependencies...');
-  execSync('npm install --omit=dev --ignore-scripts --legacy-peer-deps', {
+  // 3. Install production dependencies with npm (more reliable for native modules)
+  // npm handles native module compilation correctly for Electron
+  console.log('  → Installing production dependencies (npm)...');
+  execSync('npm install --omit=dev --legacy-peer-deps', {
     cwd: bundleDir,
     stdio: 'inherit',
   });
@@ -74,8 +79,24 @@ async function main() {
     main: './dist/index.js',
   }, null, 2));
 
+  // 5. Rebuild native modules for Electron
+  console.log('  → Rebuilding native modules for Electron...');
+  try {
+    // Get Electron version from ui package
+    const uiPkg = JSON.parse(await readFile(join(uiRoot, 'package.json'), 'utf-8'));
+    const electronVersion = uiPkg.dependencies?.electron || uiPkg.devDependencies?.electron || '40.0.0';
+    const cleanVersion = electronVersion.replace(/[\^~]/, '');
+    
+    execSync(`npx @electron/rebuild --version=${cleanVersion} --module-dir=.`, {
+      cwd: bundleDir,
+      stdio: 'inherit',
+    });
+    console.log('  ✓ Native modules rebuilt for Electron');
+  } catch (err) {
+    console.warn('  ⚠ electron-rebuild failed, electron-builder will retry during packaging');
+  }
+
   console.log('✅ Server bundle ready at packages/ui/server-bundle');
-  console.log('   (No native modules - using node:sqlite built-in)');
 }
 
 main().catch((err) => {
