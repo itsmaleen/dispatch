@@ -6,6 +6,7 @@
  */
 
 import { query, type Query, type SDKMessage, type Options } from '@anthropic-ai/claude-agent-sdk';
+import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import { 
   getThreadStore, 
@@ -84,6 +85,23 @@ export class SessionManager extends EventEmitter {
 
   private getStore(): SqliteThreadStore {
     return this.store;
+  }
+
+  /** Resolve path to Claude Code executable so the SDK uses the user's Claude auth (claude auth login). */
+  private resolveClaudeExecutablePath(): string | undefined {
+    if (this.sdkOptions.pathToClaudeCodeExecutable) {
+      return this.sdkOptions.pathToClaudeCodeExecutable;
+    }
+    const envPath = process.env.ACC_CLAUDE_CODE_PATH;
+    if (envPath && envPath.trim()) {
+      return envPath.trim();
+    }
+    try {
+      const path = execSync('which claude', { encoding: 'utf-8' }).trim();
+      return path || undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /** List all threads with summaries */
@@ -222,14 +240,30 @@ export class SessionManager extends EventEmitter {
 
     console.log(`[SessionManager] processQuery starting - cwd: ${sdkOpts.cwd}, message: "${message.slice(0, 50)}..."`);
 
+    // Use the system Claude Code executable so the SDK uses the user's Claude auth
+    // (claude auth login), not API key. Without this, the SDK uses a bundled CLI that may exit with code 1.
+    const claudePath = this.resolveClaudeExecutablePath();
+    if (!claudePath) {
+      const err = new Error(
+        'Claude Code CLI not found. Install it and log in with your Claude account: run "claude auth login" in a terminal. ' +
+        'Ensure the "claude" binary is on your PATH (e.g. in ~/.local/bin or via the official installer).'
+      );
+      console.error('[SessionManager]', err.message);
+      session.status = 'error';
+      this.emit('turn.error', thread.id, turnId, err);
+      return;
+    }
+
     try {
-      console.log(`[SessionManager] Creating SDK query...`);
+      console.log(`[SessionManager] Creating SDK query... (using Claude Code at ${claudePath})`);
+      const queryOpts: Options = {
+        ...sdkOpts,
+        includePartialMessages: true,
+        pathToClaudeCodeExecutable: claudePath,
+      };
       const queryIter = query({
         prompt: message,
-        options: {
-          ...sdkOpts,
-          includePartialMessages: true,
-        },
+        options: queryOpts,
       });
 
       session.query = queryIter;
@@ -270,7 +304,15 @@ export class SessionManager extends EventEmitter {
       }).catch(err => console.error('[SessionManager] Task classification failed:', err));
 
     } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
       console.error(`[SessionManager] processQuery error:`, error);
+      const exitCode1 = /exited with code 1/i.test(errMsg);
+      if (exitCode1) {
+        console.error(
+          '[SessionManager] Hint: Claude Code subprocess exited with code 1. ' +
+          'Ensure you are logged in with your Claude account: run "claude auth status" to check, or "claude auth login" to sign in.'
+        );
+      }
       // Handle SDK exit code quirk - if we have output, treat as success
       if (session.outputBuffer.length > 0) {
         this.getStore().appendMessage({
@@ -299,7 +341,13 @@ export class SessionManager extends EventEmitter {
         }).catch(err => console.error('[SessionManager] Task classification failed:', err));
       } else {
         session.status = 'error';
-        this.emit('turn.error', thread.id, turnId, error instanceof Error ? error : new Error(String(error)));
+        let emitError: Error = error instanceof Error ? error : new Error(String(error));
+        if (exitCode1) {
+          emitError = new Error(
+            `${emitError.message} — Log in with your Claude account: run "claude auth login" in a terminal, then try again.`
+          );
+        }
+        this.emit('turn.error', thread.id, turnId, emitError);
       }
     } finally {
       session.query = null;
