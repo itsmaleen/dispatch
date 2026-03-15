@@ -2,46 +2,49 @@
 /**
  * Electron Preload Script
  *
- * Exposes safe APIs to the renderer process via contextBridge
+ * Exposes safe APIs to the renderer process via contextBridge.
+ *
+ * T3 Code Pattern:
+ * - Server URLs are set by main process BEFORE window is created
+ * - Available via env vars or sync IPC fallback
+ * - Listen for server-info events for dynamic updates (e.g., server restart)
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
-// Server URLs - try env vars first, then sync IPC as fallback
-// The main process sets these before creating the window
-let serverApiUrl = process.env.ACC_SERVER_API_URL || "";
-let serverWsUrl = process.env.ACC_SERVER_WS_URL || "";
-// If env vars not set, use sync IPC to get the URLs from main process
-if (!serverApiUrl || !serverWsUrl) {
-    try {
-        const info = electron_1.ipcRenderer.sendSync("server:get-urls");
-        if (info && typeof info === 'object') {
-            serverApiUrl = info.apiUrl || "http://127.0.0.1:3333";
-            serverWsUrl = info.wsUrl || "ws://127.0.0.1:3333";
-        }
-    }
-    catch (e) {
-        console.warn("[preload] Failed to get server URLs via IPC:", e);
+// Server URLs - get from main process via sync IPC (most reliable)
+let serverApiUrl = "";
+let serverWsUrl = "";
+let serverPort = 0;
+try {
+    const info = electron_1.ipcRenderer.sendSync("server:get-urls");
+    if (info && typeof info === 'object') {
+        serverApiUrl = info.apiUrl || "";
+        serverWsUrl = info.wsUrl || "";
+        serverPort = parseInt(new URL(serverApiUrl).port) || 0;
     }
 }
-// Final fallback to defaults
-if (!serverApiUrl)
-    serverApiUrl = "http://127.0.0.1:3333";
-if (!serverWsUrl)
-    serverWsUrl = "ws://127.0.0.1:3333";
-// Extract port from URL for backward compatibility
-const serverPort = parseInt(new URL(serverApiUrl).port) || 3333;
-// Debug logging
-console.log("[preload] Server URLs resolution:");
-console.log("[preload]   ENV ACC_SERVER_API_URL:", process.env.ACC_SERVER_API_URL || "(not set)");
-console.log("[preload]   ENV ACC_SERVER_WS_URL:", process.env.ACC_SERVER_WS_URL || "(not set)");
-console.log("[preload]   Final API URL:", serverApiUrl);
-console.log("[preload]   Final WS URL:", serverWsUrl);
-console.log("[preload]   Final port:", serverPort);
-// Still listen for updates (in case server rebinds after window loads)
+catch (e) {
+    console.warn("[preload] Failed to get server URLs via IPC:", e);
+}
+// Fallback to env vars if IPC failed
+if (!serverApiUrl) {
+    serverApiUrl = process.env.ACC_SERVER_API_URL || "http://127.0.0.1:3333";
+    serverWsUrl = process.env.ACC_SERVER_WS_URL || "ws://127.0.0.1:3333";
+    serverPort = parseInt(new URL(serverApiUrl).port) || 3333;
+}
+console.log("[preload] Server URLs resolved:");
+console.log("[preload]   API:", serverApiUrl);
+console.log("[preload]   WS:", serverWsUrl);
+console.log("[preload]   Port:", serverPort);
+// Listen for server info updates (e.g., after server restart)
 electron_1.ipcRenderer.on("server-info", (_event, info) => {
-    // Note: This won't update the URLs already captured above,
-    // but the env var approach should handle most cases
-    console.log("[preload] Server info update:", info);
+    console.log("[preload] Server info updated:", info);
+    if (info.apiUrl)
+        serverApiUrl = info.apiUrl;
+    if (info.wsUrl)
+        serverWsUrl = info.wsUrl;
+    if (info.port)
+        serverPort = info.port;
 });
 // Expose protected methods that allow the renderer process to use
 // ipcRenderer without exposing the entire object

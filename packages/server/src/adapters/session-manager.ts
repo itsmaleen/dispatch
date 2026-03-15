@@ -8,6 +8,7 @@
 import { query, type Query, type SDKMessage, type Options } from '@anthropic-ai/claude-agent-sdk';
 import { EventEmitter } from 'events';
 import { 
+  getThreadStoreAsync,
   getThreadStore, 
   type Thread, 
   type Message,
@@ -67,24 +68,34 @@ export interface ThreadSummary {
 }
 
 export class SessionManager extends EventEmitter {
-  private store: SqliteThreadStore;
+  private store: SqliteThreadStore | null = null;
   private sessions = new Map<string, Session>();
   private sdkOptions: Partial<Options>;
+  private initialized = false;
 
   constructor(sdkOptions: Partial<Options> = {}) {
     super();
-    this.store = getThreadStore();
     this.sdkOptions = sdkOptions;
   }
 
-  /** Initialize - no-op now since SQLite handles persistence */
+  /** Initialize the session manager - must be called before use */
   async init(): Promise<void> {
+    if (this.initialized) return;
+    this.store = await getThreadStoreAsync();
+    this.initialized = true;
     console.log('[SessionManager] Initialized with SQLite store');
+  }
+
+  private getStore(): SqliteThreadStore {
+    if (!this.store) {
+      throw new Error('SessionManager not initialized. Call init() first.');
+    }
+    return this.store;
   }
 
   /** List all threads with summaries */
   listThreads(options: { limit?: number; offset?: number } = {}): ThreadSummary[] {
-    const threads = this.store.listThreads(options);
+    const threads = this.getStore().listThreads(options);
     return threads.map(t => ({
       id: t.id,
       name: t.name,
@@ -92,19 +103,19 @@ export class SessionManager extends EventEmitter {
       worktreePath: t.worktreePath,
       createdAt: t.createdAt,
       lastActiveAt: t.lastActiveAt,
-      messageCount: this.store.getMessageCount(t.id),
+      messageCount: this.getStore().getMessageCount(t.id),
       hasSession: this.sessions.has(t.id),
     }));
   }
 
   /** Get thread by ID */
   getThread(threadId: string): Thread | null {
-    return this.store.getThread(threadId);
+    return this.getStore().getThread(threadId);
   }
 
   /** Get thread messages with pagination */
   getMessages(threadId: string, options: { limit?: number; beforeId?: number } = {}): Message[] {
-    return this.store.getMessages(threadId, options);
+    return this.getStore().getMessages(threadId, options);
   }
 
   /** Get session for thread */
@@ -124,9 +135,9 @@ export class SessionManager extends EventEmitter {
     }
 
     // Get or create thread in SQLite
-    let thread = this.store.getThread(threadId);
+    let thread = this.getStore().getThread(threadId);
     if (!thread) {
-      thread = this.store.createThread({
+      thread = this.getStore().createThread({
         id: threadId,
         name: name ?? `Thread ${threadId.slice(0, 8)}`,
         projectPath: cwd,
@@ -161,7 +172,7 @@ export class SessionManager extends EventEmitter {
       throw new Error(`No session for thread ${threadId}`);
     }
 
-    const thread = this.store.getThread(threadId);
+    const thread = this.getStore().getThread(threadId);
     if (!thread) {
       throw new Error(`Thread ${threadId} not found`);
     }
@@ -172,7 +183,7 @@ export class SessionManager extends EventEmitter {
     session.outputBuffer = '';
 
     // Store user message
-    this.store.appendMessage({
+    this.getStore().appendMessage({
       threadId,
       turnId,
       role: 'user',
@@ -234,7 +245,7 @@ export class SessionManager extends EventEmitter {
       }
 
       // Store assistant message
-      this.store.appendMessage({
+      this.getStore().appendMessage({
         threadId: thread.id,
         turnId,
         role: 'assistant',
@@ -244,7 +255,7 @@ export class SessionManager extends EventEmitter {
 
       // Update thread with session ID for resume
       if (capturedSessionId && capturedSessionId !== thread.sessionId) {
-        this.store.updateThread(thread.id, { sessionId: capturedSessionId });
+        this.getStore().updateThread(thread.id, { sessionId: capturedSessionId });
       }
 
       session.status = 'idle';
@@ -263,7 +274,7 @@ export class SessionManager extends EventEmitter {
     } catch (error) {
       // Handle SDK exit code quirk - if we have output, treat as success
       if (session.outputBuffer.length > 0) {
-        this.store.appendMessage({
+        this.getStore().appendMessage({
           threadId: thread.id,
           turnId,
           role: 'assistant',
@@ -272,7 +283,7 @@ export class SessionManager extends EventEmitter {
         });
 
         if (capturedSessionId && capturedSessionId !== thread.sessionId) {
-          this.store.updateThread(thread.id, { sessionId: capturedSessionId });
+          this.getStore().updateThread(thread.id, { sessionId: capturedSessionId });
         }
 
         session.status = 'idle';
@@ -451,7 +462,7 @@ export class SessionManager extends EventEmitter {
   /** Delete a thread and its session */
   async deleteThread(threadId: string): Promise<void> {
     await this.closeSession(threadId);
-    this.store.deleteThread(threadId);
+    this.getStore().deleteThread(threadId);
     console.log(`[SessionManager] Deleted thread ${threadId}`);
   }
 
@@ -461,7 +472,7 @@ export class SessionManager extends EventEmitter {
     options: { name?: string; fromMessageId?: number }
   ): Promise<Thread> {
     const newId = crypto.randomUUID();
-    const forked = this.store.forkThread(sourceThreadId, newId, {
+    const forked = this.getStore().forkThread(sourceThreadId, newId, {
       name: options.name,
       upToMessageId: options.fromMessageId,
     });
@@ -474,7 +485,7 @@ export class SessionManager extends EventEmitter {
     for (const threadId of this.sessions.keys()) {
       await this.closeSession(threadId);
     }
-    this.store.close();
+    this.getStore().close();
     console.log('[SessionManager] Shutdown complete');
   }
 }
