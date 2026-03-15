@@ -18,13 +18,19 @@ import * as os from "os";
 
 // ============ Configuration ============
 
-const DEFAULT_SERVER_PORT = 3333;
+const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
+
+// Separate identity for dev vs prod (allows running both simultaneously)
+const APP_NAME = isDev ? "Dispatch (Dev)" : "Dispatch";
+const USER_DATA_DIR = isDev ? "dispatch-dev" : "dispatch";
+
+const DEFAULT_SERVER_PORT = isDev ? 3333 : 3334; // Different ports for dev/prod
 const MAX_RESTART_ATTEMPTS = 5;
 const RESTART_BACKOFF_BASE_MS = 1000;
 const RESTART_BACKOFF_MAX_MS = 30000;
 const SERVER_STARTUP_TIMEOUT_MS = 15000;
-const LOG_DIR = path.join(os.homedir(), ".acc", "logs");
-const STATE_DIR = path.join(os.homedir(), ".acc");
+const STATE_DIR = path.join(os.homedir(), `.${USER_DATA_DIR}`);
+const LOG_DIR = path.join(STATE_DIR, "logs");
 
 // ============ State ============
 
@@ -35,8 +41,6 @@ let serverAuthToken = "";
 let restartAttempt = 0;
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let isQuitting = false;
-
-const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
 
 // ============ Logging ============
 
@@ -356,6 +360,7 @@ function createWindow(): void {
   log(`Server URLs: API=${apiUrl} WS=${wsUrl}`);
 
   mainWindow = new BrowserWindow({
+    title: APP_NAME,
     width: 1400,
     height: 900,
     minWidth: 1000,
@@ -405,9 +410,20 @@ async function bootstrap(): Promise<void> {
   log("Bootstrap complete");
 }
 
+// ============ App Identity (Dev vs Prod) ============
+
+// Set app name and user data path BEFORE requesting single instance lock
+// This allows dev and prod to run simultaneously
+app.name = APP_NAME;
+app.setPath("userData", path.join(os.homedir(), "Library", "Application Support", USER_DATA_DIR));
+
+log(`App identity: ${APP_NAME} (isDev=${isDev})`);
+log(`User data: ${app.getPath("userData")}`);
+
 // ============ Single Instance ============
 
-const gotSingleInstanceLock = app.requestSingleInstanceLock();
+// Use different instance lock names for dev vs prod
+const gotSingleInstanceLock = app.requestSingleInstanceLock({ key: USER_DATA_DIR });
 
 if (!gotSingleInstanceLock) {
   app.quit();
