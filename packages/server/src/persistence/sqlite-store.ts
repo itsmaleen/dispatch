@@ -1,11 +1,11 @@
 /**
  * SQLite-based Thread Store
  * 
- * Persistent storage for threads and messages using sql.js (pure JavaScript SQLite).
- * No native modules - works in any JavaScript runtime including Electron.
+ * Persistent storage for threads and messages using Node.js 22+ built-in SQLite.
+ * No native modules - works in any Node.js 22+ runtime including Electron.
  */
 
-import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
+import { DatabaseSync } from 'node:sqlite';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -105,81 +105,36 @@ const DB_DIR = path.join(process.env.HOME || '~', '.acc');
 const DB_PATH = path.join(DB_DIR, 'threads.db');
 
 export class SqliteThreadStore {
-  private db: SqlJsDatabase | null = null;
-  private dbPath: string;
-  private saveTimer: ReturnType<typeof setTimeout> | null = null;
-  private dirty = false;
+  private db: DatabaseSync;
   
   constructor(dbPath: string = DB_PATH) {
-    this.dbPath = dbPath;
-  }
-
-  /** Initialize the database - must be called before use */
-  async init(): Promise<void> {
     // Ensure directory exists
-    const dir = path.dirname(this.dbPath);
+    const dir = path.dirname(dbPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
+    
+    this.db = new DatabaseSync(dbPath);
+    this.db.exec('PRAGMA journal_mode = WAL');
+    this.db.exec('PRAGMA foreign_keys = ON');
+    this.init();
+  }
 
-    // Initialize sql.js
-    const SQL = await initSqlJs();
-    
-    // Load existing database or create new
-    if (fs.existsSync(this.dbPath)) {
-      const buffer = fs.readFileSync(this.dbPath);
-      this.db = new SQL.Database(buffer);
-    } else {
-      this.db = new SQL.Database();
-    }
-
-    // Enable foreign keys
-    this.db.run('PRAGMA foreign_keys = ON');
-    
-    // Initialize schema
-    this.db.run(SCHEMA_SQL);
-    
+  private init(): void {
+    this.db.exec(SCHEMA_SQL);
     console.log('[SqliteThreadStore] Initialized database');
-  }
-
-  private getDb(): SqlJsDatabase {
-    if (!this.db) {
-      throw new Error('Database not initialized. Call init() first.');
-    }
-    return this.db;
-  }
-
-  /** Mark database as dirty and schedule save */
-  private markDirty(): void {
-    this.dirty = true;
-    if (!this.saveTimer) {
-      this.saveTimer = setTimeout(() => {
-        this.saveTimer = null;
-        this.save();
-      }, 1000); // Debounce saves by 1 second
-    }
-  }
-
-  /** Save database to disk */
-  save(): void {
-    if (!this.dirty || !this.db) return;
-    
-    const data = this.db.export();
-    const buffer = Buffer.from(data);
-    fs.writeFileSync(this.dbPath, buffer);
-    this.dirty = false;
   }
 
   // ==================== Thread Operations ====================
 
   createThread(thread: Omit<Thread, 'createdAt' | 'lastActiveAt'>): Thread {
-    const db = this.getDb();
     const now = new Date().toISOString();
-    
-    db.run(`
+    const stmt = this.db.prepare(`
       INSERT INTO threads (id, name, project_path, worktree_path, created_at, last_active_at, session_id, metadata_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
+    `);
+    
+    stmt.run(
       thread.id,
       thread.name ?? null,
       thread.projectPath,
@@ -188,9 +143,7 @@ export class SqliteThreadStore {
       now,
       thread.sessionId ?? null,
       JSON.stringify(thread.metadata ?? {})
-    ]);
-
-    this.markDirty();
+    );
 
     return {
       ...thread,
@@ -200,44 +153,24 @@ export class SqliteThreadStore {
   }
 
   getThread(threadId: string): Thread | null {
-    const db = this.getDb();
-    const stmt = db.prepare(`SELECT * FROM threads WHERE id = ?`);
-    stmt.bind([threadId]);
-    
-    if (stmt.step()) {
-      const row = stmt.getAsObject() as unknown as ThreadRow;
-      stmt.free();
-      return this.rowToThread(row);
-    }
-    
-    stmt.free();
-    return null;
+    const stmt = this.db.prepare(`SELECT * FROM threads WHERE id = ?`);
+    const row = stmt.get(threadId) as ThreadRow | undefined;
+    return row ? this.rowToThread(row) : null;
   }
 
   listThreads(options: ListThreadsOptions = {}): Thread[] {
-    const db = this.getDb();
     const { limit = 50, offset = 0 } = options;
-    
-    const stmt = db.prepare(`
+    const stmt = this.db.prepare(`
       SELECT * FROM threads 
       ORDER BY last_active_at DESC 
       LIMIT ? OFFSET ?
     `);
-    stmt.bind([limit, offset]);
-    
-    const threads: Thread[] = [];
-    while (stmt.step()) {
-      const row = stmt.getAsObject() as unknown as ThreadRow;
-      threads.push(this.rowToThread(row));
-    }
-    stmt.free();
-    
-    return threads;
+    const rows = stmt.all(limit, offset) as ThreadRow[];
+    return rows.map(r => this.rowToThread(r));
   }
 
   updateThread(threadId: string, update: Partial<Pick<Thread, 'name' | 'sessionId' | 'metadata'>>): void {
-    const db = this.getDb();
-    const sets: string[] = ["last_active_at = datetime('now')"];
+    const sets: string[] = ['last_active_at = datetime(\'now\')'];
     const values: unknown[] = [];
 
     if (update.name !== undefined) {
@@ -254,32 +187,30 @@ export class SqliteThreadStore {
     }
 
     values.push(threadId);
-    db.run(`UPDATE threads SET ${sets.join(', ')} WHERE id = ?`, values);
-    this.markDirty();
+    const stmt = this.db.prepare(`UPDATE threads SET ${sets.join(', ')} WHERE id = ?`);
+    stmt.run(...values);
   }
 
   touchThread(threadId: string): void {
-    const db = this.getDb();
-    db.run(`UPDATE threads SET last_active_at = datetime('now') WHERE id = ?`, [threadId]);
-    this.markDirty();
+    const stmt = this.db.prepare(`UPDATE threads SET last_active_at = datetime('now') WHERE id = ?`);
+    stmt.run(threadId);
   }
 
   deleteThread(threadId: string): void {
-    const db = this.getDb();
-    db.run(`DELETE FROM threads WHERE id = ?`, [threadId]);
-    this.markDirty();
+    const stmt = this.db.prepare(`DELETE FROM threads WHERE id = ?`);
+    stmt.run(threadId);
   }
 
   // ==================== Message Operations ====================
 
   appendMessage(message: Omit<Message, 'id' | 'timestamp'>): Message {
-    const db = this.getDb();
     const now = new Date().toISOString();
-    
-    db.run(`
+    const stmt = this.db.prepare(`
       INSERT INTO messages (thread_id, turn_id, role, content, timestamp, input_tokens, output_tokens, cost_usd)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
+    `);
+    
+    const result = stmt.run(
       message.threadId,
       message.turnId,
       message.role,
@@ -288,25 +219,19 @@ export class SqliteThreadStore {
       message.usage?.inputTokens ?? null,
       message.usage?.outputTokens ?? null,
       message.usage?.costUsd ?? null
-    ]);
-
-    // Get the last inserted row id
-    const result = db.exec('SELECT last_insert_rowid() as id');
-    const id = result[0]?.values[0]?.[0] as number;
+    );
 
     // Touch the thread's last_active_at
     this.touchThread(message.threadId);
-    this.markDirty();
 
     return {
       ...message,
-      id,
+      id: Number(result.lastInsertRowid),
       timestamp: new Date(now),
     };
   }
 
   getMessages(threadId: string, options: ListMessagesOptions = {}): Message[] {
-    const db = this.getDb();
     const { limit = 100, beforeId, afterId } = options;
     
     let sql = `SELECT * FROM messages WHERE thread_id = ?`;
@@ -324,45 +249,29 @@ export class SqliteThreadStore {
     sql += ` ORDER BY id ${afterId !== undefined ? 'ASC' : 'DESC'} LIMIT ?`;
     params.push(limit);
 
-    const stmt = db.prepare(sql);
-    stmt.bind(params);
-    
-    const messages: Message[] = [];
-    while (stmt.step()) {
-      const row = stmt.getAsObject() as unknown as MessageRow;
-      messages.push(this.rowToMessage(row));
-    }
-    stmt.free();
+    const stmt = this.db.prepare(sql);
+    const rows = stmt.all(...params) as MessageRow[];
     
     // If we fetched in DESC order (for beforeId), reverse to chronological
     if (afterId === undefined) {
-      messages.reverse();
+      rows.reverse();
     }
 
-    return messages;
+    return rows.map(r => this.rowToMessage(r));
   }
 
   getMessageCount(threadId: string): number {
-    const db = this.getDb();
-    const result = db.exec(`SELECT COUNT(*) as count FROM messages WHERE thread_id = ?`, [threadId]);
-    return (result[0]?.values[0]?.[0] as number) ?? 0;
+    const stmt = this.db.prepare(`SELECT COUNT(*) as count FROM messages WHERE thread_id = ?`);
+    const result = stmt.get(threadId) as { count: number };
+    return result.count;
   }
 
   getLastMessage(threadId: string): Message | null {
-    const db = this.getDb();
-    const stmt = db.prepare(`
+    const stmt = this.db.prepare(`
       SELECT * FROM messages WHERE thread_id = ? ORDER BY id DESC LIMIT 1
     `);
-    stmt.bind([threadId]);
-    
-    if (stmt.step()) {
-      const row = stmt.getAsObject() as unknown as MessageRow;
-      stmt.free();
-      return this.rowToMessage(row);
-    }
-    
-    stmt.free();
-    return null;
+    const row = stmt.get(threadId) as MessageRow | undefined;
+    return row ? this.rowToMessage(row) : null;
   }
 
   // ==================== Fork ====================
@@ -383,7 +292,6 @@ export class SqliteThreadStore {
     });
 
     // Copy messages
-    const db = this.getDb();
     let sql = `
       INSERT INTO messages (thread_id, turn_id, role, content, timestamp, input_tokens, output_tokens, cost_usd)
       SELECT ?, turn_id, role, content, timestamp, input_tokens, output_tokens, cost_usd
@@ -398,8 +306,8 @@ export class SqliteThreadStore {
 
     sql += ` ORDER BY id`;
     
-    db.run(sql, params);
-    this.markDirty();
+    const stmt = this.db.prepare(sql);
+    stmt.run(...params);
 
     return forked;
   }
@@ -441,41 +349,21 @@ export class SqliteThreadStore {
   }
 
   close(): void {
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer);
-      this.saveTimer = null;
-    }
-    this.save(); // Final save
-    if (this.db) {
-      this.db.close();
-      this.db = null;
-    }
+    this.db.close();
   }
 }
 
-// Singleton with async initialization
+// Singleton
 let _store: SqliteThreadStore | null = null;
-let _initPromise: Promise<SqliteThreadStore> | null = null;
 
-export async function getThreadStoreAsync(): Promise<SqliteThreadStore> {
-  if (_store) return _store;
-  
-  if (!_initPromise) {
-    _initPromise = (async () => {
-      const store = new SqliteThreadStore();
-      await store.init();
-      _store = store;
-      return store;
-    })();
-  }
-  
-  return _initPromise;
-}
-
-// Synchronous getter (throws if not initialized)
 export function getThreadStore(): SqliteThreadStore {
   if (!_store) {
-    throw new Error('Thread store not initialized. Call getThreadStoreAsync() first.');
+    _store = new SqliteThreadStore();
   }
   return _store;
+}
+
+// Async version for compatibility (just wraps sync)
+export async function getThreadStoreAsync(): Promise<SqliteThreadStore> {
+  return getThreadStore();
 }

@@ -2,10 +2,10 @@
  * Task Store
  * 
  * SQLite persistence for extracted tasks.
- * Tracks task lifecycle: doing → completed, planned → doing → completed, etc.
+ * Uses Node.js 22+ built-in SQLite (node:sqlite) - no native modules needed.
  */
 
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -94,7 +94,7 @@ const DB_DIR = path.join(process.env.HOME || '~', '.acc');
 const DB_PATH = path.join(DB_DIR, 'tasks.db');
 
 export class TaskStore {
-  private db: Database.Database;
+  private db: DatabaseSync;
 
   constructor(dbPath: string = DB_PATH) {
     const dir = path.dirname(dbPath);
@@ -102,9 +102,9 @@ export class TaskStore {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    this.db = new Database(dbPath);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('foreign_keys = ON');
+    this.db = new DatabaseSync(dbPath);
+    this.db.exec('PRAGMA journal_mode = WAL');
+    this.db.exec('PRAGMA foreign_keys = ON');
     this.init();
   }
 
@@ -131,15 +131,16 @@ export class TaskStore {
     const hash = this.hashText(text);
     
     // Look for same hash in last 24 hours, same agent, not completed
-    const stmt = this.db.prepare(`
+    const sql = `
       SELECT * FROM tasks 
       WHERE text_hash = ? 
         AND status NOT IN ('completed', 'dismissed')
         AND created_at > datetime('now', '-1 day')
         ${agentId ? 'AND agent_id = ?' : ''}
       LIMIT 1
-    `);
+    `;
     
+    const stmt = this.db.prepare(sql);
     const row = agentId 
       ? stmt.get(hash, agentId) as TaskRow | undefined
       : stmt.get(hash) as TaskRow | undefined;
@@ -149,8 +150,6 @@ export class TaskStore {
 
   /**
    * Find an existing task for the same thread/agent and text so we can update its status
-   * (e.g. mark as doing or completed instead of creating a duplicate).
-   * Matching is by exact text hash. "Fix X" vs "Fixed X" may not match unless normalization is added later.
    */
   findExistingForStatusUpdate(
     threadId: string,
@@ -329,7 +328,7 @@ export class TaskStore {
 
     const stmt = this.db.prepare(sql);
     const result = stmt.run(...params);
-    return result.changes;
+    return result.changes as number;
   }
 
   /** Get recent completed tasks */

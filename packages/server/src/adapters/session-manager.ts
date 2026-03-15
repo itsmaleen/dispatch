@@ -8,7 +8,6 @@
 import { query, type Query, type SDKMessage, type Options } from '@anthropic-ai/claude-agent-sdk';
 import { EventEmitter } from 'events';
 import { 
-  getThreadStoreAsync,
   getThreadStore, 
   type Thread, 
   type Message,
@@ -68,28 +67,22 @@ export interface ThreadSummary {
 }
 
 export class SessionManager extends EventEmitter {
-  private store: SqliteThreadStore | null = null;
+  private store: SqliteThreadStore;
   private sessions = new Map<string, Session>();
   private sdkOptions: Partial<Options>;
-  private initialized = false;
 
   constructor(sdkOptions: Partial<Options> = {}) {
     super();
+    this.store = getThreadStore();
     this.sdkOptions = sdkOptions;
   }
 
-  /** Initialize the session manager - must be called before use */
+  /** Initialize the session manager */
   async init(): Promise<void> {
-    if (this.initialized) return;
-    this.store = await getThreadStoreAsync();
-    this.initialized = true;
     console.log('[SessionManager] Initialized with SQLite store');
   }
 
   private getStore(): SqliteThreadStore {
-    if (!this.store) {
-      throw new Error('SessionManager not initialized. Call init() first.');
-    }
     return this.store;
   }
 
