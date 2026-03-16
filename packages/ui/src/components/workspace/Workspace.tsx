@@ -1165,7 +1165,19 @@ export function Workspace() {
         const data = await res.json();
 
         if (!data.ok) {
-          throw new Error(data.error || 'Send failed');
+          // Provide helpful error messages for common issues
+          const errorMsg = data.error || 'Send failed';
+          if (errorMsg.includes('not connected') || errorMsg.includes('Agent not connected')) {
+            throw new Error(
+              `Agent "${terminal.agent.name}" is not connected.\n\n` +
+              `To connect this agent:\n` +
+              `1. Install the ACC channel plugin on the OpenClaw instance\n` +
+              `2. Configure it to point to this Dispatch server\n` +
+              `3. Restart the OpenClaw gateway\n\n` +
+              `See Agents panel for setup instructions.`
+            );
+          }
+          throw new Error(errorMsg);
         }
       } else {
         // Claude Code: Use thread/session API for persistent sessions
