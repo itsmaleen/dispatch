@@ -1144,69 +1144,95 @@ export function Workspace() {
     ));
 
     try {
-      let threadId = terminal.threadId;
-
-      // Create thread/session if needed (Phase 2/3)
-      if (!threadId) {
-        threadId = `thread-${terminalId}`;
-        
-        // Register mapping immediately (before async state update)
-        threadToTerminalRef.current[threadId] = terminalId;
-        
-        const sessionRes = await fetch(`${getApiUrl()}/threads/${threadId}/session`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            cwd,
-            name: `${terminal.agent.name} - ${new Date().toLocaleString()}`,
-          }),
-        });
-        const sessionData = await sessionRes.json();
-        
-        if (!sessionData.ok) {
-          throw new Error(sessionData.error || 'Failed to create session');
+      // Route based on agent type: OpenClaw uses agent task API, Claude Code uses thread/session API
+      if (terminal.agent.type === 'openclaw') {
+        // OpenClaw: Send via agent task API (WebSocket-connected agents)
+        let threadId = terminal.threadId;
+        if (!threadId) {
+          threadId = `thread-${terminalId}`;
+          threadToTerminalRef.current[threadId] = terminalId;
+          setTerminals(prev => prev.map(t =>
+            t.id === terminalId ? { ...t, threadId } : t
+          ));
         }
-        setTerminals(prev => prev.map(t =>
-          t.id === terminalId ? { ...t, threadId, sessionActive: true, currentStepId: extractedStepId } : t
-        ));
-      } else {
-        // Ensure mapping exists for existing threadId
-        threadToTerminalRef.current[threadId] = terminalId;
-      }
 
-      // Send via thread API (persistent session)
-      let res = await fetch(`${getApiUrl()}/threads/${threadId}/send`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message }),
-      });
-      let data = await res.json();
-
-      // If server restarted, session is gone; create session and retry send once
-      if (!data.ok && data.error === 'No active session for thread' && terminal.threadId) {
-        setTerminals(prev => prev.map(t =>
-          t.id === terminalId ? { ...t, threadId: undefined, sessionActive: false } : t
-        ));
-        const sessionRes = await fetch(`${getApiUrl()}/threads/${threadId}/session`, {
+        // Use /agents/:name/task for WebSocket-connected OpenClaw agents
+        const res = await fetch(`${getApiUrl()}/agents/${terminal.agent.id}/task`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cwd, name: `${terminal.agent.name} - ${new Date().toLocaleString()}` }),
+          body: JSON.stringify({ message, cwd, threadId }),
         });
-        const sessionData = await sessionRes.json();
-        if (!sessionData.ok) throw new Error(sessionData.error || 'Failed to create session');
-        setTerminals(prev => prev.map(t =>
-          t.id === terminalId ? { ...t, threadId, sessionActive: true } : t
-        ));
-        res = await fetch(`${getApiUrl()}/threads/${threadId}/send`, {
+        const data = await res.json();
+
+        if (!data.ok) {
+          throw new Error(data.error || 'Send failed');
+        }
+      } else {
+        // Claude Code: Use thread/session API for persistent sessions
+        let threadId = terminal.threadId;
+
+        // Create thread/session if needed (Phase 2/3)
+        if (!threadId) {
+          threadId = `thread-${terminalId}`;
+
+          // Register mapping immediately (before async state update)
+          threadToTerminalRef.current[threadId] = terminalId;
+
+          const sessionRes = await fetch(`${getApiUrl()}/threads/${threadId}/session`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              cwd,
+              name: `${terminal.agent.name} - ${new Date().toLocaleString()}`,
+            }),
+          });
+          const sessionData = await sessionRes.json();
+
+          if (!sessionData.ok) {
+            throw new Error(sessionData.error || 'Failed to create session');
+          }
+          setTerminals(prev => prev.map(t =>
+            t.id === terminalId ? { ...t, threadId, sessionActive: true, currentStepId: extractedStepId } : t
+          ));
+        } else {
+          // Ensure mapping exists for existing threadId
+          threadToTerminalRef.current[threadId] = terminalId;
+        }
+
+        // Send via thread API (persistent session)
+        let res = await fetch(`${getApiUrl()}/threads/${threadId}/send`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message }),
         });
-        data = await res.json();
-      }
+        let data = await res.json();
 
-      if (!data.ok) {
-        throw new Error(data.error || 'Send failed');
+        // If server restarted, session is gone; create session and retry send once
+        if (!data.ok && data.error === 'No active session for thread' && terminal.threadId) {
+          setTerminals(prev => prev.map(t =>
+            t.id === terminalId ? { ...t, threadId: undefined, sessionActive: false } : t
+          ));
+          const sessionRes = await fetch(`${getApiUrl()}/threads/${threadId}/session`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cwd, name: `${terminal.agent.name} - ${new Date().toLocaleString()}` }),
+          });
+          const sessionData = await sessionRes.json();
+          if (!sessionData.ok) throw new Error(sessionData.error || 'Failed to create session');
+          setTerminals(prev => prev.map(t =>
+            t.id === terminalId ? { ...t, threadId, sessionActive: true } : t
+          ));
+          res = await fetch(`${getApiUrl()}/threads/${threadId}/send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message }),
+          });
+          data = await res.json();
+        }
+
+        if (!data.ok) {
+          throw new Error(data.error || 'Send failed');
+        }
       }
 
     } catch (err) {

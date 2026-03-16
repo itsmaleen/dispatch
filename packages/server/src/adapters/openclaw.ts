@@ -122,10 +122,14 @@ export class OpenClawAdapter implements AdapterImplementation {
 
     const { gatewayUrl, gatewayToken } = this.config.options ?? {};
     const turnId = crypto.randomUUID();
-    
+
+    // Use the threadId from options if provided (from terminal), otherwise generate a new one
+    // This ensures messages route back to the correct terminal
+    const threadId = options.threadId ?? crypto.randomUUID();
+
     this.ctx.emitEvent({
       type: 'turn.started',
-      threadId: this.state.activeThreadId!,
+      threadId,
       turnId,
     });
 
@@ -173,7 +177,7 @@ export class OpenClawAdapter implements AdapterImplementation {
       
       this.ctx.emitEvent({
         type: 'turn.completed',
-        threadId: this.state.activeThreadId!,
+        threadId,
         turnId,
         status: 'completed',
         durationMs,
@@ -184,7 +188,7 @@ export class OpenClawAdapter implements AdapterImplementation {
     } catch (error) {
       this.ctx.emitEvent({
         type: 'turn.completed',
-        threadId: this.state.activeThreadId!,
+        threadId,
         turnId,
         status: 'failed',
         reason: error instanceof Error ? error.message : 'Unknown error',
