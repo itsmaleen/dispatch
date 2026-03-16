@@ -1438,7 +1438,10 @@ function LayoutRenderer({
               onTerminalOptionHover={onTerminalOptionHover}
               onMenuClose={() => onTerminalOptionHover(null)}
               onAddStep={onAddStep}
-              onClose={() => useWorkspaceStore.getState().setTasksVisible(false)}
+              onClose={() => {
+                useWorkspaceStore.getState().setTasksVisible(false);
+                onClosePanel(node.id);
+              }}
               onMaximize={() => onMaximizeTerminal('tasks-widget')}
               isFocused={focusedWidgetId === 'tasks-widget'}
               isHovered={hoveredWidgetId === 'tasks-widget'}
@@ -1466,7 +1469,10 @@ function LayoutRenderer({
             <UnifiedAgentStatusWidget
               agents={agents}
               terminals={terminals}
-              onClose={() => useWorkspaceStore.getState().setShowAgentStatus(false)}
+              onClose={() => {
+                useWorkspaceStore.getState().setShowAgentStatus(false);
+                onClosePanel(node.id);
+              }}
               onMaximize={() => onMaximizeTerminal('agent-status-widget')}
               isFocused={focusedWidgetId === 'agent-status-widget'}
               isHovered={hoveredWidgetId === 'agent-status-widget'}
@@ -2186,7 +2192,7 @@ export function Workspace() {
 
   const handleCloseTerminal = async (terminalId: string) => {
     const terminal = terminals.find(t => t.id === terminalId);
-    
+
     // Close thread session if exists
     if (terminal?.threadId) {
       try {
@@ -2195,8 +2201,28 @@ export function Workspace() {
         console.warn('Failed to close thread session:', err);
       }
     }
-    
+
     setTerminals(prev => prev.filter(t => t.id !== terminalId));
+
+    // Also remove the panel from the layout tree so the grid collapses
+    const currentLayoutTree = useWorkspaceStore.getState().layoutTree;
+    if (currentLayoutTree) {
+      // Inline helper to find the panel ID for this terminal
+      const findPanelId = (node: LayoutNode): string | null => {
+        if (node.type === 'leaf') {
+          return node.widgetId === terminalId ? node.id : null;
+        }
+        for (const child of node.children) {
+          const found = findPanelId(child);
+          if (found) return found;
+        }
+        return null;
+      };
+      const panelId = findPanelId(currentLayoutTree);
+      if (panelId) {
+        useWorkspaceStore.getState().closePanelInLayout(panelId);
+      }
+    }
   };
 
   const handleMinimizeTerminal = (terminal: TerminalState) => {
@@ -2209,6 +2235,24 @@ export function Workspace() {
     // Clear maximized if this terminal was maximized
     if (maximizedWidgetId === terminal.id) {
       useWorkspaceStore.getState().setMaximizedWidget(null);
+    }
+    // Also remove the panel from the layout tree so the grid collapses
+    const currentLayoutTree = useWorkspaceStore.getState().layoutTree;
+    if (currentLayoutTree) {
+      const findPanelId = (node: LayoutNode): string | null => {
+        if (node.type === 'leaf') {
+          return node.widgetId === terminal.id ? node.id : null;
+        }
+        for (const child of node.children) {
+          const found = findPanelId(child);
+          if (found) return found;
+        }
+        return null;
+      };
+      const panelId = findPanelId(currentLayoutTree);
+      if (panelId) {
+        useWorkspaceStore.getState().closePanelInLayout(panelId);
+      }
     }
   };
 

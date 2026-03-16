@@ -469,6 +469,7 @@ interface WorkspaceState {
   splitPanel: (panelId: string, direction: 'horizontal' | 'vertical', newWidgetId: string) => void;
   closePanelInLayout: (panelId: string) => void;
   swapPanels: (panelId1: string, panelId2: string) => void;
+  movePanel: (sourcePanelId: string, targetPanelId: string, position: 'left' | 'right' | 'top' | 'bottom' | 'center') => void;
   updatePanelSizes: (groupId: string, sizes: number[]) => void;
   applyLayoutPreset: (preset: LayoutPreset, terminalIds: string[]) => void;
   saveLayout: () => void;
@@ -646,6 +647,61 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
     }
 
     set({ layoutTree: newTree });
+  },
+
+  movePanel: (sourcePanelId, targetPanelId, position) => {
+    const { layoutTree } = get();
+    if (!layoutTree) return;
+    if (sourcePanelId === targetPanelId) return;
+
+    // If position is 'center', just swap the panels
+    if (position === 'center') {
+      get().swapPanels(sourcePanelId, targetPanelId);
+      return;
+    }
+
+    const sourceNode = findNode(layoutTree, sourcePanelId);
+    const targetNode = findNode(layoutTree, targetPanelId);
+
+    if (!sourceNode || !targetNode || sourceNode.type !== 'leaf' || targetNode.type !== 'leaf') {
+      console.warn('[WorkspaceStore] Cannot move: panels not found or not leaves');
+      return;
+    }
+
+    // Clone the source node with a new ID (it will be inserted at the new location)
+    const movedLeaf: LayoutLeaf = {
+      type: 'leaf',
+      id: generateLayoutId(),
+      widgetType: sourceNode.widgetType,
+      widgetId: sourceNode.widgetId,
+    };
+
+    // Determine direction based on position
+    const direction: 'horizontal' | 'vertical' =
+      position === 'left' || position === 'right' ? 'horizontal' : 'vertical';
+
+    // Create a new group containing the target and the moved leaf
+    const children: LayoutNode[] = position === 'left' || position === 'top'
+      ? [movedLeaf, { ...targetNode, id: generateLayoutId() }]
+      : [{ ...targetNode, id: generateLayoutId() }, movedLeaf];
+
+    const newGroup: LayoutGroup = {
+      type: 'group',
+      id: generateLayoutId(),
+      direction,
+      children,
+      sizes: [50, 50],
+    };
+
+    // First, replace the target with the new group
+    let newTree = replaceNode(layoutTree, targetPanelId, newGroup);
+
+    // Then, remove the source panel from its original location
+    newTree = removeNode(newTree, sourcePanelId);
+
+    if (newTree) {
+      set({ layoutTree: newTree });
+    }
   },
 
   updatePanelSizes: (groupId, sizes) => {
