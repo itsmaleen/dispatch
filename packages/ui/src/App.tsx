@@ -1,12 +1,17 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { HomePage } from "./components/home/HomePage";
 import { PlanningView } from "./components/planning/PlanningView";
 import { ExecutionView } from "./components/execution/ExecutionView";
 import { AgentsPanel } from "./components/agents/AgentsPanel";
+import { CommandPalette } from "./components/command-palette";
 import { WidgetDemo } from "./components/demo/WidgetDemo";
 import { WorkspaceDemo } from "./components/demo/WorkspaceDemo";
 import { Workspace } from "./components/workspace/Workspace";
 import { useAppStore, api, getServerUrl, discoverServerPort, type Task } from "./stores/app";
+import { useCommandPaletteStore } from "./stores/command-palette";
+import { useWorkspaceStore } from "./stores/workspace";
+import { commandRegistry } from "./lib/commands/registry";
+import { createDefaultCommands } from "./lib/commands/default-commands";
 import { Settings, FolderOpen, Users, Layout } from "lucide-react";
 
 type View =
@@ -36,6 +41,7 @@ export function App() {
     tasks,
     refreshAgentStatus,
   } = useAppStore();
+  const commandPalette = useCommandPaletteStore();
   const [view, setView] = useState<View>("workspace-real");
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [currentTaskMessage, setCurrentTaskMessage] = useState<string>("");
@@ -51,6 +57,26 @@ export function App() {
     discoverServerPort().then(() => setServerReady(true));
   }, []);
 
+  // Initialize command registry with default commands (once)
+  useEffect(() => {
+    commandRegistry.clear();
+    commandRegistry.registerAll(createDefaultCommands());
+  }, []);
+
+  // Register navigation callback for command palette
+  const handleNavigate = useCallback((targetView: string) => {
+    setView(targetView as View);
+  }, []);
+
+  // Register navigate callback with workspace store (use getState() to avoid
+  // subscribing to store updates and triggering an infinite re-render loop)
+  useEffect(() => {
+    useWorkspaceStore.getState().registerNavigateCallback(handleNavigate);
+    return () => {
+      useWorkspaceStore.getState().registerNavigateCallback(() => {});
+    };
+  }, [handleNavigate]);
+
   // Refresh agent status on mount and periodically (slower when server is offline)
   useEffect(() => {
     if (!serverReady) return;
@@ -62,17 +88,59 @@ export function App() {
     return () => clearInterval(interval);
   }, [serverReady, refreshAgentStatus, serverOffline]);
 
-  // Keyboard shortcut for demo view (Cmd/Ctrl + Shift + D)
+  // Global keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "D") {
+      // Don't capture shortcuts when typing in inputs (except for Escape)
+      const target = e.target as HTMLElement;
+      const isInInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+
+      // Escape always closes palette
+      if (e.key === 'Escape' && commandPalette.isOpen) {
         e.preventDefault();
-        setView(view === "demo" ? "home" : "demo");
+        commandPalette.close();
+        return;
+      }
+
+      // Cmd/Ctrl + K: Toggle command palette
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        commandPalette.toggle();
+        return;
+      }
+
+      // Cmd/Ctrl + N: New Terminal (opens palette with subcommand)
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === 'n' && !isInInput) {
+        e.preventDefault();
+        commandPalette.open({ preselectedCommandId: 'new-terminal' });
+        return;
+      }
+
+      // Cmd/Ctrl + Shift + N: Create Task (opens palette in input mode)
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'N' && !isInInput) {
+        e.preventDefault();
+        commandPalette.open();
+        // Find and execute the create-task command to enter input mode
+        const createTaskCmd = commandRegistry.getById('create-task');
+        if (createTaskCmd && createTaskCmd.action.type === 'input') {
+          commandPalette.enterInputMode(
+            createTaskCmd.action.placeholder,
+            createTaskCmd.action.onSubmit
+          );
+        }
+        return;
+      }
+
+      // Cmd/Ctrl + Shift + D: Toggle demo view
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'D') {
+        e.preventDefault();
+        setView(view === 'demo' ? 'home' : 'demo');
+        return;
       }
     };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [view]);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [view, commandPalette]);
 
   const handleStartTask = async (message: string) => {
     try {
@@ -161,7 +229,7 @@ export function App() {
         {serverOffline && (
           <div className="shrink-0 bg-amber-900/80 text-amber-200 px-4 py-2 text-sm text-center">
             Server not connected. The app will try to start it automatically. If
-            it doesn’t, run{" "}
+            it doesn't, run{" "}
             <code className="bg-zinc-800 px-1 rounded">
               ./scripts/start-server.sh
             </code>{" "}
@@ -169,6 +237,7 @@ export function App() {
           </div>
         )}
         <Workspace />
+        <CommandPalette />
       </div>
     );
   }
@@ -319,6 +388,9 @@ export function App() {
         onClose={() => setShowAgentsPanel(false)}
         serverUrl={getAccServerUrl()}
       />
+
+      {/* Command Palette Modal */}
+      <CommandPalette />
     </div>
   );
 }

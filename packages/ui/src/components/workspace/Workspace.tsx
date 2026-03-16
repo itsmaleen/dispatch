@@ -20,10 +20,12 @@ import {
   MoreVertical,
   ChevronRight,
   ChevronLeft,
+  ChevronDown,
   Globe,
 } from 'lucide-react';
 import { AgentsPanel } from '../agents/AgentsPanel';
 import { api, getServerUrl, getWsUrl } from '../../stores/app';
+import { useWorkspaceStore } from '../../stores/workspace';
 import { ChatInput, type UploadedFile } from './ChatInput';
 
 // ============================================================================
@@ -651,6 +653,8 @@ export function Workspace() {
   // Add menu state
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [showAgentsPanel, setShowAgentsPanel] = useState(false);
+  const [showTerminalAgentMenu, setShowTerminalAgentMenu] = useState(false);
+  const [showEmptyStateAgentMenu, setShowEmptyStateAgentMenu] = useState(false);
   const addMenuRef = useRef<HTMLDivElement>(null);
 
   // WebSocket ref
@@ -707,11 +711,56 @@ export function Workspace() {
     return () => clearInterval(interval);
   }, [fetchAgents]);
 
+  // Refs for callback registration (to avoid dependency issues)
+  const handleNewTerminalRef = useRef<(agentId: string) => void>(() => {});
+  const handleAddStepRef = useRef<(text: string, agentId: string | null) => void>(() => {});
+
+  // Sync workspace store with local state for command palette integration
+  // Use getState() to avoid including the store in dependencies and causing infinite loops
+  useEffect(() => {
+    useWorkspaceStore.getState().setAgents(agents.map(a => ({
+      id: a.id,
+      name: a.name,
+      status: a.status,
+      icon: a.icon,
+      type: a.type,
+    })));
+  }, [agents]);
+
+  // Sync terminals to workspace store (for display in command palette)
+  useEffect(() => {
+    useWorkspaceStore.getState().setTerminals(terminals.map(t => ({
+      id: t.id,
+      agentId: t.agent.id,
+      agentName: t.agent.name,
+    })));
+  }, [terminals]);
+
+  // Sync workspace path
+  useEffect(() => {
+    useWorkspaceStore.getState().setWorkspacePath(workspacePath);
+  }, [workspacePath]);
+
+  // Register terminal creation callback for command palette (once on mount)
+  useEffect(() => {
+    useWorkspaceStore.getState().registerTerminalCallback((agentId: string) => {
+      handleNewTerminalRef.current(agentId);
+    });
+  }, []);
+
+  // Register task creation callback for command palette (once on mount)
+  useEffect(() => {
+    useWorkspaceStore.getState().registerTaskCallback((text: string, agentId: string | null) => {
+      handleAddStepRef.current(text, agentId);
+    });
+  }, []);
+
   // Close add menu on click outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (addMenuRef.current && !addMenuRef.current.contains(e.target as Node)) {
         setShowAddMenu(false);
+        setShowTerminalAgentMenu(false);
       }
     };
     if (showAddMenu) {
@@ -1025,7 +1074,7 @@ export function Workspace() {
   }, [handleWsEvent]);
 
   // Terminal handlers
-  const handleNewTerminal = (agentId?: string) => {
+  const handleNewTerminal = useCallback((agentId?: string) => {
     const agent = agents.find(a => a.id === agentId) || agents[0];
     if (!agent) return;
 
@@ -1035,7 +1084,12 @@ export function Workspace() {
       lines: [{ id: `${Date.now()}`, type: 'system', content: `Session started — ${agent.name}`, timestamp: makeTimestamp() }],
       isStreaming: false,
     }]);
-  };
+  }, [agents]);
+
+  // Update ref for command palette
+  useEffect(() => {
+    handleNewTerminalRef.current = handleNewTerminal;
+  }, [handleNewTerminal]);
 
   const handleCloseTerminal = async (terminalId: string) => {
     const terminal = terminals.find(t => t.id === terminalId);
@@ -1240,7 +1294,7 @@ export function Workspace() {
     setPlanSteps(prev => prev.map(s => s.id === stepId ? { ...s, agent: agentId } : s));
   };
 
-  const handleAddStep = (text: string, agentId: string | null) => {
+  const handleAddStep = useCallback((text: string, agentId: string | null) => {
     setPlanSteps(prev => [...prev, {
       id: `step-${Date.now()}-${prev.length}`,
       text,
@@ -1248,7 +1302,12 @@ export function Workspace() {
       status: 'pending',
       source: 'manual',
     }]);
-  };
+  }, []);
+
+  // Update ref for command palette
+  useEffect(() => {
+    handleAddStepRef.current = handleAddStep;
+  }, [handleAddStep]);
 
   // Minimize/restore handlers
   const handleRestoreWidget = (widget: MinimizedWidget) => {
@@ -1337,7 +1396,10 @@ export function Workspace() {
           {/* Add Menu Dropdown */}
           <div className="relative" ref={addMenuRef}>
             <button
-              onClick={() => setShowAddMenu(!showAddMenu)}
+              onClick={() => {
+                setShowAddMenu(!showAddMenu);
+                if (showAddMenu) setShowTerminalAgentMenu(false);
+              }}
               className="flex items-center justify-center w-8 h-8 bg-zinc-800 hover:bg-zinc-700 rounded"
               title="Add terminal or agent"
             >
@@ -1346,27 +1408,61 @@ export function Workspace() {
 
             {showAddMenu && (
               <div className="absolute top-full right-0 mt-1 py-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 min-w-[160px]">
-                <button
-                  onClick={() => {
-                    handleNewTerminal();
-                    setShowAddMenu(false);
-                  }}
-                  disabled={agents.length === 0}
-                  className="w-full px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                >
-                  <TerminalIcon className="w-4 h-4 text-cyan-400" />
-                  <span>Terminal</span>
-                </button>
-                <button
-                  onClick={() => {
-                    setShowAgentsPanel(true);
-                    setShowAddMenu(false);
-                  }}
-                  className="w-full px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700 flex items-center gap-2"
-                >
-                  <Globe className="w-4 h-4 text-indigo-400" />
-                  <span>Agent</span>
-                </button>
+                {showTerminalAgentMenu ? (
+                  <>
+                    <button
+                      onClick={() => setShowTerminalAgentMenu(false)}
+                      className="w-full px-3 py-2 text-left text-sm text-zinc-400 hover:bg-zinc-700 flex items-center gap-2"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                      Back
+                    </button>
+                    <div className="border-t border-zinc-700 my-0.5" />
+                    {agents.map((agent) => (
+                      <button
+                        key={agent.id}
+                        onClick={() => {
+                          handleNewTerminal(agent.id);
+                          setShowAddMenu(false);
+                          setShowTerminalAgentMenu(false);
+                        }}
+                        className="w-full px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700 flex items-center gap-2"
+                      >
+                        <span>{agent.icon}</span>
+                        <span>{agent.name}</span>
+                      </button>
+                    ))}
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => {
+                        if (agents.length === 1) {
+                          handleNewTerminal(agents[0].id);
+                          setShowAddMenu(false);
+                        } else if (agents.length > 1) {
+                          setShowTerminalAgentMenu(true);
+                        }
+                      }}
+                      disabled={agents.length === 0}
+                      className="w-full px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                      <TerminalIcon className="w-4 h-4 text-cyan-400" />
+                      <span>Terminal</span>
+                      {agents.length > 1 && <ChevronRight className="w-4 h-4 ml-auto text-zinc-500" />}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowAgentsPanel(true);
+                        setShowAddMenu(false);
+                      }}
+                      className="w-full px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700 flex items-center gap-2"
+                    >
+                      <Globe className="w-4 h-4 text-indigo-400" />
+                      <span>Agent</span>
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -1389,9 +1485,42 @@ export function Workspace() {
               <div className="h-full flex flex-col items-center justify-center text-center p-4">
                 <TerminalIcon className="w-10 h-10 text-zinc-700 mb-3" />
                 <p className="text-sm text-zinc-500 mb-2">No terminals open</p>
-                <button onClick={() => handleNewTerminal()} disabled={agents.length === 0} className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-xs flex items-center gap-1.5">
-                  <Plus className="w-3.5 h-3.5" /> New Terminal
-                </button>
+                {agents.length === 0 ? (
+                  <button disabled className="px-3 py-1.5 bg-zinc-800 rounded text-xs flex items-center gap-1.5 opacity-50 cursor-not-allowed">
+                    <Plus className="w-3.5 h-3.5" /> New Terminal
+                  </button>
+                ) : agents.length === 1 ? (
+                  <button onClick={() => handleNewTerminal(agents[0].id)} className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-xs flex items-center gap-1.5">
+                    <Plus className="w-3.5 h-3.5" /> New Terminal
+                  </button>
+                ) : (
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowEmptyStateAgentMenu(prev => !prev)}
+                      className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-xs flex items-center gap-1.5"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> New Terminal
+                      <ChevronDown className="w-3 h-3 text-zinc-500" />
+                    </button>
+                    {showEmptyStateAgentMenu && (
+                      <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 py-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 min-w-[160px]">
+                        {agents.map(agent => (
+                          <button
+                            key={agent.id}
+                            onClick={() => {
+                              handleNewTerminal(agent.id);
+                              setShowEmptyStateAgentMenu(false);
+                            }}
+                            className="w-full px-3 py-2 text-left text-xs text-zinc-300 hover:bg-zinc-700 flex items-center gap-2"
+                          >
+                            <span>{agent.icon}</span>
+                            <span>{agent.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {agents.length === 0 && <p className="text-xs text-zinc-600 mt-2">No agents connected</p>}
               </div>
             ) : (
