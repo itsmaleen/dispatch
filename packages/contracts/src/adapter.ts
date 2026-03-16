@@ -72,6 +72,8 @@ export interface SendOptions {
   message: string;
   /** Working directory override */
   cwd?: string;
+  /** Thread ID for message routing (used by terminals to ensure responses go to the right place) */
+  threadId?: string;
   /** Attachments (images, files) */
   attachments?: Array<{
     type: 'image' | 'file';
