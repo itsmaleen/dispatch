@@ -20,7 +20,9 @@ import {
   MoreVertical,
   ChevronRight,
   ChevronLeft,
+  Globe,
 } from 'lucide-react';
+import { AgentsPanel } from '../agents/AgentsPanel';
 import { api, getServerUrl, getWsUrl } from '../../stores/app';
 import { ChatInput, type UploadedFile } from './ChatInput';
 
@@ -646,6 +648,11 @@ export function Workspace() {
   const [isExecuting, setIsExecuting] = useState(false);
   const [tasksWidgetMinimized, setTasksWidgetMinimized] = useState(false);
 
+  // Add menu state
+  const [showAddMenu, setShowAddMenu] = useState(false);
+  const [showAgentsPanel, setShowAgentsPanel] = useState(false);
+  const addMenuRef = useRef<HTMLDivElement>(null);
+
   // WebSocket ref
   const wsRef = useRef<WebSocket | null>(null);
   const terminalsRef = useRef<TerminalState[]>(terminals);
@@ -699,6 +706,19 @@ export function Workspace() {
     const interval = setInterval(fetchAgents, 10000);
     return () => clearInterval(interval);
   }, [fetchAgents]);
+
+  // Close add menu on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target as Node)) {
+        setShowAddMenu(false);
+      }
+    };
+    if (showAddMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showAddMenu]);
 
   const handleWsEvent = useCallback((data: any) => {
     if (data.type !== 'event') return;
@@ -1313,9 +1333,43 @@ export function Workspace() {
           <button onClick={fetchAgents} disabled={isLoadingAgents} className="p-1.5 text-zinc-400 hover:text-zinc-200 rounded">
             <RefreshCw className={`w-4 h-4 ${isLoadingAgents ? 'animate-spin' : ''}`} />
           </button>
-          <button onClick={() => handleNewTerminal()} disabled={agents.length === 0} className="flex items-center gap-1.5 px-3 py-1 text-xs bg-zinc-800 hover:bg-zinc-700 rounded">
-            <Plus className="w-3.5 h-3.5" /> Terminal
-          </button>
+
+          {/* Add Menu Dropdown */}
+          <div className="relative" ref={addMenuRef}>
+            <button
+              onClick={() => setShowAddMenu(!showAddMenu)}
+              className="flex items-center justify-center w-8 h-8 bg-zinc-800 hover:bg-zinc-700 rounded"
+              title="Add terminal or agent"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+
+            {showAddMenu && (
+              <div className="absolute top-full right-0 mt-1 py-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 min-w-[160px]">
+                <button
+                  onClick={() => {
+                    handleNewTerminal();
+                    setShowAddMenu(false);
+                  }}
+                  disabled={agents.length === 0}
+                  className="w-full px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  <TerminalIcon className="w-4 h-4 text-cyan-400" />
+                  <span>Terminal</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setShowAgentsPanel(true);
+                    setShowAddMenu(false);
+                  }}
+                  className="w-full px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700 flex items-center gap-2"
+                >
+                  <Globe className="w-4 h-4 text-indigo-400" />
+                  <span>Agent</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1468,6 +1522,13 @@ export function Workspace() {
           ))}
         </div>
       )}
+
+      {/* Agents Panel Modal */}
+      <AgentsPanel
+        isOpen={showAgentsPanel}
+        onClose={() => setShowAgentsPanel(false)}
+        serverUrl={getApiUrl().replace('http://', '').replace('https://', '')}
+      />
     </div>
   );
 }

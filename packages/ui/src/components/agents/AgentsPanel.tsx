@@ -1,16 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useAppStore } from '../../stores/app';
-import { 
-  X, 
-  Terminal, 
-  Globe, 
-  CheckCircle, 
-  XCircle, 
-  Copy, 
+import {
+  X,
+  Terminal,
+  Globe,
+  CheckCircle,
+  XCircle,
+  Copy,
   Check,
   RefreshCw,
   Plus,
-  ExternalLink
+  ExternalLink,
+  ChevronRight
 } from 'lucide-react';
 
 interface AgentsPanelProps {
@@ -27,6 +28,8 @@ interface ClaudeCodeStatus {
   initializing?: boolean;
 }
 
+type TunnelProvider = 'local' | 'ngrok' | 'cloudflare' | 'tailscale' | 'custom';
+
 export function AgentsPanel({ isOpen, onClose, serverUrl }: AgentsPanelProps) {
   const { agents } = useAppStore();
   const [claudeStatus, setClaudeStatus] = useState<ClaudeCodeStatus>({
@@ -35,6 +38,10 @@ export function AgentsPanel({ isOpen, onClose, serverUrl }: AgentsPanelProps) {
   });
   const [copied, setCopied] = useState<string | null>(null);
   const [showAddOpenClaw, setShowAddOpenClaw] = useState(false);
+
+  // Tunnel/proxy configuration
+  const [tunnelProvider, setTunnelProvider] = useState<TunnelProvider>('local');
+  const [customUrl, setCustomUrl] = useState('');
 
   const { setAgents } = useAppStore();
 
@@ -93,61 +100,62 @@ export function AgentsPanel({ isOpen, onClose, serverUrl }: AgentsPanelProps) {
     setTimeout(() => setCopied(null), 2000);
   };
 
-  // Generate connection instructions for OpenClaw
-  const getAccWsUrl = () => {
-    // If serverUrl contains ngrok or cloudflare, use wss
-    if (serverUrl.includes('ngrok') || serverUrl.includes('cloudflare') || serverUrl.includes('https')) {
-      return serverUrl.replace('https://', 'wss://').replace('http://', 'ws://') + '/channel';
-    }
-    return `ws://${serverUrl}/channel`;
+  // Get the server port from the current serverUrl
+  const getServerPort = () => {
+    const match = serverUrl.match(/:(\d+)/);
+    return match ? match[1] : '3333';
   };
 
-  const hookInstallCmd = `cd ~/.openclaw/hooks && cat > acc-channel.mjs << 'EOF'
-#!/usr/bin/env node
-import WebSocket from 'ws';
-import { spawn } from 'child_process';
-
-const CONFIG = {
-  serverUrl: process.env.ACC_SERVER_URL || '${getAccWsUrl()}',
-  agentName: process.env.ACC_AGENT_NAME || process.env.HOSTNAME || 'openclaw-agent',
-  token: process.env.ACC_TOKEN || 'dev-token',
-};
-
-let ws = null;
-const activeTasks = new Map();
-
-function connect() {
-  console.log(\`[acc] Connecting to \${CONFIG.serverUrl}\`);
-  ws = new WebSocket(CONFIG.serverUrl, {
-    headers: { 'Authorization': \`Bearer \${CONFIG.token}\`, 'X-Agent-Name': CONFIG.agentName }
-  });
-  ws.on('open', () => {
-    console.log('[acc] Connected');
-    ws.send(JSON.stringify({ type: 'register', metadata: { agentName: CONFIG.agentName, capabilities: ['streaming', 'tools'] }}));
-  });
-  ws.on('message', async (data) => {
-    const msg = JSON.parse(data.toString());
-    if (msg.type === 'task.send') {
-      const { taskId, message } = msg;
-      ws.send(JSON.stringify({ type: 'task.started', taskId }));
-      const proc = spawn('openclaw', ['agent', '--local', '--session-id', \`acc-\${taskId}\`, '--json', '--message', message]);
-      let stdout = '';
-      proc.stdout.on('data', (chunk) => { stdout += chunk; ws.send(JSON.stringify({ type: 'content.delta', taskId, content: chunk.toString() })); });
-      proc.on('close', (code) => {
-        try { const r = JSON.parse(stdout); ws.send(JSON.stringify({ type: 'task.completed', taskId, content: r.payloads?.[0]?.text || stdout })); }
-        catch { ws.send(JSON.stringify({ type: 'task.completed', taskId, content: stdout || 'Done' })); }
-      });
+  // Generate WebSocket URL based on tunnel provider
+  const getAccWsUrl = () => {
+    switch (tunnelProvider) {
+      case 'ngrok':
+        return customUrl ? `wss://${customUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')}/channel` : 'wss://YOUR_NGROK_URL.ngrok.io/channel';
+      case 'cloudflare':
+        return customUrl ? `wss://${customUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')}/channel` : 'wss://YOUR_TUNNEL.trycloudflare.com/channel';
+      case 'tailscale':
+        return customUrl ? `ws://${customUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')}/channel` : `ws://YOUR_MACHINE_NAME:${getServerPort()}/channel`;
+      case 'custom':
+        if (!customUrl) return 'wss://YOUR_CUSTOM_URL/channel';
+        const url = customUrl.replace(/\/$/, '');
+        if (url.startsWith('wss://') || url.startsWith('ws://')) {
+          return url.endsWith('/channel') ? url : `${url}/channel`;
+        }
+        const isSecure = url.startsWith('https://') || url.includes('.') && !url.includes('localhost');
+        const cleanUrl = url.replace(/^https?:\/\//, '');
+        return `${isSecure ? 'wss' : 'ws'}://${cleanUrl}/channel`;
+      case 'local':
+      default:
+        return `ws://${serverUrl}/channel`;
     }
-  });
-  ws.on('close', () => setTimeout(connect, 5000));
-}
-connect();
-EOF
-npm init -y && npm install ws && node acc-channel.mjs`;
+  };
 
-  const envVarsCmd = `export ACC_SERVER_URL="${getAccWsUrl()}"
+  // Check if URL is properly configured
+  const isUrlConfigured = () => {
+    if (tunnelProvider === 'local') return true;
+    if (!customUrl) return false;
+    return !customUrl.includes('YOUR_');
+  };
+
+  // Simple prompt that can be sent to OpenClaw via any channel (Telegram, etc.)
+  const agentPrompt = `Install the ACC Channel plugin and connect to Dispatch.
+
+Run: curl -sL https://raw.githubusercontent.com/moltyfromclaw/acc-channel/main/install.sh | bash
+
+Then run:
+export ACC_SERVER_URL="${getAccWsUrl()}"
+openclaw gateway restart`;
+
+  // Manual commands for advanced users
+  const manualCommands = `# 1. Install the plugin
+curl -sL https://raw.githubusercontent.com/moltyfromclaw/acc-channel/main/install.sh | bash
+
+# 2. Configure connection
+export ACC_SERVER_URL="${getAccWsUrl()}"
 export ACC_AGENT_NAME="my-agent"
-export ACC_TOKEN="dev-token"`;
+
+# 3. Restart gateway
+openclaw gateway restart`;
 
   if (!isOpen) return null;
 
@@ -283,66 +291,159 @@ export ACC_TOKEN="dev-token"`;
             {showAddOpenClaw && (
               <div className="bg-zinc-800 rounded-lg p-4 space-y-4 border border-zinc-700">
                 <h3 className="font-medium">Connect an OpenClaw Instance</h3>
-                
-                <p className="text-sm text-zinc-400">
-                  Run these commands on your OpenClaw instance to connect it to ACC:
-                </p>
 
-                {/* Server URL Info */}
-                <div className="space-y-2">
-                  <label className="text-sm text-zinc-400">ACC Server URL (WebSocket)</label>
-                  <div className="flex items-center gap-2">
-                    <code className="flex-1 bg-zinc-900 px-3 py-2 rounded text-sm font-mono text-green-400 overflow-x-auto">
-                      {getAccWsUrl()}
-                    </code>
-                    <button
-                      onClick={() => copyToClipboard(getAccWsUrl(), 'ws-url')}
-                      className="p-2 hover:bg-zinc-700 rounded"
-                    >
-                      {copied === 'ws-url' ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
-                    </button>
+                {/* Connection Method Tabs */}
+                <div className="space-y-3">
+                  <label className="text-xs text-zinc-400">How will OpenClaw connect to Dispatch?</label>
+                  <div className="flex flex-wrap gap-1">
+                    {[
+                      { id: 'local' as const, label: 'Same Machine' },
+                      { id: 'ngrok' as const, label: 'ngrok' },
+                      { id: 'cloudflare' as const, label: 'Cloudflare' },
+                      { id: 'tailscale' as const, label: 'Tailscale' },
+                      { id: 'custom' as const, label: 'Custom URL' },
+                    ].map((provider) => (
+                      <button
+                        key={provider.id}
+                        onClick={() => {
+                          setTunnelProvider(provider.id);
+                          setCustomUrl('');
+                        }}
+                        className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
+                          tunnelProvider === provider.id
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'
+                        }`}
+                      >
+                        {provider.label}
+                      </button>
+                    ))}
                   </div>
-                  <p className="text-xs text-zinc-500">
-                    💡 For remote access, expose your ACC server with ngrok or cloudflared:
-                    <br />
-                    <code className="text-zinc-400">ngrok http 3333</code> or <code className="text-zinc-400">cloudflared tunnel --url http://localhost:3333</code>
+
+                  {/* Provider-specific instructions and input */}
+                  {tunnelProvider === 'local' && (
+                    <p className="text-xs text-zinc-500">
+                      OpenClaw is running on the same machine as Dispatch. Connection URL: <code className="text-green-400">{getAccWsUrl()}</code>
+                    </p>
+                  )}
+
+                  {tunnelProvider === 'ngrok' && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-zinc-500">
+                        Run <code className="text-zinc-300">ngrok http {getServerPort()}</code> on your Dispatch machine, then paste the URL:
+                      </p>
+                      <input
+                        type="text"
+                        value={customUrl}
+                        onChange={(e) => setCustomUrl(e.target.value)}
+                        placeholder="abc123.ngrok.io"
+                        className="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-600 rounded-md text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  )}
+
+                  {tunnelProvider === 'cloudflare' && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-zinc-500">
+                        Run <code className="text-zinc-300">cloudflared tunnel --url http://localhost:{getServerPort()}</code> then paste the URL:
+                      </p>
+                      <input
+                        type="text"
+                        value={customUrl}
+                        onChange={(e) => setCustomUrl(e.target.value)}
+                        placeholder="random-words.trycloudflare.com"
+                        className="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-600 rounded-md text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  )}
+
+                  {tunnelProvider === 'tailscale' && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-zinc-500">
+                        Enter your Tailscale machine name or IP (both machines must be on the same Tailnet):
+                      </p>
+                      <input
+                        type="text"
+                        value={customUrl}
+                        onChange={(e) => setCustomUrl(e.target.value)}
+                        placeholder={`my-macbook:${getServerPort()} or 100.x.x.x:${getServerPort()}`}
+                        className="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-600 rounded-md text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  )}
+
+                  {tunnelProvider === 'custom' && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-zinc-500">
+                        Enter the full URL where Dispatch is accessible:
+                      </p>
+                      <input
+                        type="text"
+                        value={customUrl}
+                        onChange={(e) => setCustomUrl(e.target.value)}
+                        placeholder="wss://your-server.com/channel or https://your-server.com"
+                        className="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-600 rounded-md text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  )}
+
+                  {/* Show configured URL */}
+                  {tunnelProvider !== 'local' && customUrl && (
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-zinc-500">Connection URL:</span>
+                      <code className="text-green-400">{getAccWsUrl()}</code>
+                    </div>
+                  )}
+                </div>
+
+                {/* Warning if URL not configured */}
+                {!isUrlConfigured() && tunnelProvider !== 'local' && (
+                  <p className="text-xs text-amber-400/80 bg-amber-950/30 px-3 py-2 rounded">
+                    ⚠️ Enter your tunnel URL above before copying the instructions.
                   </p>
-                </div>
+                )}
 
-                {/* Environment Variables */}
+                {/* Main: Copy-paste prompt for OpenClaw */}
                 <div className="space-y-2">
-                  <label className="text-sm text-zinc-400">1. Set environment variables</label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs bg-indigo-600 px-1.5 py-0.5 rounded font-medium">Send to OpenClaw</span>
+                    <label className="text-sm text-zinc-300">Copy and send this message</label>
+                  </div>
                   <div className="relative">
-                    <pre className="bg-zinc-900 p-3 rounded text-sm font-mono text-zinc-300 overflow-x-auto">
-                      {envVarsCmd}
-                    </pre>
+                    <pre className={`bg-zinc-900 p-3 rounded text-sm font-mono overflow-x-auto whitespace-pre-wrap ${
+                      isUrlConfigured() ? 'text-zinc-300' : 'text-zinc-500'
+                    }`}>
+{agentPrompt}</pre>
                     <button
-                      onClick={() => copyToClipboard(envVarsCmd, 'env')}
-                      className="absolute top-2 right-2 p-1.5 hover:bg-zinc-700 rounded"
+                      onClick={() => copyToClipboard(agentPrompt, 'prompt')}
+                      disabled={!isUrlConfigured()}
+                      className="absolute top-2 right-2 p-1.5 hover:bg-zinc-700 rounded bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {copied === 'env' ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                      {copied === 'prompt' ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
                     </button>
                   </div>
                 </div>
 
-                {/* Quick Install Command */}
-                <div className="space-y-2">
-                  <label className="text-sm text-zinc-400">2. Install & run the ACC hook</label>
-                  <div className="relative">
-                    <pre className="bg-zinc-900 p-3 rounded text-sm font-mono text-zinc-300 overflow-x-auto max-h-40">
-                      {hookInstallCmd}
-                    </pre>
+                {/* Manual commands (collapsed by default) */}
+                <details className="group">
+                  <summary className="text-xs text-zinc-500 cursor-pointer hover:text-zinc-300 flex items-center gap-1">
+                    <ChevronRight className="w-3 h-3 group-open:rotate-90 transition-transform" />
+                    Manual setup commands
+                  </summary>
+                  <div className="mt-2 relative">
+                    <pre className="bg-zinc-900 p-3 rounded text-xs font-mono text-zinc-400 overflow-x-auto whitespace-pre">
+{manualCommands}</pre>
                     <button
-                      onClick={() => copyToClipboard(hookInstallCmd, 'hook')}
+                      onClick={() => copyToClipboard(manualCommands, 'manual')}
                       className="absolute top-2 right-2 p-1.5 hover:bg-zinc-700 rounded"
                     >
-                      {copied === 'hook' ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                      {copied === 'manual' ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
                     </button>
                   </div>
-                </div>
+                </details>
 
-                <p className="text-sm text-zinc-400">
-                  Once connected, the agent will appear in the list above.
+                <p className="text-xs text-zinc-500 pt-2 border-t border-zinc-700">
+                  Once connected, the agent will appear in the list above automatically.
                 </p>
               </div>
             )}

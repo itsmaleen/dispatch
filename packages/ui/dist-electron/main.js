@@ -50,13 +50,17 @@ const child_process_1 = require("child_process");
 const crypto = __importStar(require("crypto"));
 const os = __importStar(require("os"));
 // ============ Configuration ============
-const DEFAULT_SERVER_PORT = 3333;
+const isDev = process.env.NODE_ENV === "development" || !electron_1.app.isPackaged;
+// Separate identity for dev vs prod (allows running both simultaneously)
+const APP_NAME = isDev ? "Dispatch (Dev)" : "Dispatch";
+const USER_DATA_DIR = isDev ? "dispatch-dev" : "dispatch";
+const DEFAULT_SERVER_PORT = isDev ? 3333 : 3334; // Different ports for dev/prod
 const MAX_RESTART_ATTEMPTS = 5;
 const RESTART_BACKOFF_BASE_MS = 1000;
 const RESTART_BACKOFF_MAX_MS = 30000;
 const SERVER_STARTUP_TIMEOUT_MS = 15000;
-const LOG_DIR = path.join(os.homedir(), ".acc", "logs");
-const STATE_DIR = path.join(os.homedir(), ".acc");
+const STATE_DIR = path.join(os.homedir(), `.${USER_DATA_DIR}`);
+const LOG_DIR = path.join(STATE_DIR, "logs");
 // ============ State ============
 let mainWindow = null;
 let serverProcess = null;
@@ -65,7 +69,6 @@ let serverAuthToken = "";
 let restartAttempt = 0;
 let restartTimer = null;
 let isQuitting = false;
-const isDev = process.env.NODE_ENV === "development" || !electron_1.app.isPackaged;
 // ============ Logging ============
 function ensureLogDir() {
     try {
@@ -333,6 +336,7 @@ function createWindow() {
     process.env.ACC_SERVER_WS_URL = wsUrl;
     log(`Server URLs: API=${apiUrl} WS=${wsUrl}`);
     mainWindow = new electron_1.BrowserWindow({
+        title: APP_NAME,
         width: 1400,
         height: 900,
         minWidth: 1000,
@@ -376,8 +380,16 @@ async function bootstrap() {
     createWindow();
     log("Bootstrap complete");
 }
+// ============ App Identity (Dev vs Prod) ============
+// Set app name and user data path BEFORE requesting single instance lock
+// This allows dev and prod to run simultaneously
+electron_1.app.name = APP_NAME;
+electron_1.app.setPath("userData", path.join(os.homedir(), "Library", "Application Support", USER_DATA_DIR));
+log(`App identity: ${APP_NAME} (isDev=${isDev})`);
+log(`User data: ${electron_1.app.getPath("userData")}`);
 // ============ Single Instance ============
-const gotSingleInstanceLock = electron_1.app.requestSingleInstanceLock();
+// Use different instance lock names for dev vs prod
+const gotSingleInstanceLock = electron_1.app.requestSingleInstanceLock({ key: USER_DATA_DIR });
 if (!gotSingleInstanceLock) {
     electron_1.app.quit();
 }
