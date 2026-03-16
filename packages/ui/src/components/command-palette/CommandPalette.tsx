@@ -1,6 +1,7 @@
 import { useEffect, useRef, useMemo, useCallback } from 'react';
 import { Search, ChevronRight, ArrowLeft } from 'lucide-react';
 import { useCommandPaletteStore } from '../../stores/command-palette';
+import { useWorkspaceStore } from '../../stores/workspace';
 import { commandRegistry } from '../../lib/commands/registry';
 import { CommandGroup } from './CommandGroup';
 import { CommandItem } from './CommandItem';
@@ -31,7 +32,13 @@ export function CommandPalette() {
     getRecentSelection,
   } = useCommandPaletteStore();
 
+  // Subscribe to workspace state that affects command visibility
+  // This ensures commands re-filter when focus or showAgentStatus changes
+  const focusedWidgetType = useWorkspaceStore(state => state.focusedWidgetType);
+  const showAgentStatus = useWorkspaceStore(state => state.showAgentStatus);
+
   // Get current commands based on subcommand stack
+  // Dependencies include visibility-affecting state to ensure proper re-filtering
   const currentCommands = useMemo(() => {
     if (subcommandStack.length > 0) {
       const parent = subcommandStack[subcommandStack.length - 1].parentCommand;
@@ -40,7 +47,7 @@ export function CommandPalette() {
       }
     }
     return commandRegistry.search(query);
-  }, [query, subcommandStack]);
+  }, [query, subcommandStack, focusedWidgetType, showAgentStatus]);
 
   // Filter commands when in subcommand mode
   const filteredCommands = useMemo(() => {

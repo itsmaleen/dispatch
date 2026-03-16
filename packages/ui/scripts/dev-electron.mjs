@@ -62,9 +62,9 @@ if (!serverBuilt) {
 }
 console.log('✅ Server build ready');
 
-// Build electron main and preload with tsc (clean CJS for Electron)
+// Build electron main (ESM) and preload (CJS) with tsc
 console.log('📦 Building Electron main/preload...');
-execSync('bunx tsc -p tsconfig.electron.json', {
+execSync('bunx tsc -p tsconfig.electron.json && bunx tsc -p tsconfig.preload.json', {
   stdio: 'inherit',
   cwd: root,
 });

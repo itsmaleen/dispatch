@@ -15,6 +15,10 @@ import * as net from "net";
 import { spawn, type ChildProcess } from "child_process";
 import * as crypto from "crypto";
 import * as os from "os";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // ============ Configuration ============
 
@@ -577,10 +581,11 @@ ipcMain.handle(
 );
 
 // Dialog: Open Folder
-ipcMain.handle("dialog:openFolder", async () => {
+ipcMain.handle("dialog:openFolder", async (_event, defaultPath?: string) => {
   const result = await dialog.showOpenDialog(mainWindow!, {
     properties: ["openDirectory"],
     title: "Select Project Folder",
+    defaultPath: defaultPath || undefined,
   });
 
   if (result.canceled || result.filePaths.length === 0) {

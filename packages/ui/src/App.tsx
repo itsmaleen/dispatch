@@ -91,15 +91,31 @@ export function App() {
   // Global keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't capture shortcuts when typing in inputs (except for Escape)
+      // Don't capture shortcuts when typing in inputs (except for Escape and some global shortcuts)
       const target = e.target as HTMLElement;
       const isInInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
 
-      // Escape always closes palette
-      if (e.key === 'Escape' && commandPalette.isOpen) {
-        e.preventDefault();
-        commandPalette.close();
-        return;
+      // Escape: close palette > restore maximized > clear focus
+      if (e.key === 'Escape') {
+        if (commandPalette.isOpen) {
+          e.preventDefault();
+          commandPalette.close();
+          return;
+        }
+        // If a widget is maximized, restore it
+        const maximizedWidgetId = useWorkspaceStore.getState().maximizedWidgetId;
+        if (maximizedWidgetId) {
+          e.preventDefault();
+          useWorkspaceStore.getState().setMaximizedWidget(null);
+          return;
+        }
+        // If a widget is focused and not in an input, clear focus
+        const focusedWidgetId = useWorkspaceStore.getState().focusedWidgetId;
+        if (focusedWidgetId && !isInInput) {
+          e.preventDefault();
+          useWorkspaceStore.getState().setFocusedWidget(null, null);
+          return;
+        }
       }
 
       // Cmd/Ctrl + K: Toggle command palette
@@ -131,11 +147,35 @@ export function App() {
         return;
       }
 
+      // Cmd/Ctrl + W: Close focused terminal
+      if ((e.metaKey || e.ctrlKey) && e.key === 'w' && !isInInput) {
+        e.preventDefault();
+        useWorkspaceStore.getState().closeFocusedTerminal();
+        return;
+      }
+
+      // Cmd/Ctrl + Enter: Toggle maximize focused widget
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && !isInInput) {
+        e.preventDefault();
+        useWorkspaceStore.getState().toggleMaximizeFocusedWidget();
+        return;
+      }
+
       // Cmd/Ctrl + Shift + D: Toggle demo view
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'D') {
         e.preventDefault();
         setView(view === 'demo' ? 'home' : 'demo');
         return;
+      }
+
+      // Arrow key navigation (only when not in input and palette is closed)
+      if (!isInInput && !commandPalette.isOpen) {
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+          e.preventDefault();
+          const direction = e.key.replace('Arrow', '').toLowerCase() as 'up' | 'down' | 'left' | 'right';
+          useWorkspaceStore.getState().moveFocus(direction);
+          return;
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);

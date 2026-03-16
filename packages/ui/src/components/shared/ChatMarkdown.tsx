@@ -11,7 +11,7 @@ interface ChatMarkdownProps {
 }
 
 // Map common language aliases
-const languageMap: Record<string, BundledLanguage> = {
+const languageMap: Record<string, BundledLanguage | 'text'> = {
   js: 'javascript',
   ts: 'typescript',
   py: 'python',
@@ -19,13 +19,13 @@ const languageMap: Record<string, BundledLanguage> = {
   sh: 'bash',
   shell: 'bash',
   yml: 'yaml',
-  '': 'plaintext',
+  '': 'text',
 };
 
-function normalizeLanguage(lang: string | undefined): BundledLanguage {
-  if (!lang) return 'plaintext';
+function normalizeLanguage(lang: string | undefined): BundledLanguage | 'text' {
+  if (!lang) return 'text';
   const mapped = languageMap[lang.toLowerCase()];
-  return (mapped || lang.toLowerCase()) as BundledLanguage;
+  return (mapped || lang.toLowerCase()) as BundledLanguage | 'text';
 }
 
 // Code block with syntax highlighting

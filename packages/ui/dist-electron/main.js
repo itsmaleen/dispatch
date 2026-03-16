@@ -1,4 +1,3 @@
-"use strict";
 /**
  * Electron Main Process
  *
@@ -8,49 +7,18 @@
  * - Server lifecycle fully managed by Electron
  * - Works identically in dev and packaged builds
  */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", { value: true });
-const electron_1 = require("electron");
-const path = __importStar(require("path"));
-const fs = __importStar(require("fs"));
-const net = __importStar(require("net"));
-const child_process_1 = require("child_process");
-const crypto = __importStar(require("crypto"));
-const os = __importStar(require("os"));
+import { app, BrowserWindow, ipcMain, dialog } from "electron";
+import * as path from "path";
+import * as fs from "fs";
+import * as net from "net";
+import { spawn } from "child_process";
+import * as crypto from "crypto";
+import * as os from "os";
+import { fileURLToPath } from "url";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 // ============ Configuration ============
-const isDev = process.env.NODE_ENV === "development" || !electron_1.app.isPackaged;
+const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
 // Separate identity for dev vs prod (allows running both simultaneously)
 const APP_NAME = isDev ? "Dispatch (Dev)" : "Dispatch";
 const USER_DATA_DIR = isDev ? "dispatch-dev" : "dispatch";
@@ -137,7 +105,7 @@ async function waitForServerReady(port, maxMs = SERVER_STARTUP_TIMEOUT_MS) {
 }
 // ============ Server Lifecycle ============
 function resolveServerEntry() {
-    if (electron_1.app.isPackaged) {
+    if (app.isPackaged) {
         // Packaged: server bundle in Resources/server
         const bundled = path.join(process.resourcesPath, "server", "dist", "run.js");
         if (fs.existsSync(bundled)) {
@@ -158,7 +126,7 @@ function resolveServerEntry() {
     return null;
 }
 function resolveServerCwd() {
-    if (electron_1.app.isPackaged) {
+    if (app.isPackaged) {
         return path.join(process.resourcesPath, "server");
     }
     return path.resolve(__dirname, "../../server");
@@ -221,7 +189,7 @@ async function startServer() {
     log(`Server cwd: ${cwd}`);
     // T3 Code pattern: ALWAYS use Electron itself as Node runtime
     // This works in both dev and production because server is pre-built to JS
-    const child = (0, child_process_1.spawn)(process.execPath, [serverEntry], {
+    const child = spawn(process.execPath, [serverEntry], {
         cwd,
         env: {
             ...env,
@@ -335,7 +303,7 @@ function createWindow() {
     process.env.ACC_SERVER_API_URL = apiUrl;
     process.env.ACC_SERVER_WS_URL = wsUrl;
     log(`Server URLs: API=${apiUrl} WS=${wsUrl}`);
-    mainWindow = new electron_1.BrowserWindow({
+    mainWindow = new BrowserWindow({
         title: APP_NAME,
         width: 1400,
         height: 900,
@@ -383,18 +351,18 @@ async function bootstrap() {
 // ============ App Identity (Dev vs Prod) ============
 // Set app name and user data path BEFORE requesting single instance lock
 // This allows dev and prod to run simultaneously
-electron_1.app.name = APP_NAME;
-electron_1.app.setPath("userData", path.join(os.homedir(), "Library", "Application Support", USER_DATA_DIR));
+app.name = APP_NAME;
+app.setPath("userData", path.join(os.homedir(), "Library", "Application Support", USER_DATA_DIR));
 log(`App identity: ${APP_NAME} (isDev=${isDev})`);
-log(`User data: ${electron_1.app.getPath("userData")}`);
+log(`User data: ${app.getPath("userData")}`);
 // ============ Single Instance ============
 // Use different instance lock names for dev vs prod
-const gotSingleInstanceLock = electron_1.app.requestSingleInstanceLock({ key: USER_DATA_DIR });
+const gotSingleInstanceLock = app.requestSingleInstanceLock({ key: USER_DATA_DIR });
 if (!gotSingleInstanceLock) {
-    electron_1.app.quit();
+    app.quit();
 }
 else {
-    electron_1.app.on("second-instance", () => {
+    app.on("second-instance", () => {
         if (mainWindow) {
             if (mainWindow.isMinimized())
                 mainWindow.restore();
@@ -403,25 +371,25 @@ else {
     });
 }
 // ============ App Lifecycle ============
-electron_1.app.whenReady().then(() => {
+app.whenReady().then(() => {
     bootstrap().catch((error) => {
         log("Bootstrap failed:", error);
-        electron_1.dialog.showErrorBox("Dispatch failed to start", String(error));
-        electron_1.app.quit();
+        dialog.showErrorBox("Dispatch failed to start", String(error));
+        app.quit();
     });
-    electron_1.app.on("activate", () => {
-        if (electron_1.BrowserWindow.getAllWindows().length === 0) {
+    app.on("activate", () => {
+        if (BrowserWindow.getAllWindows().length === 0) {
             bootstrap();
         }
     });
 });
-electron_1.app.on("before-quit", () => {
+app.on("before-quit", () => {
     isQuitting = true;
     stopServer();
 });
-electron_1.app.on("window-all-closed", () => {
+app.on("window-all-closed", () => {
     if (process.platform !== "darwin") {
-        electron_1.app.quit();
+        app.quit();
     }
 });
 // Handle SIGINT/SIGTERM for clean shutdown
@@ -431,26 +399,26 @@ if (process.platform !== "win32") {
             return;
         isQuitting = true;
         stopServer();
-        electron_1.app.quit();
+        app.quit();
     });
     process.on("SIGTERM", () => {
         if (isQuitting)
             return;
         isQuitting = true;
         stopServer();
-        electron_1.app.quit();
+        app.quit();
     });
 }
 // ============ IPC Handlers ============
 // Sync handler for preload to get server URLs
-electron_1.ipcMain.on("server:get-urls", (event) => {
+ipcMain.on("server:get-urls", (event) => {
     event.returnValue = {
         apiUrl: `http://127.0.0.1:${serverPort}`,
         wsUrl: `ws://127.0.0.1:${serverPort}`,
     };
 });
 // Get server info
-electron_1.ipcMain.handle("server:info", () => {
+ipcMain.handle("server:info", () => {
     return {
         port: serverPort,
         pid: serverProcess?.pid,
@@ -459,28 +427,28 @@ electron_1.ipcMain.handle("server:info", () => {
     };
 });
 // Restart server (for debugging/recovery)
-electron_1.ipcMain.handle("server:restart", async () => {
+ipcMain.handle("server:restart", async () => {
     log("Manual server restart requested");
     stopServer();
     await new Promise(r => setTimeout(r, 500));
     return startServer();
 });
 // Adapter management
-electron_1.ipcMain.handle("adapter:connect", async (_event, adapterId, config) => {
+ipcMain.handle("adapter:connect", async (_event, adapterId, config) => {
     log("Connecting adapter:", adapterId);
     return { ok: true };
 });
-electron_1.ipcMain.handle("adapter:disconnect", async (_event, adapterId) => {
+ipcMain.handle("adapter:disconnect", async (_event, adapterId) => {
     log("Disconnecting adapter:", adapterId);
     return { ok: true };
 });
-electron_1.ipcMain.handle("adapter:send", async (_event, adapterId, message) => {
+ipcMain.handle("adapter:send", async (_event, adapterId, message) => {
     log("Sending to adapter:", adapterId);
     return { ok: true, turnId: crypto.randomUUID() };
 });
 // Launchers
-electron_1.ipcMain.handle("launcher:cursor", async (_event, projectPath) => {
-    const { exec } = await Promise.resolve().then(() => __importStar(require("child_process")));
+ipcMain.handle("launcher:cursor", async (_event, projectPath) => {
+    const { exec } = await import("child_process");
     return new Promise((resolve, reject) => {
         exec(`cursor "${projectPath}"`, (error) => {
             if (error)
@@ -490,14 +458,14 @@ electron_1.ipcMain.handle("launcher:cursor", async (_event, projectPath) => {
         });
     });
 });
-electron_1.ipcMain.handle("launcher:browser", async (_event, url) => {
-    const { shell } = await Promise.resolve().then(() => __importStar(require("electron")));
+ipcMain.handle("launcher:browser", async (_event, url) => {
+    const { shell } = await import("electron");
     await shell.openExternal(url);
     return { ok: true };
 });
 // CodeRabbit CLI
-electron_1.ipcMain.handle("coderabbit:review", async (_event, cwd) => {
-    const { exec } = await Promise.resolve().then(() => __importStar(require("child_process")));
+ipcMain.handle("coderabbit:review", async (_event, cwd) => {
+    const { exec } = await import("child_process");
     return new Promise((resolve, reject) => {
         exec("cr --prompt-only", { cwd }, (error, stdout, stderr) => {
             if (error)
@@ -508,8 +476,8 @@ electron_1.ipcMain.handle("coderabbit:review", async (_event, cwd) => {
     });
 });
 // GitHub CLI
-electron_1.ipcMain.handle("github:createPr", async (_event, options) => {
-    const { exec } = await Promise.resolve().then(() => __importStar(require("child_process")));
+ipcMain.handle("github:createPr", async (_event, options) => {
+    const { exec } = await import("child_process");
     return new Promise((resolve, reject) => {
         exec(`gh pr create --title "${options.title}" --body "${options.body}"`, { cwd: options.cwd }, (error, stdout, stderr) => {
             if (error)
@@ -520,10 +488,11 @@ electron_1.ipcMain.handle("github:createPr", async (_event, options) => {
     });
 });
 // Dialog: Open Folder
-electron_1.ipcMain.handle("dialog:openFolder", async () => {
-    const result = await electron_1.dialog.showOpenDialog(mainWindow, {
+ipcMain.handle("dialog:openFolder", async (_event, defaultPath) => {
+    const result = await dialog.showOpenDialog(mainWindow, {
         properties: ["openDirectory"],
         title: "Select Project Folder",
+        defaultPath: defaultPath || undefined,
     });
     if (result.canceled || result.filePaths.length === 0) {
         return null;

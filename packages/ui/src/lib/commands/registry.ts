@@ -63,10 +63,12 @@ const CATEGORY_LABELS: Record<CommandCategory, string> = {
   terminal: 'Terminal',
   adapter: 'Adapters',
   task: 'Tasks',
+  layout: 'Layout',
 };
 
 const CATEGORY_ORDER: CommandCategory[] = [
   'terminal',
+  'layout',
   'task',
   'navigation',
   'adapter',
@@ -106,10 +108,14 @@ class CommandRegistry {
   }
 
   /**
-   * Get all registered commands
+   * Get all registered commands (optionally filtered by visibility)
    */
-  getAll(): Command[] {
-    return Array.from(this.commands.values());
+  getAll(filterByVisibility = true): Command[] {
+    const commands = Array.from(this.commands.values());
+    if (filterByVisibility) {
+      return commands.filter(cmd => !cmd.isVisible || cmd.isVisible());
+    }
+    return commands;
   }
 
   /**
@@ -122,9 +128,11 @@ class CommandRegistry {
   /**
    * Search commands with fuzzy matching
    * Returns commands sorted by match score (best first)
+   * Commands with isVisible() returning false are filtered out
    */
   search(query: string): Command[] {
-    const commands = this.getAll();
+    // Get all visible commands
+    const commands = this.getAll(true);
 
     if (!query.trim()) {
       // No query - return all commands in category order

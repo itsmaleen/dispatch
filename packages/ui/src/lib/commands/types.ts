@@ -1,6 +1,6 @@
 import type { ComponentType } from 'react';
 
-export type CommandCategory = 'navigation' | 'terminal' | 'adapter' | 'task';
+export type CommandCategory = 'navigation' | 'terminal' | 'adapter' | 'task' | 'layout';
 
 export type CommandAction =
   | { type: 'execute'; handler: () => void | Promise<void> }
@@ -16,6 +16,8 @@ export interface Command {
   shortcut?: string; // Display string like "⌘N"
   keywords?: string[]; // Additional search terms
   action: CommandAction;
+  /** Optional function to determine if this command should be visible. If not provided, command is always visible. */
+  isVisible?: () => boolean;
 }
 
 export interface CommandGroup {

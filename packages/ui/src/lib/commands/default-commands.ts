@@ -4,6 +4,18 @@ import {
   Home,
   Layout,
   Plug,
+  X,
+  Minus,
+  Maximize2,
+  Trash2,
+  Users,
+  SplitSquareHorizontal,
+  SplitSquareVertical,
+  LayoutGrid,
+  Columns,
+  Rows,
+  Grid2X2,
+  RotateCcw,
 } from 'lucide-react';
 import type { Command } from './types';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -122,6 +134,210 @@ export function createDefaultCommands(): Command[] {
           }
 
           return subcommands;
+        },
+      },
+    },
+
+    // ========================================
+    // Terminal Actions (always visible, operate on focused widget)
+    // ========================================
+    {
+      id: 'close-terminal',
+      label: 'Close Terminal',
+      description: 'Close the focused terminal',
+      category: 'terminal',
+      icon: X,
+      shortcut: '⌘W',
+      keywords: ['close', 'terminal', 'kill', 'exit'],
+      action: {
+        type: 'execute',
+        handler: () => {
+          const { focusedWidgetId, focusedWidgetType } = useWorkspaceStore.getState();
+          if (focusedWidgetType === 'terminal' && focusedWidgetId) {
+            useWorkspaceStore.getState().closeTerminal(focusedWidgetId);
+          }
+        },
+      },
+    },
+    {
+      id: 'minimize-terminal',
+      label: 'Minimize Terminal',
+      description: 'Minimize the focused terminal to the bottom bar',
+      category: 'terminal',
+      icon: Minus,
+      keywords: ['minimize', 'terminal', 'hide', 'dock'],
+      action: {
+        type: 'execute',
+        handler: () => {
+          const { focusedWidgetId, focusedWidgetType } = useWorkspaceStore.getState();
+          if (focusedWidgetType === 'terminal' && focusedWidgetId) {
+            useWorkspaceStore.getState().minimizeTerminal(focusedWidgetId);
+          }
+        },
+      },
+    },
+    {
+      id: 'maximize-widget',
+      label: 'Maximize / Restore',
+      description: 'Toggle fullscreen for the focused widget',
+      category: 'terminal',
+      icon: Maximize2,
+      shortcut: '⌘↵',
+      keywords: ['maximize', 'fullscreen', 'expand', 'restore', 'minimize'],
+      action: {
+        type: 'execute',
+        handler: () => {
+          useWorkspaceStore.getState().toggleMaximizeFocusedWidget();
+        },
+      },
+    },
+    {
+      id: 'clear-terminal',
+      label: 'Clear Terminal',
+      description: 'Clear the output of the focused terminal',
+      category: 'terminal',
+      icon: Trash2,
+      keywords: ['clear', 'terminal', 'clean', 'reset', 'output'],
+      action: {
+        type: 'execute',
+        handler: () => {
+          const { focusedWidgetId, focusedWidgetType } = useWorkspaceStore.getState();
+          if (focusedWidgetType === 'terminal' && focusedWidgetId) {
+            useWorkspaceStore.getState().clearTerminal(focusedWidgetId);
+          }
+        },
+      },
+    },
+    {
+      id: 'toggle-agent-status',
+      label: 'Toggle Agent Status',
+      description: 'Show or hide the agent status panel',
+      category: 'terminal',
+      icon: Users,
+      keywords: ['agent', 'status', 'show', 'hide', 'panel', 'toggle'],
+      action: {
+        type: 'execute',
+        handler: () => {
+          const { showAgentStatus } = useWorkspaceStore.getState();
+          useWorkspaceStore.getState().setShowAgentStatus(!showAgentStatus);
+        },
+      },
+    },
+    {
+      id: 'toggle-tasks',
+      label: 'Toggle Tasks Panel',
+      description: 'Show or hide the tasks panel',
+      category: 'layout',
+      icon: Sparkles,
+      keywords: ['tasks', 'show', 'hide', 'panel', 'toggle', 'todo'],
+      action: {
+        type: 'execute',
+        handler: () => {
+          const { tasksVisible } = useWorkspaceStore.getState();
+          useWorkspaceStore.getState().setTasksVisible(!tasksVisible);
+        },
+      },
+    },
+
+    // ========================================
+    // Layout Commands
+    // ========================================
+    {
+      id: 'layout-presets',
+      label: 'Apply Layout Preset',
+      description: 'Switch to a predefined layout arrangement',
+      category: 'layout',
+      icon: LayoutGrid,
+      keywords: ['layout', 'preset', 'arrange', 'split', 'grid', 'tmux'],
+      action: {
+        type: 'subcommand',
+        getCommands: (): Command[] => {
+          const { terminals } = useWorkspaceStore.getState();
+          const terminalIds = terminals.map(t => t.id);
+
+          return [
+            {
+              id: 'layout-default',
+              label: 'Default Layout',
+              description: 'Terminals on left, tasks on right',
+              category: 'layout',
+              icon: Layout,
+              action: {
+                type: 'execute',
+                handler: () => {
+                  useWorkspaceStore.getState().applyLayoutPreset('default', terminalIds);
+                },
+              },
+            },
+            {
+              id: 'layout-master-stack',
+              label: 'Master-Stack',
+              description: 'Large main terminal with stacked side panels',
+              category: 'layout',
+              icon: Columns,
+              action: {
+                type: 'execute',
+                handler: () => {
+                  useWorkspaceStore.getState().applyLayoutPreset('master-stack', terminalIds);
+                },
+              },
+            },
+            {
+              id: 'layout-even-horizontal',
+              label: 'Even Horizontal',
+              description: 'Equal-width columns side by side',
+              category: 'layout',
+              icon: Columns,
+              action: {
+                type: 'execute',
+                handler: () => {
+                  useWorkspaceStore.getState().applyLayoutPreset('even-horizontal', terminalIds);
+                },
+              },
+            },
+            {
+              id: 'layout-even-vertical',
+              label: 'Even Vertical',
+              description: 'Equal-height rows stacked vertically',
+              category: 'layout',
+              icon: Rows,
+              action: {
+                type: 'execute',
+                handler: () => {
+                  useWorkspaceStore.getState().applyLayoutPreset('even-vertical', terminalIds);
+                },
+              },
+            },
+            {
+              id: 'layout-quad',
+              label: 'Quad Grid',
+              description: '2x2 grid layout',
+              category: 'layout',
+              icon: Grid2X2,
+              action: {
+                type: 'execute',
+                handler: () => {
+                  useWorkspaceStore.getState().applyLayoutPreset('quad', terminalIds);
+                },
+              },
+            },
+          ];
+        },
+      },
+    },
+    {
+      id: 'reset-layout',
+      label: 'Reset Layout',
+      description: 'Reset to default layout arrangement',
+      category: 'layout',
+      icon: RotateCcw,
+      keywords: ['reset', 'layout', 'default', 'restore'],
+      action: {
+        type: 'execute',
+        handler: () => {
+          const { terminals } = useWorkspaceStore.getState();
+          const terminalIds = terminals.map(t => t.id);
+          useWorkspaceStore.getState().applyLayoutPreset('default', terminalIds);
         },
       },
     },

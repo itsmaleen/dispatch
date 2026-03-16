@@ -88,6 +88,6 @@ electron_1.contextBridge.exposeInMainWorld("electronAPI", {
     // System
     platform: process.platform,
     // Project
-    openFolder: () => electron_1.ipcRenderer.invoke("dialog:openFolder"),
+    openFolder: (defaultPath) => electron_1.ipcRenderer.invoke("dialog:openFolder", defaultPath),
 });
 // Type declaration for renderer is in src/types/electron.d.ts

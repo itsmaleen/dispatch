@@ -3,7 +3,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Paperclip, X, Image, FileText, File, Loader2 } from 'lucide-react';
+import { Send, Paperclip, X, Image, FileText, File, Loader2, Clock } from 'lucide-react';
 
 export interface UploadedFile {
   id: string;
@@ -22,6 +22,14 @@ interface ChatInputProps {
   className?: string;
   showPrompt?: boolean;
   promptIcon?: string;
+  /** When true, allows typing while disabled and queues the message */
+  allowQueue?: boolean;
+  /** Current queued message (if any) */
+  queuedMessage?: { message: string; files?: UploadedFile[] } | null;
+  /** Called when a message is queued while disabled */
+  onQueue?: (message: string, files?: UploadedFile[]) => void;
+  /** Called when the queued message is cleared */
+  onClearQueue?: () => void;
 }
 
 function formatFileSize(bytes: number): string {
@@ -43,6 +51,10 @@ export function ChatInput({
   className = '',
   showPrompt = true,
   promptIcon = '❯',
+  allowQueue = false,
+  queuedMessage,
+  onQueue,
+  onClearQueue,
 }: ChatInputProps) {
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -64,13 +76,26 @@ export function ChatInput({
   }, [input]);
 
   const handleSubmit = useCallback(() => {
-    if ((!input.trim() && files.length === 0) || disabled) return;
-    
+    if (!input.trim() && files.length === 0) return;
+
     const readyFiles = files.filter(f => f.status === 'ready');
-    onSend(input.trim(), readyFiles.length > 0 ? readyFiles : undefined);
+    const messageFiles = readyFiles.length > 0 ? readyFiles : undefined;
+
+    // If disabled but queueing is allowed, queue the message
+    if (disabled && allowQueue && onQueue) {
+      onQueue(input.trim(), messageFiles);
+      setInput('');
+      setFiles([]);
+      return;
+    }
+
+    // Normal send (only when not disabled)
+    if (disabled) return;
+
+    onSend(input.trim(), messageFiles);
     setInput('');
     setFiles([]);
-  }, [input, files, disabled, onSend]);
+  }, [input, files, disabled, allowQueue, onQueue, onSend]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -165,14 +190,35 @@ export function ChatInput({
 
   const hasContent = input.trim().length > 0 || files.length > 0;
   const isUploading = files.some(f => f.status === 'uploading');
+  const canQueue = disabled && allowQueue && hasContent;
 
   return (
-    <div 
+    <div
       className={`flex flex-col gap-2 ${className}`}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
     >
+      {/* Queued message indicator */}
+      {queuedMessage && (
+        <div className="flex items-center gap-2 px-2 py-1.5 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+          <Clock className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+          <span className="text-xs text-amber-400 font-medium">In queue</span>
+          <span className="text-xs text-zinc-400 truncate flex-1">
+            {queuedMessage.message || `${queuedMessage.files?.length} file(s)`}
+          </span>
+          {onClearQueue && (
+            <button
+              onClick={onClearQueue}
+              className="p-0.5 hover:bg-amber-500/20 rounded transition-colors"
+              title="Remove from queue"
+            >
+              <X className="w-3 h-3 text-amber-400 hover:text-amber-300" />
+            </button>
+          )}
+        </div>
+      )}
+
       {/* File previews */}
       {files.length > 0 && (
         <div className="flex flex-wrap gap-2 px-1">
@@ -227,20 +273,20 @@ export function ChatInput({
         className={`
           flex items-center gap-2 bg-zinc-900 rounded-lg px-3 py-2 transition-colors
           ${isDragging ? 'ring-2 ring-violet-500/50 bg-violet-500/5' : ''}
-          ${disabled ? 'opacity-50' : ''}
+          ${disabled && !allowQueue ? 'opacity-50' : ''}
         `}
       >
         {showPrompt && (
           <span className="text-violet-400 text-sm">{promptIcon}</span>
         )}
-        
+
         <textarea
           ref={textareaRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={isDragging ? 'Drop files here...' : placeholder}
-          disabled={disabled}
+          placeholder={isDragging ? 'Drop files here...' : (disabled && allowQueue ? 'Type to queue message...' : placeholder)}
+          disabled={disabled && !allowQueue}
           rows={1}
           className="flex-1 bg-transparent text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none resize-none min-h-[24px] max-h-[200px] py-0.5"
           style={{ height: 'auto' }}
@@ -254,24 +300,26 @@ export function ChatInput({
             onChange={(e) => e.target.files && handleFiles(e.target.files)}
             className="hidden"
           />
-          
-          <button 
+
+          <button
             onClick={() => fileInputRef.current?.click()}
-            disabled={disabled}
+            disabled={disabled && !allowQueue}
             className="p-1 text-zinc-500 hover:text-zinc-300 disabled:opacity-30"
             title="Attach files"
           >
             <Paperclip className="w-4 h-4" />
           </button>
 
-          <button 
-            onClick={handleSubmit} 
-            disabled={!hasContent || disabled || isUploading}
-            className="p-1 text-zinc-500 hover:text-violet-400 disabled:opacity-30"
-            title="Send message"
+          <button
+            onClick={handleSubmit}
+            disabled={!hasContent || isUploading || (disabled && !allowQueue) || !!queuedMessage}
+            className={`p-1 disabled:opacity-30 ${canQueue ? 'text-amber-400 hover:text-amber-300' : 'text-zinc-500 hover:text-violet-400'}`}
+            title={canQueue ? 'Add to queue' : (queuedMessage ? 'Message already queued' : 'Send message')}
           >
             {isUploading ? (
               <Loader2 className="w-4 h-4 animate-spin" />
+            ) : canQueue ? (
+              <Clock className="w-4 h-4" />
             ) : (
               <Send className="w-4 h-4" />
             )}

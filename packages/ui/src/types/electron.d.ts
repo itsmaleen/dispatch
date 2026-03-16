@@ -34,7 +34,7 @@ declare global {
         createPr: (options: { title: string; body: string; cwd: string }) => Promise<{ ok: boolean; output: string }>;
       };
       platform: NodeJS.Platform;
-      openFolder: () => Promise<string | null>;
+      openFolder: (defaultPath?: string) => Promise<string | null>;
     };
   }
 }
