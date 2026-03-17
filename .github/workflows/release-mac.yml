@@ -64,9 +64,20 @@ jobs:
         if: steps.sign.outputs.sign_enabled == 'true'
         run: cd packages/ui && bun run build:electron:sign
 
+      - name: Set release tag
+        id: release_tag
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=release-latest" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           files: |
             packages/ui/release/*.dmg
             packages/ui/release/*.zip
