@@ -28,6 +28,7 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+.env.production
 
 # Lock files (keep bun.lock)
 package-lock.json

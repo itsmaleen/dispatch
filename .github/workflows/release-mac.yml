@@ -1,0 +1,72 @@
+# Build macOS app and attach to GitHub Release when a version tag is pushed.
+# Push a tag: git tag v0.1.0 && git push origin v0.1.0
+# Release URL: https://github.com/OWNER/REPO/releases/latest
+#
+# For signed + notarized builds, set these repository secrets:
+#   APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
+#   CSC_LINK_BASE64 (base64-encoded .p12), CSC_KEY_PASSWORD
+
+name: Release macOS
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release-mac:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Prepare code signing (optional)
+        id: sign
+        env:
+          CSC_LINK_BASE64: ${{ secrets.CSC_LINK_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          if [ -n "$CSC_LINK_BASE64" ] && [ -n "$CSC_KEY_PASSWORD" ]; then
+            echo "$CSC_LINK_BASE64" | base64 --decode > /tmp/cert.p12
+            echo "CSC_LINK=/tmp/cert.p12" >> $GITHUB_ENV
+            echo "CSC_KEY_PASSWORD=$CSC_KEY_PASSWORD" >> $GITHUB_ENV
+            echo "sign_enabled=true" >> $GITHUB_OUTPUT
+          else
+            echo "sign_enabled=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set Apple notarization env (optional)
+        if: steps.sign.outputs.sign_enabled == 'true'
+        run: |
+          echo "APPLE_ID=${{ secrets.APPLE_ID }}" >> $GITHUB_ENV
+          echo "APPLE_APP_SPECIFIC_PASSWORD=${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" >> $GITHUB_ENV
+          echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}" >> $GITHUB_ENV
+
+      - name: Build app
+        run: bun run build
+
+      - name: Sign and notarize
+        if: steps.sign.outputs.sign_enabled == 'true'
+        run: cd packages/ui && bun run build:electron:sign
+
+      - name: Create Release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            packages/ui/release/*.dmg
+            packages/ui/release/*.zip
+          generate_release_notes: true
+          draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

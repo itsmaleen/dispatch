@@ -49,6 +49,12 @@ Build the Electron app and install it to `/Applications` (macOS):
 bun run install:app
 ```
 
+To build a **signed and notarized** DMG for sharing (uses `.env.production` for Apple credentials):
+
+```bash
+bun run sign:mac
+```
+
 This produces a DMG under `packages/ui/release/`, mounts it, and copies **Dispatch.app** to `/Applications`. Then run the app from Spotlight (Cmd+Space → "Dispatch") or:
 
 ```bash
@@ -158,6 +164,29 @@ cd packages/ui && bun dev
 - **Server**: Hono + WebSocket (ws)
 - **Types**: TypeScript + Zod
 - **Monorepo**: Turborepo
+
+## Releasing (GitHub)
+
+**Manual:** Run `bun run sign:mac`, then open the repo on GitHub → **Releases** → **Draft a new release**. Choose a tag (e.g. `v0.1.0`), add notes, and upload `packages/ui/release/Dispatch-0.1.0-arm64.dmg`. Publish. Share the release link (e.g. `https://github.com/OWNER/REPO/releases/latest`).
+
+**Automated:** Push a version tag to trigger a build and release:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The [Release macOS](.github/workflows/release-mac.yml) workflow builds the app, optionally signs and notarizes if secrets are set, and attaches the DMG (and zip) to the release. To get **signed** builds in CI, add these repository secrets:
+
+| Secret | Description |
+|--------|-------------|
+| `APPLE_ID` | Apple ID email |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password from appleid.apple.com |
+| `APPLE_TEAM_ID` | Team ID (e.g. `W7SDNRPA36`) |
+| `CSC_LINK_BASE64` | Base64-encoded Developer ID Application .p12 (e.g. `base64 -i cert.p12 | pbcopy`) |
+| `CSC_KEY_PASSWORD` | Password for the .p12 |
+
+If `CSC_LINK_BASE64` and `CSC_KEY_PASSWORD` are not set, the workflow still runs and uploads an **unsigned** DMG.
 
 ## License
 

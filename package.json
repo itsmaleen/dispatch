@@ -13,6 +13,7 @@
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
+    "sign:mac": "./scripts/sign-and-notarize-mac.sh",
     "install:app": "bun run build && ./scripts/build-and-install.sh",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
