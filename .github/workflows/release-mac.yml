@@ -1,5 +1,7 @@
-# Build macOS app and attach to GitHub Release when a version tag is pushed.
-# Push a tag: git tag v0.1.0 && git push origin v0.1.0
+# Build macOS app and attach to GitHub Release.
+# Triggers:
+#   - Push to main branch
+#   - Push of a version tag (e.g. git tag v0.1.0 && git push origin v0.1.0)
 # Release URL: https://github.com/OWNER/REPO/releases/latest
 #
 # For signed + notarized builds, set these repository secrets:
@@ -10,6 +12,8 @@ name: Release macOS
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
 
