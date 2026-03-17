@@ -229,6 +229,7 @@ export interface ActivityEvent {
   threadId: string;
   turnId: string;
   payload: {
+    itemId?: string;  // Unique ID to track and update this activity
     activityType: ActivityType;
     label: string;
     detail?: string;
@@ -237,9 +238,22 @@ export interface ActivityEvent {
   timestamp?: Date;
 }
 
+export interface ActivityUpdateEvent {
+  type: 'activity.update';
+  adapterId?: string;
+  threadId: string;
+  turnId: string;
+  payload: {
+    itemId: string;  // Required - identifies which activity to update
+    detail?: string;
+    status?: 'running' | 'completed' | 'failed';
+  };
+  timestamp?: Date;
+}
+
 // ============ Union Type ============
 
-export type RuntimeEvent = 
+export type RuntimeEvent =
   | SessionStartedEvent
   | SessionStateChangedEvent
   | SessionEndedEvent
@@ -255,4 +269,5 @@ export type RuntimeEvent =
   | ApprovalResolvedEvent
   | PlanUpdatedEvent
   | ErrorEvent
-  | ActivityEvent;
+  | ActivityEvent
+  | ActivityUpdateEvent;

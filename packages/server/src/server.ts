@@ -17,7 +17,10 @@ import { createClaudeCodeAdapter } from './adapters/claude-code';
 import { createOpenClawAdapter } from './adapters/openclaw';
 import { getSessionManager, type Thread, type Session } from './adapters/session-manager';
 import { getTaskStore, type Task as ExtractedTask } from './persistence/task-store';
+import { getReactiveTaskStore } from './persistence/reactive-task-store';
 import { getExtractor, type ExtractionResult } from './extractor';
+import { initSyncEventEmitter, getSyncEventEmitter, type SyncEvent } from './events/sync-events';
+import { initQueryManager, getQueryManager } from './subscriptions/query-manager';
 
 interface ManagedAdapter {
   implementation: AdapterImplementation;
@@ -50,6 +53,7 @@ export class CommandCenterServer {
   private wss: WebSocketServer | null = null;
   private adapters = new Map<string, ManagedAdapter>();
   private clients = new Set<WebSocket>();
+  private clientIds = new Map<WebSocket, string>(); // WebSocket -> clientId for query subscriptions
   private connectedAgents = new Map<string, ConnectedAgent>();
   private tasks = new Map<string, Task>();
   private _port: number;
@@ -543,10 +547,11 @@ export class CommandCenterServer {
     this.app.patch('/extracted-tasks/:id', async (c) => {
       const id = c.req.param('id');
       const { status } = await c.req.json<{ status: ExtractedTask['status'] }>();
-      
-      const store = getTaskStore();
+
+      const store = getReactiveTaskStore();
       store.updateStatus(id, status);
-      
+      // Events auto-emitted by ReactiveTaskStore
+
       const task = store.getTask(id);
       return c.json({ ok: true, task });
     });
@@ -554,25 +559,307 @@ export class CommandCenterServer {
     // Dismiss a suggested task
     this.app.post('/extracted-tasks/:id/dismiss', (c) => {
       const id = c.req.param('id');
-      const store = getTaskStore();
+      const store = getReactiveTaskStore();
       store.dismissTask(id);
+      // Events auto-emitted by ReactiveTaskStore
+
       return c.json({ ok: true });
     });
 
     // Complete a task
     this.app.post('/extracted-tasks/:id/complete', (c) => {
       const id = c.req.param('id');
-      const store = getTaskStore();
+      const store = getReactiveTaskStore();
       store.completeTask(id);
+      // Events auto-emitted by ReactiveTaskStore
+
       return c.json({ ok: true });
     });
 
     // Start a task (mark as doing)
     this.app.post('/extracted-tasks/:id/start', (c) => {
       const id = c.req.param('id');
-      const store = getTaskStore();
+      const store = getReactiveTaskStore();
       store.startTask(id);
+      // Events auto-emitted by ReactiveTaskStore
+
       return c.json({ ok: true });
+    });
+
+    // Move task to goal
+    this.app.post('/extracted-tasks/:id/move-to-goal', async (c) => {
+      const id = c.req.param('id');
+      const { goalId } = await c.req.json<{ goalId: string | null }>();
+      const store = getReactiveTaskStore();
+      store.moveTaskToGoal(id, goalId);
+      // Events auto-emitted by ReactiveTaskStore (both tasks and goals)
+
+      return c.json({ ok: true });
+    });
+
+    // ============ Goals Routes ============
+
+    // List all goals
+    this.app.get('/goals', (c) => {
+      const status = c.req.query('status');
+      const store = getTaskStore();
+      const goals = store.listGoals({
+        status: status as 'active' | 'completed' | 'archived' | undefined,
+      });
+      return c.json(goals);
+    });
+
+    // Create a new goal
+    this.app.post('/goals', async (c) => {
+      const { title, description, createdVia, projectPath } = await c.req.json<{
+        title: string;
+        description?: string;
+        createdVia: 'plan' | 'manual' | 'ai-suggestion';
+        projectPath?: string;
+      }>();
+      const store = getReactiveTaskStore();
+      const goal = store.createGoal({ title, description, createdVia, projectPath });
+      // Events auto-emitted by ReactiveTaskStore
+
+      return c.json(goal);
+    });
+
+    // Get a specific goal
+    this.app.get('/goals/:id', (c) => {
+      const id = c.req.param('id');
+      const store = getTaskStore();
+      const goal = store.getGoal(id);
+      if (!goal) {
+        return c.json({ ok: false, error: 'Goal not found' }, 404);
+      }
+      // Include tasks for this goal
+      const tasks = store.getTasksByGoal(id);
+      return c.json({ ...goal, tasks });
+    });
+
+    // Update a goal
+    this.app.patch('/goals/:id', async (c) => {
+      const id = c.req.param('id');
+      const updates = await c.req.json<{
+        title?: string;
+        description?: string;
+        status?: 'active' | 'completed' | 'archived';
+      }>();
+      const store = getReactiveTaskStore();
+      store.updateGoal(id, updates);
+      // Events auto-emitted by ReactiveTaskStore
+
+      return c.json({ ok: true });
+    });
+
+    // Archive a goal
+    this.app.delete('/goals/:id', (c) => {
+      const id = c.req.param('id');
+      const store = getReactiveTaskStore();
+      store.archiveGoal(id);
+      // Events auto-emitted by ReactiveTaskStore
+
+      return c.json({ ok: true });
+    });
+
+    // Get inbox goal (creates if doesn't exist)
+    this.app.get('/goals/inbox', (c) => {
+      const store = getTaskStore();
+      const inbox = store.getOrCreateInbox();
+      const tasks = store.getUnassignedTasks();
+      return c.json({ ...inbox, tasks });
+    });
+
+    // ============ Active Sessions Routes (Tier 1) ============
+
+    // Get currently running sessions
+    this.app.get('/sessions/active', (c) => {
+      const store = getTaskStore();
+      const sessions = store.getActiveSessions();
+      return c.json(sessions);
+    });
+
+    // Get recently completed sessions (not dismissed)
+    this.app.get('/sessions/recent', (c) => {
+      const limit = parseInt(c.req.query('limit') || '10');
+      const store = getTaskStore();
+      const sessions = store.getRecentlyCompletedSessions(limit);
+      return c.json(sessions);
+    });
+
+    // Dismiss a completed session from recent list
+    this.app.post('/sessions/:id/dismiss', (c) => {
+      const id = c.req.param('id');
+      const store = getReactiveTaskStore();
+      store.dismissSession(id);
+      // Events auto-emitted by ReactiveTaskStore
+
+      return c.json({ ok: true });
+    });
+
+    // Delete/stop an active session
+    this.app.delete('/sessions/:id', async (c) => {
+      const id = c.req.param('id');
+      const store = getReactiveTaskStore();
+      const sessionManager = getSessionManager();
+
+      try {
+        // Close the session (stops the running query)
+        await sessionManager.closeSession(id);
+        // Mark as failed in the store
+        store.completeSession(id, 'failed');
+        // Also dismiss any active tasks associated with this session/thread
+        const activeTasks = store.listTasks({ threadId: id, status: 'doing' });
+        for (const task of activeTasks) {
+          store.dismissTask(task.id);
+        }
+        // Delete the session record
+        store.deleteSession(id);
+        // Events auto-emitted by ReactiveTaskStore
+
+        return c.json({ ok: true });
+      } catch (err) {
+        return c.json({ ok: false, error: err instanceof Error ? err.message : 'Failed to delete session' }, 500);
+      }
+    });
+
+    // ============ AI Goal Suggestions ============
+
+    // Suggest goal groupings for ungrouped tasks
+    this.app.post('/goals/suggest', async (c) => {
+      const store = getTaskStore();
+      const ungroupedTasks = store.getUnassignedTasks();
+
+      if (ungroupedTasks.length < 2) {
+        return c.json({
+          suggestions: [],
+          message: 'Not enough ungrouped tasks to suggest groupings',
+        });
+      }
+
+      try {
+        // Use the extractor's SDK to get AI suggestions
+        const { query } = await import('@anthropic-ai/claude-agent-sdk');
+
+        const taskList = ungroupedTasks
+          .map((t, i) => `${i + 1}. [${t.id}] ${t.summary || t.text?.slice(0, 60)}`)
+          .join('\n');
+
+        const suggestionQuery = query({
+          prompt: `Analyze these tasks and suggest logical groupings into goals. Each goal should represent a coherent project, feature, or theme.
+
+Tasks to group:
+${taskList}
+
+Respond with JSON: {
+  "suggestions": [
+    {
+      "goalTitle": "Short descriptive title for the goal",
+      "description": "Brief description of what this goal encompasses",
+      "taskIds": ["task-id-1", "task-id-2"]
+    }
+  ]
+}
+
+Guidelines:
+- Group tasks that are related by feature, component, or theme
+- Goal titles should be 3-6 words, imperative voice (e.g., "Implement User Authentication")
+- A task can only appear in one goal
+- Don't create a goal with only 1 task unless it's clearly standalone
+- If tasks don't fit well together, leave them ungrouped (don't include in any suggestion)`,
+          options: {
+            model: 'haiku',
+            permissionMode: 'bypassPermissions',
+            maxTurns: 1,
+            effort: 'low',
+            outputFormat: {
+              type: 'json_schema',
+              schema: {
+                type: 'object' as const,
+                properties: {
+                  suggestions: {
+                    type: 'array' as const,
+                    items: {
+                      type: 'object' as const,
+                      properties: {
+                        goalTitle: { type: 'string' as const },
+                        description: { type: 'string' as const },
+                        taskIds: {
+                          type: 'array' as const,
+                          items: { type: 'string' as const },
+                        },
+                      },
+                      required: ['goalTitle', 'taskIds'] as const,
+                    },
+                  },
+                },
+                required: ['suggestions'] as const,
+              },
+            },
+          },
+        });
+
+        let result: { suggestions: Array<{ goalTitle: string; description?: string; taskIds: string[] }> } = { suggestions: [] };
+
+        for await (const event of suggestionQuery) {
+          if (event.type === 'result') {
+            const resultEvent = event as { structured_output?: unknown };
+            if (resultEvent.structured_output) {
+              result = resultEvent.structured_output as typeof result;
+            }
+          }
+        }
+
+        // Validate task IDs exist
+        const validTaskIds = new Set(ungroupedTasks.map(t => t.id));
+        const validatedSuggestions = result.suggestions
+          .map(s => ({
+            ...s,
+            taskIds: s.taskIds.filter(id => validTaskIds.has(id)),
+          }))
+          .filter(s => s.taskIds.length >= 2);
+
+        return c.json({
+          suggestions: validatedSuggestions,
+          totalUngrouped: ungroupedTasks.length,
+        });
+      } catch (error) {
+        console.error('[Server] Goal suggestion failed:', error);
+        return c.json({
+          suggestions: [],
+          error: 'Failed to generate suggestions',
+        }, 500);
+      }
+    });
+
+    // Apply a goal suggestion (create goal and move tasks)
+    this.app.post('/goals/apply-suggestion', async (c) => {
+      const { goalTitle, description, taskIds } = await c.req.json<{
+        goalTitle: string;
+        description?: string;
+        taskIds: string[];
+      }>();
+
+      const store = getReactiveTaskStore();
+
+      // Create the goal
+      const goal = store.createGoal({
+        title: goalTitle,
+        description,
+        createdVia: 'ai-suggestion',
+      });
+
+      // Move tasks to the goal
+      for (const taskId of taskIds) {
+        store.moveTaskToGoal(taskId, goal.id);
+      }
+      // Events auto-emitted by ReactiveTaskStore
+
+      return c.json({
+        ok: true,
+        goal,
+        movedCount: taskIds.length,
+      });
     });
 
     // ============ Task Flow Routes ============
@@ -908,6 +1195,46 @@ Format your response as plain text only:
     }
   }
 
+  // ============ Sync Event Helpers ============
+  // Delegate to centralized SyncEventEmitter for consistency
+  // Also notify QueryManager for reactive query updates
+
+  /** Broadcast tasks.updated event to all clients */
+  private broadcastTasksUpdated(): void {
+    getSyncEventEmitter().emitTasksUpdated();
+    getQueryManager().notifyDataChanged('tasks');
+  }
+
+  /** Broadcast goal.created event */
+  private broadcastGoalCreated(goal: ReturnType<typeof getTaskStore>['listGoals'] extends () => (infer T)[] ? T : never): void {
+    getSyncEventEmitter().emitGoalCreated(goal);
+    getQueryManager().notifyDataChanged('goals');
+  }
+
+  /** Broadcast goal.updated event */
+  private broadcastGoalUpdated(goal: ReturnType<typeof getTaskStore>['listGoals'] extends () => (infer T)[] ? T : never): void {
+    getSyncEventEmitter().emitGoalUpdated(goal);
+    getQueryManager().notifyDataChanged('goals');
+  }
+
+  /** Broadcast goal.archived event */
+  private broadcastGoalArchived(goalId: string): void {
+    getSyncEventEmitter().emitGoalArchived(goalId);
+    getQueryManager().notifyDataChanged('goals');
+  }
+
+  /** Broadcast session.dismissed event */
+  private broadcastSessionDismissed(sessionId: string): void {
+    getSyncEventEmitter().emitSessionDismissed(sessionId);
+    getQueryManager().notifyDataChanged('active_sessions');
+  }
+
+  /** Broadcast session.deleted event */
+  private broadcastSessionDeleted(sessionId: string): void {
+    getSyncEventEmitter().emitSessionDeleted(sessionId);
+    getQueryManager().notifyDataChanged('active_sessions');
+  }
+
   // ============ Agent Channel Methods ============
 
   private handleAgentConnection(ws: WebSocket, req: import('http').IncomingMessage): void {
@@ -1175,14 +1502,87 @@ Format your response as plain text only:
   private handleUIMessage(ws: WebSocket, data: string): void {
     try {
       const msg = JSON.parse(data);
-      console.log('UI message:', msg);
-      // Handle UI commands if needed
+
+      // Get or create client ID for this WebSocket
+      let clientId = this.clientIds.get(ws);
+      if (!clientId) {
+        clientId = `client-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        this.clientIds.set(ws, clientId);
+      }
+
+      switch (msg.type) {
+        case 'subscribe': {
+          // Subscribe to a query
+          const { queryName, params } = msg;
+          if (!queryName) {
+            console.warn('[Server] Subscribe request missing queryName');
+            return;
+          }
+          const subscriptionId = getQueryManager().subscribe(clientId, queryName, params || {});
+          // Send back the subscription ID so client can track it
+          if (subscriptionId && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              type: 'subscribed',
+              queryName,
+              subscriptionId,
+            }));
+          }
+          break;
+        }
+
+        case 'unsubscribe': {
+          // Unsubscribe from a specific subscription
+          const { subscriptionId } = msg;
+          if (subscriptionId) {
+            getQueryManager().unsubscribe(clientId, subscriptionId);
+          }
+          break;
+        }
+
+        case 'ping': {
+          // Heartbeat response
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'pong' }));
+          }
+          break;
+        }
+
+        default:
+          // Unknown message type - log for debugging
+          console.log('[Server] UI message:', msg);
+      }
     } catch (error) {
       console.error('Failed to handle UI message:', error);
     }
   }
 
   async start(): Promise<void> {
+    // Ensure database schema is up to date before anything else
+    // This runs migrations and verifies all columns exist
+    const taskStore = getTaskStore();
+    taskStore.ensureLatestSchema();
+
+    // Initialize the centralized sync event emitter
+    // This wraps broadcastRaw to provide typed event emission
+    initSyncEventEmitter((event) => {
+      this.broadcastRaw({
+        type: 'event',
+        event,
+      });
+    }, { taskLimit: 100 });
+
+    // Initialize query subscription manager
+    // This enables Convex-style reactive queries
+    initQueryManager((clientId, data) => {
+      // Find the WebSocket for this client and send the data
+      for (const [ws, id] of this.clientIds) {
+        if (id === clientId && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(data));
+          break;
+        }
+      }
+    });
+
     // Initialize session manager
     const sessionManager = getSessionManager();
     await sessionManager.init();
@@ -1249,6 +1649,48 @@ Format your response as plain text only:
           timestamp: new Date().toISOString(),
         },
       });
+      // Notify query subscribers about task changes
+      getQueryManager().notifyDataChanged('tasks');
+    });
+
+    // Forward prompt lifecycle events for Active Sessions tab (Tier 1)
+    sessionManager.on('prompt.started', (data) => {
+      this.broadcastRaw({
+        type: 'event',
+        event: {
+          type: 'prompt.started',
+          payload: data,
+          timestamp: new Date().toISOString(),
+        },
+      });
+      // Notify query subscribers about session changes
+      getQueryManager().notifyDataChanged('active_sessions');
+    });
+
+    sessionManager.on('prompt.completed', (data) => {
+      this.broadcastRaw({
+        type: 'event',
+        event: {
+          type: 'prompt.completed',
+          payload: data,
+          timestamp: new Date().toISOString(),
+        },
+      });
+      // Notify query subscribers about session changes
+      getQueryManager().notifyDataChanged('active_sessions');
+    });
+
+    sessionManager.on('prompt.summary_updated', (data) => {
+      this.broadcastRaw({
+        type: 'event',
+        event: {
+          type: 'prompt.summary_updated',
+          payload: data,
+          timestamp: new Date().toISOString(),
+        },
+      });
+      // Notify query subscribers about session changes
+      getQueryManager().notifyDataChanged('active_sessions');
     });
 
     return new Promise<void>((resolve, reject) => {
@@ -1306,12 +1748,20 @@ Format your response as plain text only:
           this.handleAgentConnection(ws, req);
         } else {
           // UI client connection
-          console.log('UI client connected');
+          const clientId = `client-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          this.clientIds.set(ws, clientId);
+          console.log(`UI client connected: ${clientId}`);
           this.clients.add(ws);
-          
+
           ws.on('close', () => {
-            console.log('UI client disconnected');
+            console.log(`UI client disconnected: ${clientId}`);
             this.clients.delete(ws);
+            // Clean up all query subscriptions for this client
+            const storedClientId = this.clientIds.get(ws);
+            if (storedClientId) {
+              getQueryManager().unsubscribeAll(storedClientId);
+              this.clientIds.delete(ws);
+            }
           });
           
           ws.on('message', (data) => {

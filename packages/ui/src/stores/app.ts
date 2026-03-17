@@ -119,6 +119,23 @@ export interface ThreadSummary {
 
 // API functions
 export const api = {
+  // Generic HTTP methods for new endpoints
+  async get(path: string): Promise<Response> {
+    return fetch(`${getApiUrl()}${path}`);
+  },
+
+  async post(path: string, body?: unknown): Promise<Response> {
+    return fetch(`${getApiUrl()}${path}`, {
+      method: 'POST',
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  },
+
+  async delete(path: string): Promise<Response> {
+    return fetch(`${getApiUrl()}${path}`, { method: 'DELETE' });
+  },
+
   async checkHealth(): Promise<boolean> {
     try {
       const res = await fetch(`${getApiUrl()}/health`, { signal: AbortSignal.timeout(2000) });

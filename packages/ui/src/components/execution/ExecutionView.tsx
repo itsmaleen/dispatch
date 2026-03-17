@@ -48,52 +48,75 @@ export function ExecutionView({ taskId, initialStatus, initialResult, initialAge
     const event = data.event;
     if (!event) return;
 
-    // Handle activity events
+    // Handle activity events (new activities with optional itemId for tracking)
     if (event.type === 'activity' && event.payload) {
+      const itemId = event.payload.itemId;
       const newActivity: ActivityEntry = {
-        id: crypto.randomUUID(),
+        id: itemId || crypto.randomUUID(),  // Use itemId as id if available
         createdAt: new Date().toISOString(),
         activityType: event.payload.activityType,
         label: event.payload.label,
         detail: event.payload.detail,
         status: event.payload.status,
       };
-      setActivities(prev => [...prev, newActivity]);
+
+      setActivities(prev => {
+        // If we have an itemId, check if this activity already exists
+        if (itemId) {
+          const existingIndex = prev.findIndex(a => a.id === itemId);
+          if (existingIndex >= 0) {
+            // Update existing activity
+            const updated = [...prev];
+            updated[existingIndex] = {
+              ...updated[existingIndex],
+              ...newActivity,
+              // Preserve existing detail if new one is undefined
+              detail: newActivity.detail ?? updated[existingIndex].detail,
+            };
+            return updated;
+          }
+        }
+        // Add as new activity
+        return [...prev, newActivity];
+      });
+    }
+
+    // Handle activity.update events (updates existing activity by itemId)
+    if (event.type === 'activity.update' && event.payload?.itemId) {
+      const { itemId, detail, status } = event.payload;
+
+      setActivities(prev => {
+        const existingIndex = prev.findIndex(a => a.id === itemId);
+        if (existingIndex >= 0) {
+          const updated = [...prev];
+          updated[existingIndex] = {
+            ...updated[existingIndex],
+            // Only update fields that are provided
+            ...(detail !== undefined && { detail }),
+            ...(status !== undefined && { status }),
+            // Mark as completed when status changes to completed
+            ...(status === 'completed' && { activityType: 'tool_completed' }),
+          };
+          return updated;
+        }
+        // If activity not found, create a placeholder entry
+        // This handles race conditions where update arrives before initial event
+        const newActivity: ActivityEntry = {
+          id: itemId,
+          createdAt: new Date().toISOString(),
+          activityType: status === 'completed' ? 'tool_completed' : 'tool_started',
+          label: 'Tool',  // Will be updated when initial event arrives
+          detail,
+          status: status || 'running',
+        };
+        return [...prev, newActivity];
+      });
     }
 
     // Handle content deltas (for output)
     if (event.type === 'content.delta' && event.payload?.delta) {
       // Don't add to output - we get full result at the end
       // But could show streaming content here if wanted
-    }
-
-    // Handle item events (tool starts/stops)
-    if (event.type === 'item.started' && event.payload) {
-      const newActivity: ActivityEntry = {
-        id: crypto.randomUUID(),
-        createdAt: new Date().toISOString(),
-        activityType: event.payload.itemType === 'file_read' ? 'file_read' :
-                     event.payload.itemType === 'file_change' ? 'file_write' :
-                     event.payload.itemType === 'command_execution' ? 'command' : 'tool_started',
-        label: event.payload.title || 'Tool',
-        detail: event.payload.detail,
-        status: 'running',
-      };
-      setActivities(prev => [...prev, newActivity]);
-    }
-
-    if (event.type === 'item.completed') {
-      // Update the last running activity to completed
-      setActivities(prev => {
-        const updated = [...prev];
-        for (let i = updated.length - 1; i >= 0; i--) {
-          if (updated[i].status === 'running') {
-            updated[i] = { ...updated[i], status: 'completed', activityType: 'tool_completed' };
-            break;
-          }
-        }
-        return updated;
-      });
     }
   }, []);
 

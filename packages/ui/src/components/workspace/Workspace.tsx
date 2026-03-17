@@ -47,6 +47,7 @@ import { AgentsPanel } from '../agents/AgentsPanel';
 import { api, getServerUrl, getWsUrl } from '../../stores/app';
 import { useWorkspaceStore, type LayoutNode, type LayoutLeaf, type LayoutGroup, layoutHelpers } from '../../stores/workspace';
 import { ChatInput, type UploadedFile } from './ChatInput';
+import { TasksWidgetContainer } from './TasksWidgetContainer';
 
 // ============================================================================
 // TYPES
@@ -1292,7 +1293,7 @@ interface LayoutRendererProps {
   onSettingsChange: (terminalId: string, settings: TerminalSettings) => void;
   onQueueMessage: (terminalId: string, message: string, files?: UploadedFile[]) => void;
   onClearQueue: (terminalId: string) => void;
-  // Tasks widget props
+  // Tasks widget props (legacy - kept for old TasksWidget)
   onExecute: () => void;
   isExecuting: boolean;
   onStepAgentChange: (stepId: string, agentId: string | null) => void;
@@ -1310,6 +1311,14 @@ interface LayoutRendererProps {
   onUpdateSizes: (groupId: string, sizes: number[]) => void;
   // Close panel from layout
   onClosePanel: (panelId: string) => void;
+  // WebSocket for new TasksWidget real-time updates
+  ws?: WebSocket | null;
+  // For sending task text to terminal
+  onSendTaskToTerminal?: (taskText: string, terminalId?: string) => void;
+  // For highlighting/focusing a terminal by thread ID
+  onHighlightTerminal?: (threadId: string) => void;
+  // Workspace path for filtering tasks/goals/sessions
+  workspacePath?: string | null;
 }
 
 function LayoutRenderer({
@@ -1342,10 +1351,14 @@ function LayoutRenderer({
   onAddStep,
   tasksVisible,
   showAgentStatus,
+  ws,
+  onSendTaskToTerminal,
+  onHighlightTerminal,
   onCloseAgentStatus,
   onSplitPanel,
   onUpdateSizes,
   onClosePanel,
+  workspacePath,
 }: LayoutRendererProps) {
   const panelGroupRef = useRef<ImperativePanelGroupHandle>(null);
 
@@ -1408,36 +1421,11 @@ function LayoutRenderer({
       return (
         <DroppablePanel panelId={node.id} isOver={isDropTarget}>
           <div className="h-full p-1">
-            <TasksWidget
-              steps={planSteps}
-              agents={agents}
-              terminals={[
-                ...terminals.map((t) => {
-                  const sameAgent = terminals.filter(x => x.agent.id === t.agent.id);
-                  const idx = sameAgent.findIndex(x => x.id === t.id) + 1;
-                  const suffix = sameAgent.length > 1 ? ` — ${idx}` : '';
-                  return {
-                    id: t.id,
-                    label: `${t.agent.name}${suffix}`,
-                    agentIcon: t.agent.icon,
-                  };
-                }),
-                ...minimizedWidgets
-                  .filter((w): w is MinimizedWidget & { type: 'terminal'; data: TerminalState } => w.type === 'terminal' && !!w.data)
-                  .map((w) => ({
-                    id: w.id,
-                    label: `${w.title} (minimized)`,
-                    agentIcon: w.icon,
-                  })),
-              ]}
-              highlightedTerminalId={highlightedTerminalId}
-              onExecute={onExecute}
-              isExecuting={isExecuting}
-              onStepAgentChange={onStepAgentChange}
-              onSendStepToTerminal={onSendStepToTerminal}
-              onTerminalOptionHover={onTerminalOptionHover}
-              onMenuClose={() => onTerminalOptionHover(null)}
-              onAddStep={onAddStep}
+            <TasksWidgetContainer
+              ws={ws}
+              workspacePath={workspacePath ?? undefined}
+              onSendToTerminal={onSendTaskToTerminal}
+              onHighlightTerminal={onHighlightTerminal}
               onClose={() => {
                 useWorkspaceStore.getState().setTasksVisible(false);
                 onClosePanel(node.id);
@@ -1542,6 +1530,10 @@ function LayoutRenderer({
               onSplitPanel={onSplitPanel}
               onUpdateSizes={onUpdateSizes}
               onClosePanel={onClosePanel}
+              ws={ws}
+              onSendTaskToTerminal={onSendTaskToTerminal}
+              onHighlightTerminal={onHighlightTerminal}
+              workspacePath={workspacePath}
             />
           </Panel>
           {index < node.children.length - 1 && (
@@ -2605,6 +2597,57 @@ export function Workspace() {
     }]);
   }, []);
 
+  // Handler for sending task text to terminal (used by new TasksWidget)
+  const handleSendTaskToTerminal = useCallback((taskText: string, terminalId?: string) => {
+    // Use the first available terminal if none specified
+    const targetTerminal = terminalId
+      ? terminals.find(t => t.id === terminalId)
+      : terminals[0];
+
+    if (targetTerminal) {
+      handleTerminalMessage(targetTerminal.id, taskText);
+    } else if (agents.length > 0) {
+      // Create a new terminal with the first agent
+      const agent = agents[0];
+      const newTerminalId = `terminal-${Date.now()}`;
+      const newTerminal: TerminalState = {
+        id: newTerminalId,
+        agent,
+        lines: [],
+        status: 'idle',
+        threadId: null,
+        settings: { effort: 'medium', autoScroll: true, streamOutput: true },
+        messageQueue: [],
+      };
+      setTerminals(prev => [...prev, newTerminal]);
+      // Send message after terminal is created
+      setTimeout(() => handleTerminalMessage(newTerminalId, taskText), 100);
+    }
+  }, [terminals, agents, handleTerminalMessage]);
+
+  // Handler for highlighting a terminal by its threadId (session ID)
+  const handleHighlightTerminal = useCallback((threadId: string) => {
+    // First check the ref for fast lookup
+    let terminalId = threadToTerminalRef.current[threadId];
+
+    // If not in ref, search by threadId in terminals
+    if (!terminalId) {
+      const terminal = terminals.find(t => t.threadId === threadId);
+      terminalId = terminal?.id;
+    }
+
+    if (terminalId) {
+      // Highlight the terminal briefly
+      setHighlightedTerminalId(terminalId);
+      // Focus the terminal
+      handleFocusWidget(terminalId, 'terminal');
+      // Clear highlight after 2 seconds
+      setTimeout(() => setHighlightedTerminalId(null), 2000);
+    } else {
+      console.log('[Workspace] No terminal found for threadId:', threadId);
+    }
+  }, [terminals, handleFocusWidget]);
+
   // Update ref for command palette
   useEffect(() => {
     handleAddStepRef.current = handleAddStep;
@@ -2902,6 +2945,10 @@ export function Workspace() {
               onSplitPanel={handleSplitPanel}
               onUpdateSizes={handleUpdatePanelSizes}
               onClosePanel={handleClosePanel}
+              ws={wsRef.current}
+              onSendTaskToTerminal={handleSendTaskToTerminal}
+              onHighlightTerminal={handleHighlightTerminal}
+              workspacePath={workspacePath}
             />
           </DndContext>
         ) : (
@@ -2940,22 +2987,11 @@ export function Workspace() {
             <PanelResizeHandle className="w-1 bg-zinc-800 hover:bg-zinc-700" />
             <Panel defaultSize={40} minSize={20}>
               <div className="h-full p-1">
-                <TasksWidget
-                  steps={planSteps}
-                  agents={agents}
-                  terminals={terminals.map((t) => ({
-                    id: t.id,
-                    label: t.agent.name,
-                    agentIcon: t.agent.icon,
-                  }))}
-                  highlightedTerminalId={highlightedTerminalId}
-                  onExecute={handleExecute}
-                  isExecuting={isExecuting}
-                  onStepAgentChange={handleStepAgentChange}
-                  onSendStepToTerminal={handleSendStepToTerminal}
-                  onTerminalOptionHover={setHighlightedTerminalId}
-                  onMenuClose={() => setHighlightedTerminalId(null)}
-                  onAddStep={handleAddStep}
+                <TasksWidgetContainer
+                  ws={wsRef.current}
+                  workspacePath={workspacePath ?? undefined}
+                  onSendToTerminal={handleSendTaskToTerminal}
+                  onHighlightTerminal={handleHighlightTerminal}
                   onMaximize={() => handleMaximizeTerminal('tasks-widget')}
                   isFocused={focusedWidgetId === 'tasks-widget'}
                   isHovered={hoveredWidgetId === 'tasks-widget'}
@@ -3034,29 +3070,11 @@ export function Workspace() {
                 className="w-full h-full max-w-[95vw] max-h-[90vh] animate-in zoom-in-95 duration-200"
                 onClick={(e) => e.stopPropagation()}
               >
-                <TasksWidget
-                  steps={planSteps}
-                  agents={agents}
-                  terminals={[
-                    ...terminals.map((t) => {
-                      const sameAgent = terminals.filter(x => x.agent.id === t.agent.id);
-                      const idx = sameAgent.findIndex(x => x.id === t.id) + 1;
-                      const suffix = sameAgent.length > 1 ? ` — ${idx}` : '';
-                      return {
-                        id: t.id,
-                        label: `${t.agent.name}${suffix}`,
-                        agentIcon: t.agent.icon,
-                      };
-                    }),
-                  ]}
-                  highlightedTerminalId={highlightedTerminalId}
-                  onExecute={handleExecute}
-                  isExecuting={isExecuting}
-                  onStepAgentChange={handleStepAgentChange}
-                  onSendStepToTerminal={handleSendStepToTerminal}
-                  onTerminalOptionHover={setHighlightedTerminalId}
-                  onMenuClose={() => setHighlightedTerminalId(null)}
-                  onAddStep={handleAddStep}
+                <TasksWidgetContainer
+                  ws={wsRef.current}
+                  workspacePath={workspacePath ?? undefined}
+                  onSendToTerminal={handleSendTaskToTerminal}
+                  onHighlightTerminal={handleHighlightTerminal}
                   onMaximize={() => handleMaximizeTerminal('tasks-widget')}
                   isFocused={true}
                 />

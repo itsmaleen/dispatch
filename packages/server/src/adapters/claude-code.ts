@@ -52,6 +52,7 @@ interface QueuedMessage {
 /** Tracks an active content block during streaming */
 interface ActiveBlock {
   id: string;
+  index: number;           // Stream index for lookup during deltas
   type: 'tool_use' | 'server_tool_use' | 'thinking' | 'text';
   name?: string;           // Tool name (e.g., "Read", "Bash")
   activityType: string;    // Our activity type (file_read, command, etc.)
@@ -398,34 +399,42 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
 
       case 'tool_progress': {
         const toolEvent = event as any;
-        // Update existing activity if we have the tool tracked
-        this.ctx.emitEvent({
-          type: 'activity',
-          threadId: this.state.activeThreadId!,
-          turnId,
-          payload: {
-            activityType: 'tool',
-            label: toolEvent.tool_name || 'Tool running',
-            detail: `${toolEvent.elapsed_time_seconds}s elapsed`,
-            status: 'running',
-          },
-        });
+        const toolUseId = toolEvent.tool_use_id;
+
+        // Use activity.update if we have a tool_use_id, otherwise emit new activity
+        if (toolUseId) {
+          this.ctx.emitEvent({
+            type: 'activity.update',
+            threadId: this.state.activeThreadId!,
+            turnId,
+            payload: {
+              itemId: toolUseId,
+              detail: `${toolEvent.elapsed_time_seconds}s elapsed`,
+              status: 'running',
+            },
+          });
+        } else {
+          this.ctx.emitEvent({
+            type: 'activity',
+            threadId: this.state.activeThreadId!,
+            turnId,
+            payload: {
+              activityType: 'tool',
+              label: toolEvent.tool_name || 'Tool running',
+              detail: `${toolEvent.elapsed_time_seconds}s elapsed`,
+              status: 'running',
+            },
+          });
+        }
         break;
       }
 
       case 'tool_use_summary': {
-        // Tool completion with summary text
+        // Tool completion with summary text - don't create new activity
+        // The tool completion is already handled by content_block_stop
+        // Just log it for debugging
         const summaryEvent = event as any;
-        this.ctx.emitEvent({
-          type: 'activity',
-          threadId: this.state.activeThreadId!,
-          turnId,
-          payload: {
-            activityType: 'tool',
-            label: summaryEvent.summary || 'Tool completed',
-            status: 'completed',
-          },
-        });
+        this.ctx.log.info(`[SDK] tool_use_summary: ${summaryEvent.summary}`);
         break;
       }
 
@@ -463,6 +472,7 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
           // Track this block
           this.activeBlocks.set(blockId, {
             id: blockId,
+            index: blockIndex,
             type: blockType,
             name: toolName,
             activityType,
@@ -471,27 +481,16 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
             detail: undefined,
           });
 
-          // Emit activity with status: running
+          // Emit activity with status: running (includes itemId for tracking)
           this.ctx.emitEvent({
             type: 'activity',
             threadId: this.state.activeThreadId!,
             turnId,
             payload: {
+              itemId: blockId,
               activityType,
               label,
               status: 'running',
-            },
-          });
-
-          // Emit item.started for UI tracking
-          this.ctx.emitEvent({
-            type: 'item.started',
-            threadId: this.state.activeThreadId!,
-            turnId,
-            payload: {
-              itemId: blockId,
-              itemType: toolType,
-              title: toolName,
             },
           });
           
@@ -499,6 +498,7 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
           const blockId = `thinking_${blockIndex}`;
           this.activeBlocks.set(blockId, {
             id: blockId,
+            index: blockIndex,
             type: 'thinking',
             activityType: 'thinking',
             label: 'Thinking...',
@@ -510,6 +510,7 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
             threadId: this.state.activeThreadId!,
             turnId,
             payload: {
+              itemId: blockId,
               activityType: 'thinking',
               label: 'Thinking...',
               status: 'running',
@@ -521,6 +522,7 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
           const blockId = `text_${blockIndex}`;
           this.activeBlocks.set(blockId, {
             id: blockId,
+            index: blockIndex,
             type: 'text',
             activityType: 'info',
             label: 'Writing response...',
@@ -565,26 +567,30 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
             const block = this.activeBlocks.get(blockId);
             if (block) {
               block.inputJson += delta.partial_json;
-              
+
               // Try to extract detail from accumulated JSON
               const detail = this.tryExtractDetail(block.inputJson);
               if (detail && detail !== block.detail) {
                 block.detail = detail;
-                
-                // Update activity with detail
+                this.ctx.log.info(`[SDK] Extracted detail for ${blockId}: ${detail}`);
+
+                // Emit activity.update with detail (updates existing activity by itemId)
                 this.ctx.emitEvent({
-                  type: 'activity',
+                  type: 'activity.update',
                   threadId: this.state.activeThreadId!,
                   turnId,
                   payload: {
-                    activityType: block.activityType,
-                    label: block.label,
+                    itemId: blockId,
                     detail,
                     status: 'running',
                   },
                 });
               }
+            } else {
+              this.ctx.log.warn(`[SDK] Block not found for delta: ${blockId} (active blocks: ${Array.from(this.activeBlocks.keys()).join(', ')})`);
             }
+          } else {
+            this.ctx.log.warn(`[SDK] Could not find block for index ${blockIndex}`);
           }
         }
         break;
@@ -602,36 +608,25 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
 
             // Only emit completion for tool blocks
             if (block.type === 'tool_use' || block.type === 'server_tool_use') {
+              // Use activity.update to update the existing activity entry
               this.ctx.emitEvent({
-                type: 'activity',
-                threadId: this.state.activeThreadId!,
-                turnId,
-                payload: {
-                  activityType: block.activityType,
-                  label: block.label,
-                  detail: block.detail,
-                  status: 'completed',
-                },
-              });
-
-              this.ctx.emitEvent({
-                type: 'item.completed',
+                type: 'activity.update',
                 threadId: this.state.activeThreadId!,
                 turnId,
                 payload: {
                   itemId: blockId,
-                  itemType: this.classifyTool(block.name || ''),
+                  detail: block.detail,
                   status: 'completed',
                 },
               });
             } else if (block.type === 'thinking') {
+              // Use activity.update to update the existing thinking activity
               this.ctx.emitEvent({
-                type: 'activity',
+                type: 'activity.update',
                 threadId: this.state.activeThreadId!,
                 turnId,
                 payload: {
-                  activityType: 'thinking',
-                  label: 'Thinking complete',
+                  itemId: blockId,
                   status: 'completed',
                 },
               });
@@ -644,14 +639,17 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       }
 
       case 'message_start': {
-        // Message starting - clear any stale blocks
-        this.activeBlocks.clear();
+        // Don't clear blocks here - they're cleared on 'result' event
+        // Clearing here can cause race conditions where delta events
+        // arrive after message_start but before blocks are re-created
+        this.ctx.log.info(`[SDK] message_start (${this.activeBlocks.size} active blocks)`);
         break;
       }
 
       case 'message_stop': {
-        // Message complete - clear blocks
-        this.activeBlocks.clear();
+        // Don't clear blocks here either - wait for 'result' event
+        // This ensures all delta events are processed
+        this.ctx.log.info(`[SDK] message_stop (${this.activeBlocks.size} active blocks)`);
         break;
       }
     }
@@ -659,16 +657,13 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
 
   /** Find block ID by stream index */
   private findBlockByIndex(index: number): string | undefined {
-    // Blocks are stored with index-based fallback IDs
-    const entries = Array.from(this.activeBlocks.entries());
-    for (let i = 0; i < entries.length; i++) {
-      const [id, block] = entries[i];
-      if (id.endsWith(`_${index}`) || block.id.endsWith(`_${index}`)) {
+    // Look up block by its stored index
+    for (const [id, block] of this.activeBlocks.entries()) {
+      if (block.index === index) {
         return id;
       }
     }
-    // Return the most recently added block if index doesn't match
-    return entries[entries.length - 1]?.[0];
+    return undefined;
   }
 
   /** Try to extract detail (file path, command) from accumulated JSON */

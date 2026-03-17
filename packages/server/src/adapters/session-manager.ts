@@ -14,7 +14,7 @@ import {
   type Message,
   type SqliteThreadStore,
 } from '../persistence/sqlite-store';
-import { getExtractor } from '../extractor';
+import { getExtractor, getPromptSummarizer } from '../extractor';
 import { getTaskStore, type Task } from '../persistence/task-store';
 
 /** Active session bound to a thread */
@@ -35,6 +35,12 @@ export interface SessionEvents {
   'turn.error': (threadId: string, turnId: string, error: Error) => void;
   'session.created': (threadId: string) => void;
   'session.closed': (threadId: string) => void;
+  // Active session tracking (Tier 1)
+  'prompt.started': (data: { sessionId: string; agentId: string; agentName: string; summary: string; promptText: string; projectPath?: string }) => void;
+  'prompt.completed': (data: { sessionId: string; status: 'completed' | 'failed'; durationMs: number }) => void;
+  'prompt.summary_updated': (data: { sessionId: string; summary: string }) => void;
+  // Task updates
+  'tasks.updated': (tasks: Task[]) => void;
 }
 
 /** Options for creating a session */
@@ -175,7 +181,7 @@ export class SessionManager extends EventEmitter {
 
   /** Send message to a session */
   async send(
-    threadId: string, 
+    threadId: string,
     options: SendMessageOptions
   ): Promise<{ turnId: string }> {
     const session = this.sessions.get(threadId);
@@ -203,6 +209,34 @@ export class SessionManager extends EventEmitter {
 
     this.emit('turn.started', threadId, turnId);
 
+    // Track active session (Tier 1)
+    // Use quick heuristic summary first for immediate UI feedback
+    const taskStore = getTaskStore();
+    const quickSummary = this.generateQuickSummary(options.message);
+    taskStore.startSession({
+      id: threadId,
+      agentId: 'claude-code',
+      agentName: 'Claude Code',
+      summary: quickSummary,
+      promptText: options.message,
+      projectPath: session.cwd,
+    });
+
+    // Emit prompt.started event for UI with quick summary
+    this.emit('prompt.started', {
+      sessionId: threadId,
+      agentId: 'claude-code',
+      agentName: 'Claude Code',
+      summary: quickSummary,
+      promptText: options.message,
+      projectPath: session.cwd,
+    });
+
+    // Generate better AI summary asynchronously (don't block)
+    this.generateAISummary(threadId, options.message).catch(err => {
+      console.error('[SessionManager] AI summary generation failed:', err);
+    });
+
     // Build SDK options
     const sdkOpts: Options = {
       ...this.sdkOptions,
@@ -225,6 +259,86 @@ export class SessionManager extends EventEmitter {
     this.processQuery(session, thread, options.message, sdkOpts, turnId);
 
     return { turnId };
+  }
+
+  /** Generate a quick heuristic summary for immediate UI feedback */
+  private generateQuickSummary(prompt: string): string {
+    const trimmed = prompt.trim();
+
+    // If short enough, clean it up and use as-is
+    if (trimmed.length <= 50) {
+      return this.cleanupPrompt(trimmed);
+    }
+
+    // Try to extract first sentence
+    const firstSentence = trimmed.split(/[.!?\n]/)[0]?.trim();
+    if (firstSentence && firstSentence.length <= 60) {
+      return this.cleanupPrompt(firstSentence);
+    }
+
+    // Look for command patterns
+    const commandMatch = trimmed.match(/^(run|execute|help me|please|can you|i need to|let's|let me|add|fix|update|create|implement|debug)\s+(.{10,45})/i);
+    if (commandMatch) {
+      return this.cleanupPrompt(commandMatch[0].slice(0, 50));
+    }
+
+    // Truncate at word boundary
+    const truncated = trimmed.slice(0, 47);
+    const lastSpace = truncated.lastIndexOf(' ');
+    return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + '...';
+  }
+
+  /** Clean up common prompt prefixes */
+  private cleanupPrompt(prompt: string): string {
+    let cleaned = prompt
+      .replace(/^(please|can you|could you|help me|i need to|i want to)\s+/i, '')
+      .trim();
+
+    // Capitalize first letter
+    if (cleaned.length > 0) {
+      cleaned = cleaned[0].toUpperCase() + cleaned.slice(1);
+    }
+
+    return cleaned || prompt;
+  }
+
+  /** Generate AI-powered summary and emit update event */
+  private async generateAISummary(sessionId: string, prompt: string): Promise<void> {
+    // Only use AI for longer prompts
+    if (prompt.trim().length <= 50) {
+      return; // Quick summary is good enough for short prompts
+    }
+
+    try {
+      const summarizer = getPromptSummarizer();
+      const aiSummary = await summarizer.summarize(prompt);
+
+      // Update the session in the store
+      const taskStore = getTaskStore();
+      const session = taskStore.getSession(sessionId);
+      if (session && session.status === 'running') {
+        // Update the session summary in the database
+        // Note: We'll need to add an updateSessionSummary method
+        this.updateSessionSummary(sessionId, aiSummary);
+
+        // Emit event so UI can update
+        this.emit('prompt.summary_updated', {
+          sessionId,
+          summary: aiSummary,
+        });
+
+        console.log(`[SessionManager] AI summary generated for ${sessionId}: "${aiSummary}"`);
+      }
+    } catch (error) {
+      console.error('[SessionManager] AI summary generation failed:', error);
+      // Don't throw - we already have a quick summary as fallback
+    }
+  }
+
+  /** Update session summary in the task store */
+  private updateSessionSummary(sessionId: string, summary: string): void {
+    const taskStore = getTaskStore();
+    taskStore.updateSessionSummary(sessionId, summary);
   }
 
   /** Process query in background */
@@ -292,15 +406,37 @@ export class SessionManager extends EventEmitter {
 
       session.status = 'idle';
       session.currentTurnId = undefined;
-      
+
       this.emit('turn.completed', thread.id, turnId, session.outputBuffer, usage);
+
+      // Complete active session tracking
+      const taskStore = getTaskStore();
+      taskStore.completeSession(thread.id, 'completed');
+      const completedSession = taskStore.getSession(thread.id);
+
+      // Complete any "doing" tasks for this thread immediately (before prompt.completed)
+      // This ensures UI sees updated task statuses alongside session completion
+      const completedTaskIds = taskStore.completeActiveTasks(thread.id, 'claude-code');
+      if (completedTaskIds.length > 0) {
+        console.log(`[SessionManager] Auto-completed ${completedTaskIds.length} active tasks on prompt completion`);
+        this.emit('tasks.updated', taskStore.listTasks({ limit: 100, includeCompleted: true }));
+      }
+
+      if (completedSession) {
+        this.emit('prompt.completed', {
+          sessionId: thread.id,
+          status: 'completed',
+          durationMs: completedSession.durationMs ?? 0,
+        });
+      }
 
       // Classify and extract tasks (async, don't block)
       this.classifyAndStoreTasks(session.outputBuffer, {
         threadId: thread.id,
         turnId,
-        agentId: 'claude-code',  // TODO: get from session
+        agentId: 'claude-code',
         agentName: 'Claude Code',
+        projectPath: session.cwd,
       }).catch(err => console.error('[SessionManager] Task classification failed:', err));
 
     } catch (error) {
@@ -329,8 +465,28 @@ export class SessionManager extends EventEmitter {
 
         session.status = 'idle';
         session.currentTurnId = undefined;
-        
+
         this.emit('turn.completed', thread.id, turnId, session.outputBuffer, usage);
+
+        // Complete active session tracking
+        const taskStore = getTaskStore();
+        taskStore.completeSession(thread.id, 'completed');
+        const completedSession = taskStore.getSession(thread.id);
+
+        // Complete any "doing" tasks for this thread immediately (before prompt.completed)
+        const completedTaskIds = taskStore.completeActiveTasks(thread.id, 'claude-code');
+        if (completedTaskIds.length > 0) {
+          console.log(`[SessionManager] Auto-completed ${completedTaskIds.length} active tasks on prompt completion (error path)`);
+          this.emit('tasks.updated', taskStore.listTasks({ limit: 100, includeCompleted: true }));
+        }
+
+        if (completedSession) {
+          this.emit('prompt.completed', {
+            sessionId: thread.id,
+            status: 'completed',
+            durationMs: completedSession.durationMs ?? 0,
+          });
+        }
 
         // Classify and extract tasks (async, don't block)
         this.classifyAndStoreTasks(session.outputBuffer, {
@@ -338,9 +494,31 @@ export class SessionManager extends EventEmitter {
           turnId,
           agentId: 'claude-code',
           agentName: 'Claude Code',
+          projectPath: session.cwd,
         }).catch(err => console.error('[SessionManager] Task classification failed:', err));
       } else {
         session.status = 'error';
+
+        // Complete active session tracking with failure
+        const taskStore = getTaskStore();
+        taskStore.completeSession(thread.id, 'failed');
+        const failedSession = taskStore.getSession(thread.id);
+
+        // Also complete any "doing" tasks on failure (mark them as completed since the prompt is done)
+        const completedTaskIds = taskStore.completeActiveTasks(thread.id, 'claude-code');
+        if (completedTaskIds.length > 0) {
+          console.log(`[SessionManager] Auto-completed ${completedTaskIds.length} active tasks on prompt failure`);
+          this.emit('tasks.updated', taskStore.listTasks({ limit: 100, includeCompleted: true }));
+        }
+
+        if (failedSession) {
+          this.emit('prompt.completed', {
+            sessionId: thread.id,
+            status: 'failed',
+            durationMs: failedSession.durationMs ?? 0,
+          });
+        }
+
         let emitError: Error = error instanceof Error ? error : new Error(String(error));
         if (exitCode1) {
           emitError = new Error(
@@ -419,16 +597,13 @@ export class SessionManager extends EventEmitter {
   /** Extract tasks from agent output using persistent Claude Code subprocess */
   private async classifyAndStoreTasks(
     output: string,
-    source: { threadId: string; turnId: string; agentId: string; agentName: string }
+    source: { threadId: string; turnId: string; agentId: string; agentName: string; projectPath?: string }
   ): Promise<void> {
     const extractor = getExtractor();
     const taskStore = getTaskStore();
 
-    // First, complete any "doing" tasks from this agent (turn ended)
-    const completed = taskStore.completeActiveTasks(source.threadId, source.agentId);
-    if (completed > 0) {
-      console.log(`[SessionManager] Auto-completed ${completed} active tasks`);
-    }
+    // Note: completeActiveTasks is now called BEFORE prompt.completed in processQuery
+    // This ensures task statuses are updated before the UI receives the session completion event
 
     // Extract tasks using persistent Claude Code subprocess
     const result = await extractor.extract(output);
@@ -450,8 +625,19 @@ export class SessionManager extends EventEmitter {
     for (const task of result.tasks) {
       const base = {
         text: task.text,
+        summary: task.summary,  // Include summary from extraction
         confidence: task.confidence,
-        ...source,
+        source: {
+          type: 'extraction' as const,
+          turnId: source.turnId,
+          agentId: source.agentId,
+          agentName: source.agentName,
+        },
+        threadId: source.threadId,
+        turnId: source.turnId,
+        agentId: source.agentId,
+        agentName: source.agentName,
+        projectPath: source.projectPath,
       };
 
       if (task.status === 'completed') {
@@ -484,8 +670,8 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // Emit event for UI
-    this.emit('tasks.updated', taskStore.listTasks({ limit: 20 }));
+    // Emit event for UI (include completed tasks so UI can update status transitions)
+    this.emit('tasks.updated', taskStore.listTasks({ limit: 100, includeCompleted: true }));
   }
 
   /** Close a session */

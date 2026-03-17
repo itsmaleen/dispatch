@@ -2,7 +2,7 @@
  * Task Types - Unified task representation across adapters
  */
 
-export type TaskStatus = 
+export type TaskStatus =
   | 'draft'        // Not yet submitted
   | 'planning'     // In planning mode, awaiting confirmation
   | 'queued'       // Waiting for agent
@@ -13,6 +13,163 @@ export type TaskStatus =
   | 'cancelled';   // Manually cancelled
 
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
+
+// ============================================================================
+// SOURCE TRACKING (for distinguishing prompts vs extractions vs plans)
+// ============================================================================
+
+/**
+ * Discriminated union for task source
+ * Enables filtering: prompts in Active tab, extractions in Work Items tab
+ */
+export type TaskSource =
+  | {
+      type: 'prompt';
+      sessionId: string;      // Terminal session
+      promptText: string;     // Original user prompt (for tooltip)
+      startedAt: Date;
+    }
+  | {
+      type: 'extraction';
+      turnId: string;
+      agentId: string;
+      agentName?: string;
+    }
+  | {
+      type: 'plan';
+      goalId: string;
+      stepIndex: number;
+    }
+  | {
+      type: 'manual';
+      createdBy?: string;
+    };
+
+// ============================================================================
+// GOALS (organizing containers for work items)
+// ============================================================================
+
+export type GoalStatus = 'active' | 'completed' | 'archived';
+export type GoalCreatedVia = 'plan' | 'manual' | 'ai-suggestion';
+
+export interface Goal {
+  id: string;
+
+  /** Human-readable title */
+  title: string;
+
+  /** Optional longer description */
+  description?: string;
+
+  /** How this goal was created */
+  createdVia: GoalCreatedVia;
+
+  /** Terminal session that spawned this goal (for auto-grouping) */
+  sessionId?: string;
+
+  /** Workspace path this goal belongs to */
+  projectPath?: string;
+
+  /** Child work item IDs */
+  taskIds: string[];
+
+  /** Progress tracking (computed from taskIds) */
+  completedCount: number;
+  totalCount: number;
+
+  status: GoalStatus;
+
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt?: Date;
+}
+
+// ============================================================================
+// ACTIVE SESSIONS (Tier 1 - currently running prompts)
+// ============================================================================
+
+export interface ActiveSession {
+  /** Session/terminal ID */
+  id: string;
+
+  agentId: string;
+  agentName: string;
+
+  /** Summarized goal of current prompt (3-8 words) */
+  summary: string;
+
+  /** Original prompt text (for tooltip/expansion) */
+  promptText: string;
+
+  /** Workspace path this session belongs to */
+  projectPath?: string;
+
+  /** When prompt was sent */
+  startedAt: Date;
+
+  /** Current status */
+  status: 'running' | 'completed' | 'failed';
+
+  /** Duration in ms (computed on completion) */
+  durationMs?: number;
+}
+
+// ============================================================================
+// EXTRACTED TASK (Tier 2 - work items from agent output)
+// ============================================================================
+
+export type ExtractedTaskStatus = 'doing' | 'pending' | 'completed' | 'suggested' | 'dismissed';
+export type ExtractedTaskCategory = 'doing' | 'planned' | 'suggested' | 'completed';
+
+export interface ExtractedTask {
+  id: string;
+
+  /** Concise 3-8 word goal statement in imperative voice */
+  summary: string;
+
+  /** Full extracted text for context (shown on hover/expand) */
+  fullText: string;
+
+  /** Task source for filtering by tier */
+  source: TaskSource;
+
+  /** Extraction status */
+  status: ExtractedTaskStatus;
+
+  /** Original category from extraction */
+  category: ExtractedTaskCategory;
+
+  /** Extraction confidence (0-1) */
+  confidence: number;
+
+  /** Parent goal ID (if assigned to a goal) */
+  goalId?: string;
+
+  /** Workspace path this task belongs to */
+  projectPath?: string;
+
+  /** Thread association */
+  threadId?: string;
+  turnId?: string;
+  agentId?: string;
+  agentName?: string;
+
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt?: Date;
+}
+
+// ============================================================================
+// RECENTLY COMPLETED (for "Recent" section in Active tab)
+// ============================================================================
+
+export interface RecentlyCompletedSession extends ActiveSession {
+  /** When it was completed */
+  completedAt: Date;
+
+  /** Whether user has dismissed it */
+  dismissed: boolean;
+}
 
 export interface TaskAssignment {
   adapterId: string;

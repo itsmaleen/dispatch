@@ -8,7 +8,9 @@
 import { query, type Query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 
 export interface ExtractedTask {
-  /** Task text/description */
+  /** Concise 3-8 word summary in imperative voice */
+  summary: string;
+  /** Full task text/description */
   text: string;
   /** Status inferred from context */
   status: 'doing' | 'planned' | 'completed' | 'suggested';
@@ -32,6 +34,10 @@ const EXTRACTION_SCHEMA = {
       items: {
         type: 'object' as const,
         properties: {
+          summary: {
+            type: 'string' as const,
+            description: 'Concise 3-8 word goal in imperative voice (e.g., "Add rate limiting to API")',
+          },
           text: { type: 'string' as const },
           status: {
             type: 'string' as const,
@@ -39,7 +45,7 @@ const EXTRACTION_SCHEMA = {
           },
           confidence: { type: 'number' as const },
         },
-        required: ['text', 'status', 'confidence'] as const,
+        required: ['summary', 'text', 'status', 'confidence'] as const,
         additionalProperties: false,
       },
     },
@@ -114,11 +120,28 @@ const EXTRACTOR_SYSTEM_PROMPT = `You are a task extractor for an AI coding assis
 
 Extract genuine work tasks from agent output. A task is something the agent DID, IS DOING, WILL DO, or something that should be done next (recommendations, blockers, priorities).
 
+For each task, provide:
+- summary: A concise 3-8 word goal statement in imperative voice
+- text: The complete extracted context for reference
+
+The summary should:
+- Start with an action verb (Add, Fix, Update, Implement, Create, Remove, Refactor, etc.)
+- Be specific enough to understand the task without the full text
+- Never exceed 60 characters
+- Never include meta-language like "Task:", "TODO:", etc.
+
+Examples of good summaries:
+- "Add rate limiting to API endpoints"
+- "Fix authentication middleware bug"
+- "Update user schema with new fields"
+- "Implement dark mode toggle"
+- "Remove deprecated API calls"
+
 EXTRACT (real tasks):
-- "Fixed the login bug in auth.ts" → completed
-- "Implementing the new API endpoint" → doing
-- "Next I'll add error handling" → planned
-- "You might want to add rate limiting" → suggested
+- "Fixed the login bug in auth.ts" → summary: "Fix login bug in auth.ts", status: completed
+- "Implementing the new API endpoint" → summary: "Implement new API endpoint", status: doing
+- "Next I'll add error handling" → summary: "Add error handling", status: planned
+- "You might want to add rate limiting" → summary: "Add rate limiting", status: suggested
 
 Also EXTRACT when the message is a recommendation, "what to work on next", or "what's needed to ship": treat each blocker, priority item, or recommended step as a task (status: suggested or planned). Examples: "No tests at all" / "Add tests for parseTextAsJson" → suggested; "Clean up debug logging" → suggested; "Text hash normalization gap" → suggested; "Start with tests (item 1)" → planned; "Replace as any casts with SDK types" → suggested.
 
@@ -135,7 +158,7 @@ Never extract only the opening sentence or paragraph when it is pure intro. If t
 Return empty tasks array ONLY when there are no actionable work items (no next steps, no blockers, no recommendations, no stated work the agent did/is doing/will do). If there is any list of things to do or address, extract those items.
 For recommended-next-step items use confidence 0.7–0.9 so they are retained.
 
-Respond with ONLY a single JSON object, no markdown and no explanation: {"tasks": [{"text": "...", "status": "doing|planned|completed|suggested", "confidence": 0.0-1.0}]}.`;
+Respond with ONLY a single JSON object, no markdown and no explanation: {"tasks": [{"summary": "...", "text": "...", "status": "doing|planned|completed|suggested", "confidence": 0.0-1.0}]}.`;
 
 export class TaskExtractor {
   private activeQuery: Query | null = null;
@@ -254,6 +277,19 @@ export class TaskExtractor {
     }
   }
 
+  /** Generate a fallback summary from task text if not provided */
+  private generateFallbackSummary(text: string): string {
+    // Take first sentence or first 60 chars
+    const firstSentence = text.split(/[.!?\n]/)[0]?.trim() ?? text;
+    if (firstSentence.length <= 60) {
+      return firstSentence;
+    }
+    // Truncate at word boundary
+    const truncated = firstSentence.slice(0, 57);
+    const lastSpace = truncated.lastIndexOf(' ');
+    return (lastSpace > 30 ? truncated.slice(0, lastSpace) : truncated) + '...';
+  }
+
   /** Normalize and filter structured_output from SDK; no string parsing. */
   private normalizeAndFilter(raw: unknown): ExtractionResult {
     if (raw == null || typeof raw !== 'object' || !('tasks' in raw)) {
@@ -267,27 +303,36 @@ export class TaskExtractor {
     const mapped: ExtractedTask[] = rawTasks
       .filter((t: unknown): t is Record<string, unknown> => t != null && typeof t === 'object')
       .filter((t) => typeof t.text === 'string' && String(t.text).trim().length > 3)
-      .map((t) => ({
-        text: String(t.text).trim(),
-        status: ['doing', 'planned', 'completed', 'suggested'].includes(String(t.status))
-          ? (t.status as ExtractedTask['status'])
-          : 'suggested',
-        confidence:
-          typeof t.confidence === 'number'
-            ? Math.max(0, Math.min(1, t.confidence))
-            : 0.5,
-      }));
+      .map((t) => {
+        const text = String(t.text).trim();
+        // Use provided summary or generate fallback
+        const summary = typeof t.summary === 'string' && t.summary.trim().length > 0
+          ? t.summary.trim().slice(0, 60)
+          : this.generateFallbackSummary(text);
+
+        return {
+          summary,
+          text,
+          status: ['doing', 'planned', 'completed', 'suggested'].includes(String(t.status))
+            ? (t.status as ExtractedTask['status'])
+            : 'suggested',
+          confidence:
+            typeof t.confidence === 'number'
+              ? Math.max(0, Math.min(1, t.confidence))
+              : 0.5,
+        };
+      });
 
     const byConfidence = mapped.filter((t) => t.confidence >= MIN_CONFIDENCE);
     const droppedConfidence = mapped.filter((t) => t.confidence < MIN_CONFIDENCE);
     if (droppedConfidence.length > 0) {
-      console.log('[Extractor] Dropped (confidence < ', MIN_CONFIDENCE, '):', droppedConfidence.map((t) => ({ text: t.text.slice(0, 50), confidence: t.confidence })));
+      console.log('[Extractor] Dropped (confidence < ', MIN_CONFIDENCE, '):', droppedConfidence.map((t) => ({ summary: t.summary, confidence: t.confidence })));
     }
 
     const tasks = byConfidence.filter((t) => !looksLikeMetaOrSummary(t.text));
     const droppedMeta = byConfidence.filter((t) => looksLikeMetaOrSummary(t.text));
     if (droppedMeta.length > 0) {
-      console.log('[Extractor] Dropped (meta/summary):', droppedMeta.map((t) => ({ text: t.text.slice(0, 50) })));
+      console.log('[Extractor] Dropped (meta/summary):', droppedMeta.map((t) => ({ summary: t.summary })));
     }
 
     return { tasks };
@@ -329,4 +374,172 @@ export function getExtractor(): TaskExtractor {
 /** Quick extract helper */
 export async function extractTasks(assistantMessage: string): Promise<ExtractionResult> {
   return getExtractor().extract(assistantMessage);
+}
+
+// ============================================================================
+// PROMPT SUMMARIZER - Creates concise task titles from user prompts
+// ============================================================================
+
+const SUMMARIZER_SYSTEM_PROMPT = `You are a prompt summarizer. Given a user prompt to an AI coding assistant, create a concise 3-8 word task title that captures the main intent.
+
+Rules:
+- Start with an action verb (Add, Fix, Update, Implement, Create, Remove, Refactor, Debug, Help, etc.)
+- Be specific but concise (3-8 words max)
+- Never exceed 50 characters
+- Focus on WHAT the user wants to accomplish
+- Ignore pleasantries, context, or explanations - just the core task
+- If the prompt is a question, summarize what they're asking about
+
+Examples:
+- "Can you help me add a dark mode toggle to my React app? I want users to be able to switch between light and dark themes." → "Add dark mode toggle"
+- "I'm getting an error when I try to login. The error says 'invalid credentials' but I'm using the correct password." → "Fix login authentication error"
+- "Please refactor the user service to use dependency injection instead of creating instances directly" → "Refactor user service for DI"
+- "What does this regex do? /^[a-zA-Z0-9]+$/" → "Explain alphanumeric regex"
+- "run the tests" → "Run tests"
+- "help me understand how the auth middleware works in this codebase" → "Explain auth middleware"
+
+Respond with ONLY the task title, no quotes, no explanation.`;
+
+const SUMMARIZER_SCHEMA = {
+  type: 'object' as const,
+  properties: {
+    title: {
+      type: 'string' as const,
+      description: 'Concise 3-8 word task title starting with an action verb',
+    },
+  },
+  required: ['title'] as const,
+  additionalProperties: false,
+};
+
+export class PromptSummarizer {
+  /** Summarize a user prompt into a concise task title */
+  async summarize(prompt: string, timeoutMs = 5000): Promise<string> {
+    // For very short prompts, just clean them up
+    const trimmed = prompt.trim();
+    if (trimmed.length <= 40) {
+      return this.cleanupShortPrompt(trimmed);
+    }
+
+    // Truncate very long prompts
+    const maxChars = 2000;
+    const truncated = trimmed.length > maxChars
+      ? trimmed.slice(0, maxChars) + '\n[...truncated]'
+      : trimmed;
+
+    try {
+      const summarizerQuery = query({
+        prompt: `Summarize this user prompt into a task title:\n\n${truncated}`,
+        options: {
+          systemPrompt: SUMMARIZER_SYSTEM_PROMPT,
+          model: 'haiku',
+          permissionMode: 'bypassPermissions',
+          maxTurns: 1,
+          effort: 'low',
+          outputFormat: {
+            type: 'json_schema',
+            schema: SUMMARIZER_SCHEMA,
+          },
+        },
+      });
+
+      let title = '';
+
+      for await (const event of summarizerQuery) {
+        if (event.type === 'result') {
+          const msg = event as {
+            type: 'result';
+            structured_output?: { title?: string };
+            subtype?: string;
+          };
+          if (msg.subtype === 'success' && msg.structured_output?.title) {
+            title = msg.structured_output.title.trim().slice(0, 50);
+          }
+        } else if (event.type === 'assistant') {
+          // Fallback: try to extract from text
+          const content = (event as { message?: { content?: Array<{ type?: string; text?: string }> } }).message?.content;
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (block?.type === 'text' && typeof block.text === 'string' && !title) {
+                // Try to parse as JSON or use raw text
+                try {
+                  const parsed = JSON.parse(block.text);
+                  if (parsed.title) title = parsed.title.trim().slice(0, 50);
+                } catch {
+                  // Use raw text if it's short enough
+                  const text = block.text.trim();
+                  if (text.length > 0 && text.length <= 60) {
+                    title = text.slice(0, 50);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (title) {
+        console.log('[PromptSummarizer] Generated title:', title);
+        return title;
+      }
+
+      // Fallback to heuristic
+      return this.heuristicSummary(trimmed);
+    } catch (error) {
+      console.error('[PromptSummarizer] Summarization failed:', error);
+      return this.heuristicSummary(trimmed);
+    }
+  }
+
+  /** Quick cleanup for short prompts */
+  private cleanupShortPrompt(prompt: string): string {
+    // Remove common prefixes
+    let cleaned = prompt
+      .replace(/^(please|can you|could you|help me|i need to|i want to)\s+/i, '')
+      .trim();
+
+    // Capitalize first letter
+    if (cleaned.length > 0) {
+      cleaned = cleaned[0].toUpperCase() + cleaned.slice(1);
+    }
+
+    return cleaned || prompt;
+  }
+
+  /** Heuristic-based summary as fallback */
+  private heuristicSummary(prompt: string): string {
+    const trimmed = prompt.trim();
+
+    // Try to extract first sentence
+    const firstSentence = trimmed.split(/[.!?\n]/)[0]?.trim();
+    if (firstSentence && firstSentence.length <= 50) {
+      return this.cleanupShortPrompt(firstSentence);
+    }
+
+    // Look for command patterns
+    const commandMatch = trimmed.match(/^(run|execute|help me|please|can you|i need to|let's|let me|add|fix|update|create|implement|debug)\s+(.{10,40})/i);
+    if (commandMatch) {
+      return commandMatch[0].slice(0, 50);
+    }
+
+    // Truncate at word boundary
+    const truncated = trimmed.slice(0, 47);
+    const lastSpace = truncated.lastIndexOf(' ');
+    return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + '...';
+  }
+}
+
+// Singleton instance
+let _summarizer: PromptSummarizer | null = null;
+
+export function getPromptSummarizer(): PromptSummarizer {
+  if (!_summarizer) {
+    _summarizer = new PromptSummarizer();
+  }
+  return _summarizer;
+}
+
+/** Quick summarize helper */
+export async function summarizePrompt(prompt: string): Promise<string> {
+  return getPromptSummarizer().summarize(prompt);
 }
