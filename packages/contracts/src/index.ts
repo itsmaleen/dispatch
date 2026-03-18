@@ -5,3 +5,4 @@ export * from './events';
 export * from './task';
 export * from './memory';
 export * from './widget';
+export * from './terminal';

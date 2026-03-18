@@ -90,11 +90,11 @@ export interface TasksWidgetContainerProps {
   // Workspace path for filtering tasks/goals/sessions
   workspacePath?: string;
 
-  // For sending tasks to terminal
-  onSendToTerminal?: (taskText: string, terminalId?: string) => void;
+  // For sending tasks to console
+  onSendToConsole?: (taskText: string, consoleId?: string) => void;
 
-  // For highlighting/focusing a terminal by thread ID
-  onHighlightTerminal?: (threadId: string) => void;
+  // For highlighting/focusing a console by thread ID
+  onHighlightConsole?: (threadId: string) => void;
 }
 
 // ============================================================================
@@ -112,8 +112,8 @@ export function TasksWidgetContainer({
   onMouseLeave,
   ws,
   workspacePath,
-  onSendToTerminal,
-  onHighlightTerminal,
+  onSendToConsole,
+  onHighlightConsole,
 }: TasksWidgetContainerProps) {
   // Tab state - default to "active" per design decision
   const [activeTab, setActiveTab] = useState<TasksTab>('active');
@@ -283,10 +283,10 @@ export function TasksWidgetContainer({
     }
   }, []);
 
-  const handleHighlightTerminal = useCallback((sessionId: string) => {
-    // The sessionId is the threadId which corresponds to a terminal
-    onHighlightTerminal?.(sessionId);
-  }, [onHighlightTerminal]);
+  const handleHighlightConsole = useCallback((sessionId: string) => {
+    // The sessionId is the threadId which corresponds to a console
+    onHighlightConsole?.(sessionId);
+  }, [onHighlightConsole]);
 
   const handleDismissTask = useCallback(async (taskId: string) => {
     try {
@@ -306,12 +306,12 @@ export function TasksWidgetContainer({
     }
   }, []);
 
-  const handleSendToTerminal = useCallback((taskId: string, terminalId?: string) => {
+  const handleSendToConsole = useCallback((taskId: string, consoleId?: string) => {
     const task = workItems.find(t => t.id === taskId);
-    if (task && onSendToTerminal) {
-      onSendToTerminal(task.fullText || task.summary, terminalId);
+    if (task && onSendToConsole) {
+      onSendToConsole(task.fullText || task.summary, consoleId);
     }
-  }, [workItems, onSendToTerminal]);
+  }, [workItems, onSendToConsole]);
 
   const handleCreateGoal = useCallback(async (title: string) => {
     try {
@@ -372,11 +372,11 @@ export function TasksWidgetContainer({
       recentlyCompleted={mergedRecentlyCompleted}
       onDismissSession={handleDismissSession}
       onDeleteSession={handleDeleteSession}
-      onHighlightTerminal={handleHighlightTerminal}
+      onHighlightConsole={handleHighlightConsole}
       workItems={workItems}
       onDismissTask={handleDismissTask}
       onCompleteTask={handleCompleteTask}
-      onSendToTerminal={handleSendToTerminal}
+      onSendToConsole={handleSendToConsole}
       goals={goals}
       inboxTasks={inboxTasks}
       onCreateGoal={handleCreateGoal}

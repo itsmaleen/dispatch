@@ -1,6 +1,6 @@
 import type { ComponentType } from 'react';
 
-export type CommandCategory = 'navigation' | 'terminal' | 'adapter' | 'task' | 'layout';
+export type CommandCategory = 'navigation' | 'console' | 'adapter' | 'task' | 'layout' | 'terminal';
 
 export type CommandAction =
   | { type: 'execute'; handler: () => void | Promise<void> }

@@ -18,7 +18,7 @@ export interface LayoutLeaf {
   type: 'leaf';
   id: string;
   widgetType: WidgetType;
-  widgetId: string; // ID of the terminal, 'tasks-widget', or 'agent-status-widget'
+  widgetId: string; // ID of the agent console, 'tasks-widget', or 'agent-status-widget'
 }
 
 /** A group node represents a split container with children */
@@ -34,6 +34,12 @@ export type LayoutNode = LayoutLeaf | LayoutGroup;
 
 /** Layout preset names */
 export type LayoutPreset = 'default' | 'master-stack' | 'even-horizontal' | 'even-vertical' | 'quad';
+
+/** Widget info for layout presets - includes all widget types (agent-console, terminal, tasks, agent-status) */
+export interface LayoutWidgetInfo {
+  type: WidgetType;
+  id: string;
+}
 
 /** Storage key for layout persistence */
 const LAYOUT_STORAGE_KEY = 'workspace-layout-v1';
@@ -131,45 +137,90 @@ function removeNode(tree: LayoutNode, id: string): LayoutNode | null {
   };
 }
 
-/** Create default layout with terminals on left, tasks on right */
-function createDefaultLayout(terminalIds: string[], showAgentStatus: boolean): LayoutNode {
-  const terminalLeaves: LayoutLeaf[] = terminalIds.map(id => ({
-    type: 'leaf',
-    id: generateLayoutId(),
-    widgetType: 'terminal' as const,
-    widgetId: id,
-  }));
+/**
+ * Create default layout: content widgets on left (stacked vertically), utility widgets on right
+ * Caller provides ALL widgets - this function separates them into content vs utility
+ */
+function createDefaultLayout(widgets: LayoutWidgetInfo[]): LayoutNode {
+  // Separate content widgets (consoles, terminals) from utility widgets (tasks, agent-status)
+  const contentWidgets = widgets.filter(w => w.type === 'agent-console' || w.type === 'terminal');
+  const utilityWidgets = widgets.filter(w => w.type === 'tasks' || w.type === 'agent-status');
 
-  const rightChildren: LayoutNode[] = [];
-  const rightSizes: number[] = [];
-
-  if (showAgentStatus) {
-    rightChildren.push({
-      type: 'leaf',
-      id: generateLayoutId(),
-      widgetType: 'agent-status',
-      widgetId: 'agent-status-widget',
-    });
-    rightSizes.push(30);
+  // If no content widgets, just return utility widgets stacked vertically
+  if (contentWidgets.length === 0) {
+    if (utilityWidgets.length === 0) {
+      // Edge case: no widgets at all
+      return {
+        type: 'leaf',
+        id: generateLayoutId(),
+        widgetType: 'tasks',
+        widgetId: 'tasks-widget',
+      };
+    }
+    if (utilityWidgets.length === 1) {
+      return {
+        type: 'leaf',
+        id: generateLayoutId(),
+        widgetType: utilityWidgets[0].type,
+        widgetId: utilityWidgets[0].id,
+      };
+    }
+    return {
+      type: 'group',
+      id: 'root',
+      direction: 'vertical',
+      children: utilityWidgets.map(w => ({
+        type: 'leaf',
+        id: generateLayoutId(),
+        widgetType: w.type,
+        widgetId: w.id,
+      })),
+      sizes: utilityWidgets.map(() => 100 / utilityWidgets.length),
+    };
   }
 
-  rightChildren.push({
+  // Create left panel for content widgets
+  const leftChildren: LayoutLeaf[] = contentWidgets.map(w => ({
     type: 'leaf',
     id: generateLayoutId(),
-    widgetType: 'tasks',
-    widgetId: 'tasks-widget',
-  });
-  rightSizes.push(showAgentStatus ? 70 : 100);
+    widgetType: w.type,
+    widgetId: w.id,
+  }));
 
-  const leftPanel: LayoutNode = terminalLeaves.length === 1
-    ? terminalLeaves[0]
+  const leftPanel: LayoutNode = leftChildren.length === 1
+    ? leftChildren[0]
     : {
         type: 'group',
         id: generateLayoutId(),
         direction: 'vertical',
-        children: terminalLeaves,
-        sizes: terminalLeaves.map(() => 100 / terminalLeaves.length),
+        children: leftChildren,
+        sizes: leftChildren.map(() => 100 / leftChildren.length),
       };
+
+  // If no utility widgets, just return content
+  if (utilityWidgets.length === 0) {
+    return leftPanel;
+  }
+
+  // Create right panel for utility widgets (agent-status on top if present, then tasks)
+  // Sort so agent-status comes before tasks
+  const sortedUtility = [...utilityWidgets].sort((a, b) => {
+    if (a.type === 'agent-status') return -1;
+    if (b.type === 'agent-status') return 1;
+    return 0;
+  });
+
+  const rightChildren: LayoutLeaf[] = sortedUtility.map(w => ({
+    type: 'leaf',
+    id: generateLayoutId(),
+    widgetType: w.type,
+    widgetId: w.id,
+  }));
+
+  // Size agent-status smaller (30%) and tasks larger (70%) if both present
+  const rightSizes = sortedUtility.length === 2 && sortedUtility[0].type === 'agent-status'
+    ? [30, 70]
+    : sortedUtility.map(() => 100 / sortedUtility.length);
 
   const rightPanel: LayoutNode = rightChildren.length === 1
     ? rightChildren[0]
@@ -190,9 +241,12 @@ function createDefaultLayout(terminalIds: string[], showAgentStatus: boolean): L
   };
 }
 
-/** Create master-stack layout: large left panel + stacked right panels */
-function createMasterStackLayout(terminalIds: string[]): LayoutNode {
-  if (terminalIds.length === 0) {
+/**
+ * Create master-stack layout: first widget takes large left panel, rest stacked on right
+ * All widgets provided by caller - no auto-adding
+ */
+function createMasterStackLayout(widgets: LayoutWidgetInfo[]): LayoutNode {
+  if (widgets.length === 0) {
     return {
       type: 'leaf',
       id: generateLayoutId(),
@@ -201,43 +255,30 @@ function createMasterStackLayout(terminalIds: string[]): LayoutNode {
     };
   }
 
-  const [mainId, ...stackIds] = terminalIds;
+  if (widgets.length === 1) {
+    return {
+      type: 'leaf',
+      id: generateLayoutId(),
+      widgetType: widgets[0].type,
+      widgetId: widgets[0].id,
+    };
+  }
+
+  const [mainWidget, ...stackWidgets] = widgets;
 
   const mainPanel: LayoutLeaf = {
     type: 'leaf',
     id: generateLayoutId(),
-    widgetType: 'terminal',
-    widgetId: mainId,
+    widgetType: mainWidget.type,
+    widgetId: mainWidget.id,
   };
 
-  if (stackIds.length === 0) {
-    // Just one terminal + tasks
-    return {
-      type: 'group',
-      id: 'root',
-      direction: 'horizontal',
-      children: [
-        mainPanel,
-        { type: 'leaf', id: generateLayoutId(), widgetType: 'tasks', widgetId: 'tasks-widget' },
-      ],
-      sizes: [70, 30],
-    };
-  }
-
-  const stackPanels: LayoutNode[] = stackIds.map(id => ({
+  const stackPanels: LayoutLeaf[] = stackWidgets.map(w => ({
     type: 'leaf',
     id: generateLayoutId(),
-    widgetType: 'terminal' as const,
-    widgetId: id,
+    widgetType: w.type,
+    widgetId: w.id,
   }));
-
-  // Add tasks at the bottom of the stack
-  stackPanels.push({
-    type: 'leaf',
-    id: generateLayoutId(),
-    widgetType: 'tasks',
-    widgetId: 'tasks-widget',
-  });
 
   const stackGroup: LayoutGroup = {
     type: 'group',
@@ -256,21 +297,35 @@ function createMasterStackLayout(terminalIds: string[]): LayoutNode {
   };
 }
 
-/** Create even horizontal split layout */
-function createEvenHorizontalLayout(terminalIds: string[]): LayoutNode {
-  const panels: LayoutNode[] = terminalIds.map(id => ({
-    type: 'leaf',
-    id: generateLayoutId(),
-    widgetType: 'terminal' as const,
-    widgetId: id,
-  }));
+/**
+ * Create even horizontal split layout - all widgets side by side
+ * All widgets provided by caller - no auto-adding
+ */
+function createEvenHorizontalLayout(widgets: LayoutWidgetInfo[]): LayoutNode {
+  if (widgets.length === 0) {
+    return {
+      type: 'leaf',
+      id: generateLayoutId(),
+      widgetType: 'tasks',
+      widgetId: 'tasks-widget',
+    };
+  }
 
-  panels.push({
+  if (widgets.length === 1) {
+    return {
+      type: 'leaf',
+      id: generateLayoutId(),
+      widgetType: widgets[0].type,
+      widgetId: widgets[0].id,
+    };
+  }
+
+  const panels: LayoutLeaf[] = widgets.map(w => ({
     type: 'leaf',
     id: generateLayoutId(),
-    widgetType: 'tasks',
-    widgetId: 'tasks-widget',
-  });
+    widgetType: w.type,
+    widgetId: w.id,
+  }));
 
   return {
     type: 'group',
@@ -281,21 +336,35 @@ function createEvenHorizontalLayout(terminalIds: string[]): LayoutNode {
   };
 }
 
-/** Create even vertical split layout */
-function createEvenVerticalLayout(terminalIds: string[]): LayoutNode {
-  const panels: LayoutNode[] = terminalIds.map(id => ({
-    type: 'leaf',
-    id: generateLayoutId(),
-    widgetType: 'terminal' as const,
-    widgetId: id,
-  }));
+/**
+ * Create even vertical split layout - all widgets stacked vertically
+ * All widgets provided by caller - no auto-adding
+ */
+function createEvenVerticalLayout(widgets: LayoutWidgetInfo[]): LayoutNode {
+  if (widgets.length === 0) {
+    return {
+      type: 'leaf',
+      id: generateLayoutId(),
+      widgetType: 'tasks',
+      widgetId: 'tasks-widget',
+    };
+  }
 
-  panels.push({
+  if (widgets.length === 1) {
+    return {
+      type: 'leaf',
+      id: generateLayoutId(),
+      widgetType: widgets[0].type,
+      widgetId: widgets[0].id,
+    };
+  }
+
+  const panels: LayoutLeaf[] = widgets.map(w => ({
     type: 'leaf',
     id: generateLayoutId(),
-    widgetType: 'tasks',
-    widgetId: 'tasks-widget',
-  });
+    widgetType: w.type,
+    widgetId: w.id,
+  }));
 
   return {
     type: 'group',
@@ -306,29 +375,71 @@ function createEvenVerticalLayout(terminalIds: string[]): LayoutNode {
   };
 }
 
-/** Create quad layout (2x2 grid) */
-function createQuadLayout(terminalIds: string[]): LayoutNode {
-  // Fill in terminals, pad with tasks widget if needed
-  const slots = [...terminalIds.slice(0, 4)];
+/**
+ * Create quad layout (2x2 grid) - uses first 4 widgets
+ * All widgets provided by caller - no auto-adding
+ */
+function createQuadLayout(widgets: LayoutWidgetInfo[]): LayoutNode {
+  // Use up to 4 widgets
+  const slots = widgets.slice(0, 4);
 
-  const createSlot = (idx: number): LayoutLeaf => {
-    if (idx < slots.length) {
-      return {
-        type: 'leaf',
-        id: generateLayoutId(),
-        widgetType: 'terminal',
-        widgetId: slots[idx],
-      };
-    }
-    // Use tasks for the last slot if we don't have 4 terminals
+  if (slots.length === 0) {
     return {
       type: 'leaf',
       id: generateLayoutId(),
       widgetType: 'tasks',
       widgetId: 'tasks-widget',
     };
-  };
+  }
 
+  if (slots.length === 1) {
+    return {
+      type: 'leaf',
+      id: generateLayoutId(),
+      widgetType: slots[0].type,
+      widgetId: slots[0].id,
+    };
+  }
+
+  // For 2-4 widgets, create appropriate grid
+  const createSlot = (idx: number): LayoutLeaf => ({
+    type: 'leaf',
+    id: generateLayoutId(),
+    widgetType: slots[idx].type,
+    widgetId: slots[idx].id,
+  });
+
+  if (slots.length === 2) {
+    // 2 widgets: side by side
+    return {
+      type: 'group',
+      id: 'root',
+      direction: 'horizontal',
+      children: [createSlot(0), createSlot(1)],
+      sizes: [50, 50],
+    };
+  }
+
+  if (slots.length === 3) {
+    // 3 widgets: 2 on top, 1 on bottom (centered or left-aligned)
+    const topRow: LayoutGroup = {
+      type: 'group',
+      id: generateLayoutId(),
+      direction: 'horizontal',
+      children: [createSlot(0), createSlot(1)],
+      sizes: [50, 50],
+    };
+
+    return {
+      type: 'group',
+      id: 'root',
+      direction: 'vertical',
+      children: [topRow, createSlot(2)],
+      sizes: [50, 50],
+    };
+  }
+
+  // 4 widgets: full 2x2 grid
   const topRow: LayoutGroup = {
     type: 'group',
     id: generateLayoutId(),
@@ -380,15 +491,24 @@ export interface PlanStep {
   durationMs?: number;
 }
 
-// Terminal state type (simplified for command palette use)
-export interface TerminalInfo {
+// Agent console state type (simplified for command palette use)
+export interface ConsoleInfo {
   id: string;
   agentId: string;
   agentName: string;
 }
 
+/** @deprecated Use ConsoleInfo instead */
+export type TerminalInfo = ConsoleInfo;
+
+// Real PTY terminal info (simplified for store use)
+export interface RealTerminalInfo {
+  id: string;
+  name: string;
+}
+
 // Widget types for focus management
-export type WidgetType = 'terminal' | 'tasks' | 'agent-status';
+export type WidgetType = 'agent-console' | 'tasks' | 'agent-status' | 'terminal';
 
 export interface WidgetInfo {
   id: string;
@@ -406,11 +526,14 @@ interface WorkspaceState {
   // Current workspace path
   workspacePath: string | null;
 
-  // Available agents for terminal creation
+  // Available agents for console creation
   agents: WorkspaceAgent[];
 
-  // Current terminals (for display in command palette)
-  terminals: TerminalInfo[];
+  // Current agent consoles (for display in command palette)
+  consoles: ConsoleInfo[];
+
+  // Real PTY terminals
+  realTerminals: RealTerminalInfo[];
 
   // Plan steps / tasks
   planSteps: PlanStep[];
@@ -435,23 +558,27 @@ interface WorkspaceState {
   // Navigation callback (set by App.tsx)
   navigateToView: ((view: string) => void) | null;
 
+  // Console creation callback (set by Workspace.tsx)
+  onCreateConsole: ((agentId: string) => void) | null;
+
   // Terminal creation callback (set by Workspace.tsx)
-  onCreateTerminal: ((agentId: string) => void) | null;
+  onCreateTerminal: ((cwd?: string) => void) | null;
 
   // Task creation callback (set by Workspace.tsx)
   onCreateTask: ((text: string, agentId: string | null) => void) | null;
 
-  // Terminal action callbacks (set by Workspace.tsx)
-  onCloseTerminal: ((terminalId: string) => void) | null;
-  onMinimizeTerminal: ((terminalId: string) => void) | null;
-  onMaximizeTerminal: ((terminalId: string) => void) | null;
-  onRestoreTerminal: ((terminalId: string) => void) | null;
-  onClearTerminal: ((terminalId: string) => void) | null;
+  // Console action callbacks (set by Workspace.tsx)
+  onCloseConsole: ((consoleId: string) => void) | null;
+  onMinimizeConsole: ((consoleId: string) => void) | null;
+  onMaximizeConsole: ((consoleId: string) => void) | null;
+  onRestoreConsole: ((consoleId: string) => void) | null;
+  onClearConsole: ((consoleId: string) => void) | null;
 
   // Actions for external callers (command palette)
   setWorkspacePath: (path: string | null) => void;
   setAgents: (agents: WorkspaceAgent[]) => void;
-  setTerminals: (terminals: TerminalInfo[]) => void;
+  setConsoles: (consoles: ConsoleInfo[]) => void;
+  setRealTerminals: (terminals: RealTerminalInfo[]) => void;
   setPlanSteps: (steps: PlanStep[]) => void;
 
   // Focus management actions
@@ -467,38 +594,41 @@ interface WorkspaceState {
   // Layout tree actions
   setLayoutTree: (tree: LayoutNode | null) => void;
   splitPanel: (panelId: string, direction: 'horizontal' | 'vertical', newWidgetId: string) => void;
+  addPanelToLayout: (options: { widgetType: WidgetType; widgetId: string }) => void;
   closePanelInLayout: (panelId: string) => void;
   swapPanels: (panelId1: string, panelId2: string) => void;
   movePanel: (sourcePanelId: string, targetPanelId: string, position: 'left' | 'right' | 'top' | 'bottom' | 'center') => void;
   updatePanelSizes: (groupId: string, sizes: number[]) => void;
-  applyLayoutPreset: (preset: LayoutPreset, terminalIds: string[]) => void;
+  applyLayoutPreset: (preset: LayoutPreset, widgets: LayoutWidgetInfo[]) => void;
   saveLayout: () => void;
   restoreLayout: () => LayoutNode | null;
 
   // Register callbacks (called by Workspace.tsx and App.tsx)
   registerNavigateCallback: (callback: (view: string) => void) => void;
-  registerTerminalCallback: (callback: (agentId: string) => void) => void;
+  registerConsoleCallback: (callback: (agentId: string) => void) => void;
+  registerTerminalCallback: (callback: (cwd?: string) => void) => void;
   registerTaskCallback: (callback: (text: string, agentId: string | null) => void) => void;
-  registerTerminalActionCallbacks: (callbacks: {
-    onClose: (terminalId: string) => void;
-    onMinimize: (terminalId: string) => void;
-    onMaximize: (terminalId: string) => void;
-    onRestore: (terminalId: string) => void;
-    onClear: (terminalId: string) => void;
+  registerConsoleActionCallbacks: (callbacks: {
+    onClose: (consoleId: string) => void;
+    onMinimize: (consoleId: string) => void;
+    onMaximize: (consoleId: string) => void;
+    onRestore: (consoleId: string) => void;
+    onClear: (consoleId: string) => void;
   }) => void;
 
   // Command palette calls these
-  createTerminal: (agentId: string) => void;
+  createConsole: (agentId: string) => void;
+  createTerminal: (cwd?: string) => void;
   createTask: (text: string, agentId: string | null) => void;
   navigateTo: (view: string) => void;
 
-  // Terminal actions (called by command palette)
-  closeTerminal: (terminalId: string) => void;
-  minimizeTerminal: (terminalId: string) => void;
-  maximizeTerminal: (terminalId: string) => void;
-  restoreTerminal: (terminalId: string) => void;
-  clearTerminal: (terminalId: string) => void;
-  closeFocusedTerminal: () => void;
+  // Console actions (called by command palette)
+  closeConsole: (consoleId: string) => void;
+  minimizeConsole: (consoleId: string) => void;
+  maximizeConsole: (consoleId: string) => void;
+  restoreConsole: (consoleId: string) => void;
+  clearConsole: (consoleId: string) => void;
+  closeFocusedConsole: () => void;
   toggleMaximizeFocusedWidget: () => void;
 }
 
@@ -506,7 +636,8 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
   // Initial state
   workspacePath: null,
   agents: [],
-  terminals: [],
+  consoles: [],
+  realTerminals: [],
   planSteps: [],
   focusedWidgetId: null,
   focusedWidgetType: null,
@@ -516,18 +647,20 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
   tasksVisible: true, // Show by default
   layoutTree: null,
   navigateToView: null,
+  onCreateConsole: null,
   onCreateTerminal: null,
   onCreateTask: null,
-  onCloseTerminal: null,
-  onMinimizeTerminal: null,
-  onMaximizeTerminal: null,
-  onRestoreTerminal: null,
-  onClearTerminal: null,
+  onCloseConsole: null,
+  onMinimizeConsole: null,
+  onMaximizeConsole: null,
+  onRestoreConsole: null,
+  onClearConsole: null,
 
   // Setters (called by Workspace.tsx to sync state)
   setWorkspacePath: (path) => set({ workspacePath: path }),
   setAgents: (agents) => set({ agents }),
-  setTerminals: (terminals) => set({ terminals }),
+  setConsoles: (consoles) => set({ consoles }),
+  setRealTerminals: (terminals) => set({ realTerminals: terminals }),
   setPlanSteps: (steps) => set({ planSteps: steps }),
 
   // Focus management
@@ -588,11 +721,11 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
       return;
     }
 
-    // Create new leaf for the new terminal
+    // Create new leaf for the new agent console
     const newLeaf: LayoutLeaf = {
       type: 'leaf',
       id: generateLayoutId(),
-      widgetType: 'terminal',
+      widgetType: 'agent-console',
       widgetId: newWidgetId,
     };
 
@@ -608,6 +741,50 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
     // Replace the original leaf with the new group
     const newTree = replaceNode(layoutTree, panelId, newGroup);
     set({ layoutTree: newTree });
+  },
+
+  addPanelToLayout: (options) => {
+    const { layoutTree } = get();
+    const { widgetType, widgetId } = options;
+
+    // Create new leaf for the widget
+    const newLeaf: LayoutLeaf = {
+      type: 'leaf',
+      id: generateLayoutId(),
+      widgetType,
+      widgetId,
+    };
+
+    if (!layoutTree) {
+      // No existing layout - create a single leaf as root
+      set({ layoutTree: newLeaf });
+      return;
+    }
+
+    if (layoutTree.type === 'leaf') {
+      // Single leaf - create a horizontal group with the existing and new leaf
+      const newGroup: LayoutGroup = {
+        type: 'group',
+        id: generateLayoutId(),
+        direction: 'horizontal',
+        children: [layoutTree, newLeaf],
+        sizes: [50, 50],
+      };
+      set({ layoutTree: newGroup });
+      return;
+    }
+
+    // Group - add to the end of the top-level group
+    const updatedGroup: LayoutGroup = {
+      ...layoutTree,
+      children: [...layoutTree.children, newLeaf],
+      sizes: layoutTree.sizes.map(() => 100 / (layoutTree.children.length + 1))
+        .concat([100 / (layoutTree.children.length + 1)]),
+    };
+    // Normalize sizes to add up to 100
+    const total = updatedGroup.sizes.reduce((a, b) => a + b, 0);
+    updatedGroup.sizes = updatedGroup.sizes.map(s => (s / total) * 100);
+    set({ layoutTree: updatedGroup });
   },
 
   closePanelInLayout: (panelId) => {
@@ -694,10 +871,12 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
     };
 
     // First, replace the target with the new group
-    let newTree = replaceNode(layoutTree, targetPanelId, newGroup);
+    let newTree: LayoutNode | null = replaceNode(layoutTree, targetPanelId, newGroup);
 
     // Then, remove the source panel from its original location
-    newTree = removeNode(newTree, sourcePanelId);
+    if (newTree) {
+      newTree = removeNode(newTree, sourcePanelId);
+    }
 
     if (newTree) {
       set({ layoutTree: newTree });
@@ -720,25 +899,25 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
     set({ layoutTree: newTree });
   },
 
-  applyLayoutPreset: (preset, terminalIds) => {
+  applyLayoutPreset: (preset, widgets) => {
     let newTree: LayoutNode;
 
     switch (preset) {
       case 'master-stack':
-        newTree = createMasterStackLayout(terminalIds);
+        newTree = createMasterStackLayout(widgets);
         break;
       case 'even-horizontal':
-        newTree = createEvenHorizontalLayout(terminalIds);
+        newTree = createEvenHorizontalLayout(widgets);
         break;
       case 'even-vertical':
-        newTree = createEvenVerticalLayout(terminalIds);
+        newTree = createEvenVerticalLayout(widgets);
         break;
       case 'quad':
-        newTree = createQuadLayout(terminalIds);
+        newTree = createQuadLayout(widgets);
         break;
       case 'default':
       default:
-        newTree = createDefaultLayout(terminalIds, get().showAgentStatus);
+        newTree = createDefaultLayout(widgets);
         break;
     }
 
@@ -772,21 +951,31 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
 
   // Register callbacks
   registerNavigateCallback: (callback) => set({ navigateToView: callback }),
+  registerConsoleCallback: (callback) => set({ onCreateConsole: callback }),
   registerTerminalCallback: (callback) => set({ onCreateTerminal: callback }),
   registerTaskCallback: (callback) => set({ onCreateTask: callback }),
-  registerTerminalActionCallbacks: (callbacks) => set({
-    onCloseTerminal: callbacks.onClose,
-    onMinimizeTerminal: callbacks.onMinimize,
-    onMaximizeTerminal: callbacks.onMaximize,
-    onRestoreTerminal: callbacks.onRestore,
-    onClearTerminal: callbacks.onClear,
+  registerConsoleActionCallbacks: (callbacks) => set({
+    onCloseConsole: callbacks.onClose,
+    onMinimizeConsole: callbacks.onMinimize,
+    onMaximizeConsole: callbacks.onMaximize,
+    onRestoreConsole: callbacks.onRestore,
+    onClearConsole: callbacks.onClear,
   }),
 
   // Action dispatchers (called by command palette)
-  createTerminal: (agentId) => {
+  createConsole: (agentId) => {
+    const { onCreateConsole } = get();
+    if (onCreateConsole) {
+      onCreateConsole(agentId);
+    } else {
+      console.warn('[WorkspaceStore] No console callback registered');
+    }
+  },
+
+  createTerminal: (cwd) => {
     const { onCreateTerminal } = get();
     if (onCreateTerminal) {
-      onCreateTerminal(agentId);
+      onCreateTerminal(cwd);
     } else {
       console.warn('[WorkspaceStore] No terminal callback registered');
     }
@@ -810,63 +999,63 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
     }
   },
 
-  // Terminal actions
-  closeTerminal: (terminalId) => {
-    const { onCloseTerminal } = get();
-    if (onCloseTerminal) {
-      onCloseTerminal(terminalId);
+  // Console actions
+  closeConsole: (consoleId) => {
+    const { onCloseConsole } = get();
+    if (onCloseConsole) {
+      onCloseConsole(consoleId);
     }
   },
 
-  minimizeTerminal: (terminalId) => {
-    const { onMinimizeTerminal } = get();
-    if (onMinimizeTerminal) {
-      onMinimizeTerminal(terminalId);
+  minimizeConsole: (consoleId) => {
+    const { onMinimizeConsole } = get();
+    if (onMinimizeConsole) {
+      onMinimizeConsole(consoleId);
     }
   },
 
-  maximizeTerminal: (terminalId) => {
-    const { onMaximizeTerminal } = get();
-    if (onMaximizeTerminal) {
-      onMaximizeTerminal(terminalId);
+  maximizeConsole: (consoleId) => {
+    const { onMaximizeConsole } = get();
+    if (onMaximizeConsole) {
+      onMaximizeConsole(consoleId);
     }
   },
 
-  restoreTerminal: (terminalId) => {
-    const { onRestoreTerminal } = get();
-    if (onRestoreTerminal) {
-      onRestoreTerminal(terminalId);
+  restoreConsole: (consoleId) => {
+    const { onRestoreConsole } = get();
+    if (onRestoreConsole) {
+      onRestoreConsole(consoleId);
     }
   },
 
-  clearTerminal: (terminalId) => {
-    const { onClearTerminal } = get();
-    if (onClearTerminal) {
-      onClearTerminal(terminalId);
+  clearConsole: (consoleId) => {
+    const { onClearConsole } = get();
+    if (onClearConsole) {
+      onClearConsole(consoleId);
     }
   },
 
-  closeFocusedTerminal: () => {
-    const { focusedWidgetId, focusedWidgetType, onCloseTerminal } = get();
-    if (focusedWidgetType === 'terminal' && focusedWidgetId && onCloseTerminal) {
-      onCloseTerminal(focusedWidgetId);
+  closeFocusedConsole: () => {
+    const { focusedWidgetId, focusedWidgetType, onCloseConsole } = get();
+    if (focusedWidgetType === 'agent-console' && focusedWidgetId && onCloseConsole) {
+      onCloseConsole(focusedWidgetId);
     }
   },
 
   toggleMaximizeFocusedWidget: () => {
-    const { focusedWidgetId, maximizedWidgetId, onMaximizeTerminal, onRestoreTerminal } = get();
+    const { focusedWidgetId, maximizedWidgetId, onMaximizeConsole, onRestoreConsole } = get();
     if (!focusedWidgetId) return;
 
     if (maximizedWidgetId === focusedWidgetId) {
       // Already maximized, restore it
-      if (onRestoreTerminal) {
-        onRestoreTerminal(focusedWidgetId);
+      if (onRestoreConsole) {
+        onRestoreConsole(focusedWidgetId);
       }
       set({ maximizedWidgetId: null });
     } else {
       // Maximize it
-      if (onMaximizeTerminal) {
-        onMaximizeTerminal(focusedWidgetId);
+      if (onMaximizeConsole) {
+        onMaximizeConsole(focusedWidgetId);
       }
       set({ maximizedWidgetId: focusedWidgetId });
     }

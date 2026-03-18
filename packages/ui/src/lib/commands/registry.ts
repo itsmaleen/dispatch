@@ -60,13 +60,15 @@ function scoreMatch(query: string, command: Command): number {
 
 const CATEGORY_LABELS: Record<CommandCategory, string> = {
   navigation: 'Navigation',
-  terminal: 'Terminal',
+  console: 'Agent Console',
   adapter: 'Adapters',
   task: 'Tasks',
   layout: 'Layout',
+  terminal: 'Terminal',
 };
 
 const CATEGORY_ORDER: CommandCategory[] = [
+  'console',
   'terminal',
   'layout',
   'task',

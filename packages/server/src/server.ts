@@ -21,6 +21,9 @@ import { getReactiveTaskStore } from './persistence/reactive-task-store';
 import { getExtractor, type ExtractionResult } from './extractor';
 import { initSyncEventEmitter, getSyncEventEmitter, type SyncEvent } from './events/sync-events';
 import { initQueryManager, getQueryManager } from './subscriptions/query-manager';
+import { getTerminalManager, type TerminalManager } from './services/terminal-manager';
+import { executeTerminalTool, getTerminalToolSchema } from './services/terminal-tool';
+import type { TerminalClientMessage, CreateTerminalOptions, TerminalToolInput } from '@acc/contracts';
 
 interface ManagedAdapter {
   implementation: AdapterImplementation;
@@ -56,6 +59,7 @@ export class CommandCenterServer {
   private clientIds = new Map<WebSocket, string>(); // WebSocket -> clientId for query subscriptions
   private connectedAgents = new Map<string, ConnectedAgent>();
   private tasks = new Map<string, Task>();
+  private terminalManager: TerminalManager | null = null;
   private _port: number;
   
   /** Actual port the server is listening on (may differ from requested if port was in use) */
@@ -1108,21 +1112,161 @@ Format your response as plain text only:
     // GitHub PR
     this.app.post('/github/pr', async (c) => {
       const { title, body, cwd } = await c.req.json<{ title: string; body: string; cwd: string }>();
-      
+
       try {
         const { exec } = await import('child_process');
         const { promisify } = await import('util');
         const execAsync = promisify(exec);
-        
+
         const { stdout } = await execAsync(
           `gh pr create --title "${title}" --body "${body}"`,
           { cwd }
         );
         return c.json({ ok: true, output: stdout });
       } catch (error) {
-        return c.json({ 
-          ok: false, 
-          error: error instanceof Error ? error.message : 'PR creation failed' 
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'PR creation failed'
+        }, 500);
+      }
+    });
+
+    // ============ Terminal Routes (PTY-based shell terminals) ============
+
+    // List all terminals
+    this.app.get('/api/terminals', (c) => {
+      if (!this.terminalManager) {
+        return c.json({ terminals: [] });
+      }
+      const terminals = this.terminalManager.list();
+      return c.json({ terminals });
+    });
+
+    // Create a new terminal
+    this.app.post('/api/terminals', async (c) => {
+      if (!this.terminalManager) {
+        return c.json({ ok: false, error: 'Terminal manager not initialized' }, 500);
+      }
+
+      const options = await c.req.json<CreateTerminalOptions>();
+
+      try {
+        const terminal = this.terminalManager.create(options);
+        return c.json({ ok: true, terminal });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to create terminal'
+        }, 500);
+      }
+    });
+
+    // Get terminal by ID
+    this.app.get('/api/terminals/:id', (c) => {
+      const id = c.req.param('id');
+      if (!this.terminalManager) {
+        return c.json({ ok: false, error: 'Terminal manager not initialized' }, 500);
+      }
+
+      const terminal = this.terminalManager.get(id);
+      if (!terminal) {
+        return c.json({ ok: false, error: 'Terminal not found' }, 404);
+      }
+
+      return c.json({ ok: true, terminal });
+    });
+
+    // Get terminal output
+    this.app.get('/api/terminals/:id/output', (c) => {
+      const id = c.req.param('id');
+      const lines = parseInt(c.req.query('lines') ?? '50');
+
+      if (!this.terminalManager) {
+        return c.json({ ok: false, error: 'Terminal manager not initialized' }, 500);
+      }
+
+      const output = this.terminalManager.getRecentOutput(id, lines);
+      if (output === null) {
+        return c.json({ ok: false, error: 'Terminal not found' }, 404);
+      }
+
+      return c.json({
+        ok: true,
+        output,
+        lineCount: output.split('\n').length
+      });
+    });
+
+    // Write to terminal
+    this.app.post('/api/terminals/:id/write', async (c) => {
+      const id = c.req.param('id');
+      const { data } = await c.req.json<{ data: string }>();
+
+      if (!this.terminalManager) {
+        return c.json({ ok: false, error: 'Terminal manager not initialized' }, 500);
+      }
+
+      const success = this.terminalManager.write(id, data);
+      if (!success) {
+        return c.json({ ok: false, error: 'Terminal not found or not running' }, 404);
+      }
+
+      return c.json({ ok: true });
+    });
+
+    // Resize terminal
+    this.app.post('/api/terminals/:id/resize', async (c) => {
+      const id = c.req.param('id');
+      const { cols, rows } = await c.req.json<{ cols: number; rows: number }>();
+
+      if (!this.terminalManager) {
+        return c.json({ ok: false, error: 'Terminal manager not initialized' }, 500);
+      }
+
+      const success = this.terminalManager.resize(id, cols, rows);
+      if (!success) {
+        return c.json({ ok: false, error: 'Terminal not found or not running' }, 404);
+      }
+
+      return c.json({ ok: true });
+    });
+
+    // Close terminal
+    this.app.delete('/api/terminals/:id', (c) => {
+      const id = c.req.param('id');
+
+      if (!this.terminalManager) {
+        return c.json({ ok: false, error: 'Terminal manager not initialized' }, 500);
+      }
+
+      const success = this.terminalManager.close(id);
+      if (!success) {
+        return c.json({ ok: false, error: 'Terminal not found' }, 404);
+      }
+
+      return c.json({ ok: true });
+    });
+
+    // ============ Terminal Tool API (for AI agents) ============
+
+    // Get terminal tool schema (for tool registration)
+    this.app.get('/api/terminal-tool/schema', (c) => {
+      return c.json(getTerminalToolSchema());
+    });
+
+    // Execute terminal tool action
+    this.app.post('/api/terminal-tool', async (c) => {
+      const input = await c.req.json<TerminalToolInput>();
+      const agentId = c.req.header('X-Agent-Id');
+      const sessionId = c.req.header('X-Session-Id');
+
+      try {
+        const result = await executeTerminalTool(input, { agentId, sessionId });
+        return c.json(result);
+      } catch (error) {
+        return c.json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Terminal tool execution failed',
         }, 500);
       }
     });
@@ -1233,6 +1377,61 @@ Format your response as plain text only:
   private broadcastSessionDeleted(sessionId: string): void {
     getSyncEventEmitter().emitSessionDeleted(sessionId);
     getQueryManager().notifyDataChanged('active_sessions');
+  }
+
+  // ============ Terminal Event Forwarding ============
+
+  /** Set up event forwarding from TerminalManager to WebSocket clients */
+  private setupTerminalEventForwarding(): void {
+    if (!this.terminalManager) return;
+
+    // Forward terminal:created events
+    this.terminalManager.on('terminal:created', (terminal) => {
+      this.broadcastRaw({
+        type: 'terminal:created',
+        terminal,
+      });
+    });
+
+    // Forward terminal:output events to attached clients only
+    this.terminalManager.on('terminal:output', (terminalId: string, data: string) => {
+      for (const [ws, clientId] of this.clientIds) {
+        if (ws.readyState === WebSocket.OPEN && this.terminalManager?.isClientAttached(terminalId, clientId)) {
+          ws.send(JSON.stringify({
+            type: 'terminal:output',
+            terminalId,
+            data,
+          }));
+        }
+      }
+    });
+
+    // Forward terminal:exit events
+    this.terminalManager.on('terminal:exit', (terminalId: string, code: number, signal?: string) => {
+      this.broadcastRaw({
+        type: 'terminal:exit',
+        terminalId,
+        code,
+        signal,
+      });
+    });
+
+    // Forward terminal:closed events
+    this.terminalManager.on('terminal:closed', (terminalId: string) => {
+      this.broadcastRaw({
+        type: 'terminal:closed',
+        terminalId,
+      });
+    });
+
+    // Forward terminal:error events
+    this.terminalManager.on('terminal:error', (terminalId: string, error: Error) => {
+      this.broadcastRaw({
+        type: 'terminal:error',
+        terminalId,
+        error: error.message,
+      });
+    });
   }
 
   // ============ Agent Channel Methods ============
@@ -1547,6 +1746,77 @@ Format your response as plain text only:
           break;
         }
 
+        // ============ Terminal WebSocket Messages ============
+
+        case 'terminal:create': {
+          // Create a new terminal via WebSocket
+          if (!this.terminalManager) {
+            ws.send(JSON.stringify({ type: 'terminal:error', terminalId: '', error: 'Terminal manager not initialized' }));
+            return;
+          }
+          const terminalMsg = msg as TerminalClientMessage & { type: 'terminal:create' };
+          try {
+            const terminal = this.terminalManager.create(terminalMsg.options);
+            ws.send(JSON.stringify({ type: 'terminal:created', terminal }));
+          } catch (error) {
+            ws.send(JSON.stringify({
+              type: 'terminal:error',
+              terminalId: '',
+              error: error instanceof Error ? error.message : 'Failed to create terminal'
+            }));
+          }
+          break;
+        }
+
+        case 'terminal:attach': {
+          // Attach client to terminal to receive output
+          if (!this.terminalManager) return;
+          const terminalMsg = msg as TerminalClientMessage & { type: 'terminal:attach' };
+          const attached = this.terminalManager.attachClient(terminalMsg.terminalId, clientId);
+          if (attached) {
+            ws.send(JSON.stringify({ type: 'terminal:attached', terminalId: terminalMsg.terminalId }));
+            // Send recent output to the newly attached client
+            const output = this.terminalManager.getRecentOutput(terminalMsg.terminalId, 100);
+            if (output) {
+              ws.send(JSON.stringify({ type: 'terminal:output', terminalId: terminalMsg.terminalId, data: output }));
+            }
+          }
+          break;
+        }
+
+        case 'terminal:detach': {
+          // Detach client from terminal
+          if (!this.terminalManager) return;
+          const terminalMsg = msg as TerminalClientMessage & { type: 'terminal:detach' };
+          this.terminalManager.detachClient(terminalMsg.terminalId, clientId);
+          ws.send(JSON.stringify({ type: 'terminal:detached', terminalId: terminalMsg.terminalId }));
+          break;
+        }
+
+        case 'terminal:input': {
+          // Write input to terminal
+          if (!this.terminalManager) return;
+          const terminalMsg = msg as TerminalClientMessage & { type: 'terminal:input' };
+          this.terminalManager.write(terminalMsg.terminalId, terminalMsg.data);
+          break;
+        }
+
+        case 'terminal:resize': {
+          // Resize terminal
+          if (!this.terminalManager) return;
+          const terminalMsg = msg as TerminalClientMessage & { type: 'terminal:resize' };
+          this.terminalManager.resize(terminalMsg.terminalId, terminalMsg.cols, terminalMsg.rows);
+          break;
+        }
+
+        case 'terminal:close': {
+          // Close terminal
+          if (!this.terminalManager) return;
+          const terminalMsg = msg as TerminalClientMessage & { type: 'terminal:close' };
+          this.terminalManager.close(terminalMsg.terminalId);
+          break;
+        }
+
         default:
           // Unknown message type - log for debugging
           console.log('[Server] UI message:', msg);
@@ -1582,6 +1852,10 @@ Format your response as plain text only:
         }
       }
     });
+
+    // Initialize terminal manager for PTY-based shell terminals
+    this.terminalManager = getTerminalManager();
+    this.setupTerminalEventForwarding();
 
     // Initialize session manager
     const sessionManager = getSessionManager();
@@ -1829,6 +2103,11 @@ Format your response as plain text only:
     // Shutdown session manager
     const sessionManager = getSessionManager();
     await sessionManager.shutdown();
+
+    // Cleanup terminals
+    if (this.terminalManager) {
+      this.terminalManager.cleanup();
+    }
 
     // Cleanup adapters
     for (const [, managed] of this.adapters) {

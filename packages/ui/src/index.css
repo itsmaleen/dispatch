@@ -75,10 +75,21 @@
 }
 
 /* Terminal styling */
-.xterm {
+.xterm-container {
+  height: 100%;
+  width: 100%;
+}
+
+.xterm-container .xterm {
+  height: 100%;
+  width: 100%;
   padding: 8px;
 }
 
-.xterm-viewport {
+.xterm-container .xterm-viewport {
   overflow-y: auto !important;
+}
+
+.xterm-container .xterm-screen {
+  height: 100% !important;
 }

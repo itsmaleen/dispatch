@@ -1,5 +1,5 @@
 import {
-  Terminal,
+  MonitorDot,
   Sparkles,
   Home,
   Layout,
@@ -16,10 +16,11 @@ import {
   Rows,
   Grid2X2,
   RotateCcw,
+  Terminal,
 } from 'lucide-react';
 import type { Command } from './types';
-import { useWorkspaceStore } from '../../stores/workspace';
-import { useAppStore, api } from '../../stores/app';
+import { useWorkspaceStore, type LayoutWidgetInfo } from '../../stores/workspace';
+import { useAppStore, api, getServerUrl } from '../../stores/app';
 
 /**
  * Get the agent icon based on type/name
@@ -41,16 +42,16 @@ function getAgentIcon(agent: { type: string; name: string }): string {
 export function createDefaultCommands(): Command[] {
   const commands: Command[] = [
     // ========================================
-    // Terminal Commands
+    // Agent Console Commands
     // ========================================
     {
-      id: 'new-terminal',
-      label: 'New Terminal',
-      description: 'Open a new terminal with an agent',
-      category: 'terminal',
-      icon: Terminal,
+      id: 'new-console',
+      label: 'New Agent Console',
+      description: 'Open a new agent console session',
+      category: 'console',
+      icon: MonitorDot,
       shortcut: '⌘N',
-      keywords: ['terminal', 'agent', 'session', 'shell'],
+      keywords: ['console', 'agent', 'session', 'chat'],
       action: {
         type: 'subcommand',
         getCommands: (): Command[] => {
@@ -65,12 +66,12 @@ export function createDefaultCommands(): Command[] {
               id: 'agent-claude-code',
               label: 'Claude Code',
               description: 'Local Claude Code instance',
-              category: 'terminal',
+              category: 'console',
               keywords: ['claude', 'code', 'local'],
               action: {
                 type: 'execute',
                 handler: () => {
-                  useWorkspaceStore.getState().createTerminal('claude-code-local');
+                  useWorkspaceStore.getState().createConsole('claude-code-local');
                 },
               },
             });
@@ -83,12 +84,12 @@ export function createDefaultCommands(): Command[] {
                 id: `agent-${agent.id}`,
                 label: agent.name,
                 description: `${agent.type} agent`,
-                category: 'terminal',
+                category: 'console',
                 keywords: [agent.name.toLowerCase(), agent.type],
                 action: {
                   type: 'execute',
                   handler: () => {
-                    useWorkspaceStore.getState().createTerminal(agent.id);
+                    useWorkspaceStore.getState().createConsole(agent.id);
                   },
                 },
               });
@@ -105,12 +106,12 @@ export function createDefaultCommands(): Command[] {
                 id: `agent-${agent.name}`,
                 label: agent.name,
                 description: agent.status === 'busy' ? 'Busy' : 'Ready',
-                category: 'terminal',
+                category: 'console',
                 keywords: [agent.name.toLowerCase()],
                 action: {
                   type: 'execute',
                   handler: () => {
-                    useWorkspaceStore.getState().createTerminal(agent.name);
+                    useWorkspaceStore.getState().createConsole(agent.name);
                   },
                 },
               });
@@ -122,8 +123,8 @@ export function createDefaultCommands(): Command[] {
             subcommands.push({
               id: 'no-agents',
               label: 'No agents available',
-              description: 'Connect an agent to create a terminal',
-              category: 'terminal',
+              description: 'Connect an agent to create a console',
+              category: 'console',
               action: {
                 type: 'execute',
                 handler: () => {
@@ -139,39 +140,39 @@ export function createDefaultCommands(): Command[] {
     },
 
     // ========================================
-    // Terminal Actions (always visible, operate on focused widget)
+    // Console Actions (always visible, operate on focused widget)
     // ========================================
     {
-      id: 'close-terminal',
-      label: 'Close Terminal',
-      description: 'Close the focused terminal',
-      category: 'terminal',
+      id: 'close-console',
+      label: 'Close Console',
+      description: 'Close the focused agent console',
+      category: 'console',
       icon: X,
       shortcut: '⌘W',
-      keywords: ['close', 'terminal', 'kill', 'exit'],
+      keywords: ['close', 'console', 'kill', 'exit'],
       action: {
         type: 'execute',
         handler: () => {
           const { focusedWidgetId, focusedWidgetType } = useWorkspaceStore.getState();
-          if (focusedWidgetType === 'terminal' && focusedWidgetId) {
-            useWorkspaceStore.getState().closeTerminal(focusedWidgetId);
+          if (focusedWidgetType === 'agent-console' && focusedWidgetId) {
+            useWorkspaceStore.getState().closeConsole(focusedWidgetId);
           }
         },
       },
     },
     {
-      id: 'minimize-terminal',
-      label: 'Minimize Terminal',
-      description: 'Minimize the focused terminal to the bottom bar',
-      category: 'terminal',
+      id: 'minimize-console',
+      label: 'Minimize Console',
+      description: 'Minimize the focused console to the bottom bar',
+      category: 'console',
       icon: Minus,
-      keywords: ['minimize', 'terminal', 'hide', 'dock'],
+      keywords: ['minimize', 'console', 'hide', 'dock'],
       action: {
         type: 'execute',
         handler: () => {
           const { focusedWidgetId, focusedWidgetType } = useWorkspaceStore.getState();
-          if (focusedWidgetType === 'terminal' && focusedWidgetId) {
-            useWorkspaceStore.getState().minimizeTerminal(focusedWidgetId);
+          if (focusedWidgetType === 'agent-console' && focusedWidgetId) {
+            useWorkspaceStore.getState().minimizeConsole(focusedWidgetId);
           }
         },
       },
@@ -180,7 +181,7 @@ export function createDefaultCommands(): Command[] {
       id: 'maximize-widget',
       label: 'Maximize / Restore',
       description: 'Toggle fullscreen for the focused widget',
-      category: 'terminal',
+      category: 'console',
       icon: Maximize2,
       shortcut: '⌘↵',
       keywords: ['maximize', 'fullscreen', 'expand', 'restore', 'minimize'],
@@ -192,18 +193,18 @@ export function createDefaultCommands(): Command[] {
       },
     },
     {
-      id: 'clear-terminal',
-      label: 'Clear Terminal',
-      description: 'Clear the output of the focused terminal',
-      category: 'terminal',
+      id: 'clear-console',
+      label: 'Clear Console',
+      description: 'Clear the output of the focused console',
+      category: 'console',
       icon: Trash2,
-      keywords: ['clear', 'terminal', 'clean', 'reset', 'output'],
+      keywords: ['clear', 'console', 'clean', 'reset', 'output'],
       action: {
         type: 'execute',
         handler: () => {
           const { focusedWidgetId, focusedWidgetType } = useWorkspaceStore.getState();
-          if (focusedWidgetType === 'terminal' && focusedWidgetId) {
-            useWorkspaceStore.getState().clearTerminal(focusedWidgetId);
+          if (focusedWidgetType === 'agent-console' && focusedWidgetId) {
+            useWorkspaceStore.getState().clearConsole(focusedWidgetId);
           }
         },
       },
@@ -212,7 +213,7 @@ export function createDefaultCommands(): Command[] {
       id: 'toggle-agent-status',
       label: 'Toggle Agent Status',
       description: 'Show or hide the agent status panel',
-      category: 'terminal',
+      category: 'console',
       icon: Users,
       keywords: ['agent', 'status', 'show', 'hide', 'panel', 'toggle'],
       action: {
@@ -252,33 +253,42 @@ export function createDefaultCommands(): Command[] {
       action: {
         type: 'subcommand',
         getCommands: (): Command[] => {
-          const { terminals } = useWorkspaceStore.getState();
-          const terminalIds = terminals.map(t => t.id);
+          const { consoles, realTerminals, showAgentStatus, tasksVisible } = useWorkspaceStore.getState();
+
+          // Build complete widgets array including all widget types
+          const widgets: LayoutWidgetInfo[] = [
+            // Content widgets first
+            ...consoles.map(c => ({ type: 'agent-console' as const, id: c.id })),
+            ...realTerminals.map(t => ({ type: 'terminal' as const, id: t.id })),
+            // Utility widgets
+            ...(showAgentStatus ? [{ type: 'agent-status' as const, id: 'agent-status-widget' }] : []),
+            ...(tasksVisible ? [{ type: 'tasks' as const, id: 'tasks-widget' }] : []),
+          ];
 
           return [
             {
               id: 'layout-default',
               label: 'Default Layout',
-              description: 'Terminals on left, tasks on right',
+              description: 'Content on left, utilities on right',
               category: 'layout',
               icon: Layout,
               action: {
                 type: 'execute',
                 handler: () => {
-                  useWorkspaceStore.getState().applyLayoutPreset('default', terminalIds);
+                  useWorkspaceStore.getState().applyLayoutPreset('default', widgets);
                 },
               },
             },
             {
               id: 'layout-master-stack',
               label: 'Master-Stack',
-              description: 'Large main terminal with stacked side panels',
+              description: 'Large main panel with stacked side panels',
               category: 'layout',
               icon: Columns,
               action: {
                 type: 'execute',
                 handler: () => {
-                  useWorkspaceStore.getState().applyLayoutPreset('master-stack', terminalIds);
+                  useWorkspaceStore.getState().applyLayoutPreset('master-stack', widgets);
                 },
               },
             },
@@ -291,7 +301,7 @@ export function createDefaultCommands(): Command[] {
               action: {
                 type: 'execute',
                 handler: () => {
-                  useWorkspaceStore.getState().applyLayoutPreset('even-horizontal', terminalIds);
+                  useWorkspaceStore.getState().applyLayoutPreset('even-horizontal', widgets);
                 },
               },
             },
@@ -304,7 +314,7 @@ export function createDefaultCommands(): Command[] {
               action: {
                 type: 'execute',
                 handler: () => {
-                  useWorkspaceStore.getState().applyLayoutPreset('even-vertical', terminalIds);
+                  useWorkspaceStore.getState().applyLayoutPreset('even-vertical', widgets);
                 },
               },
             },
@@ -317,7 +327,7 @@ export function createDefaultCommands(): Command[] {
               action: {
                 type: 'execute',
                 handler: () => {
-                  useWorkspaceStore.getState().applyLayoutPreset('quad', terminalIds);
+                  useWorkspaceStore.getState().applyLayoutPreset('quad', widgets);
                 },
               },
             },
@@ -335,9 +345,14 @@ export function createDefaultCommands(): Command[] {
       action: {
         type: 'execute',
         handler: () => {
-          const { terminals } = useWorkspaceStore.getState();
-          const terminalIds = terminals.map(t => t.id);
-          useWorkspaceStore.getState().applyLayoutPreset('default', terminalIds);
+          const { consoles, realTerminals, showAgentStatus, tasksVisible } = useWorkspaceStore.getState();
+          const widgets: LayoutWidgetInfo[] = [
+            ...consoles.map(c => ({ type: 'agent-console' as const, id: c.id })),
+            ...realTerminals.map(t => ({ type: 'terminal' as const, id: t.id })),
+            ...(showAgentStatus ? [{ type: 'agent-status' as const, id: 'agent-status-widget' }] : []),
+            ...(tasksVisible ? [{ type: 'tasks' as const, id: 'tasks-widget' }] : []),
+          ];
+          useWorkspaceStore.getState().applyLayoutPreset('default', widgets);
         },
       },
     },
@@ -413,6 +428,50 @@ export function createDefaultCommands(): Command[] {
             await useAppStore.getState().refreshAgentStatus();
           } else {
             console.error('Failed to initialize Claude Code:', result.error);
+          }
+        },
+      },
+    },
+
+    // ========================================
+    // Terminal Commands (real PTY terminals)
+    // ========================================
+    {
+      id: 'new-terminal',
+      label: 'New Terminal',
+      description: 'Open a new shell terminal',
+      category: 'terminal',
+      icon: Terminal,
+      shortcut: '⌘T',
+      keywords: ['terminal', 'shell', 'bash', 'zsh', 'pty', 'command'],
+      action: {
+        type: 'execute',
+        handler: () => {
+          // Use the registered callback to create terminal with proper state management
+          useWorkspaceStore.getState().createTerminal();
+        },
+      },
+    },
+    {
+      id: 'close-terminal',
+      label: 'Close Terminal',
+      description: 'Close the focused terminal',
+      category: 'terminal',
+      icon: X,
+      keywords: ['close', 'terminal', 'kill', 'exit', 'shell'],
+      action: {
+        type: 'execute',
+        handler: async () => {
+          const { focusedWidgetId, focusedWidgetType } = useWorkspaceStore.getState();
+          if (focusedWidgetType === 'terminal' && focusedWidgetId) {
+            try {
+              await fetch(`${getServerUrl()}/api/terminals/${focusedWidgetId}`, {
+                method: 'DELETE',
+              });
+              useWorkspaceStore.getState().closePanelInLayout(focusedWidgetId);
+            } catch (err) {
+              console.error('Failed to close terminal:', err);
+            }
           }
         },
       },

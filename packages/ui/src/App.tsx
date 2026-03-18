@@ -147,10 +147,10 @@ export function App() {
         return;
       }
 
-      // Cmd/Ctrl + W: Close focused terminal
+      // Cmd/Ctrl + W: Close focused console
       if ((e.metaKey || e.ctrlKey) && e.key === 'w' && !isInInput) {
         e.preventDefault();
-        useWorkspaceStore.getState().closeFocusedTerminal();
+        useWorkspaceStore.getState().closeFocusedConsole();
         return;
       }
 

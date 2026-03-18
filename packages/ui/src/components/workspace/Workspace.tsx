@@ -16,7 +16,7 @@ import {
   Plus,
   Play,
   Brain,
-  Terminal as TerminalIcon,
+  MonitorDot,
   Check,
   Loader2,
   Sparkles,
@@ -42,12 +42,15 @@ import {
   SplitSquareVertical,
   LayoutGrid,
   GripVertical,
+  Terminal as TerminalIcon, // Keep for command line icon usage
 } from 'lucide-react';
 import { AgentsPanel } from '../agents/AgentsPanel';
 import { api, getServerUrl, getWsUrl } from '../../stores/app';
 import { useWorkspaceStore, type LayoutNode, type LayoutLeaf, type LayoutGroup, layoutHelpers } from '../../stores/workspace';
 import { ChatInput, type UploadedFile } from './ChatInput';
 import { TasksWidgetContainer } from './TasksWidgetContainer';
+import { TerminalWidget as RealTerminalWidget } from '../terminal/TerminalWidget';
+import type { TerminalInstance } from '@acc/contracts';
 
 // ============================================================================
 // TYPES
@@ -58,7 +61,10 @@ const getApiUrl = () => getServerUrl();
 const getWebSocketUrl = () => `${getWsUrl()}/events`;
 
 type AgentStatus = 'ready' | 'busy' | 'offline';
-type TerminalLineType = 'prompt' | 'thinking' | 'tool_call' | 'tool_result' | 'output' | 'error' | 'info' | 'command' | 'system';
+type ConsoleLineType = 'prompt' | 'thinking' | 'tool_call' | 'tool_result' | 'output' | 'error' | 'info' | 'command' | 'system';
+
+// Backwards compatibility aliases (internal use only - external APIs use new names)
+type TerminalLineType = ConsoleLineType;
 
 interface Agent {
   id: string;
@@ -80,9 +86,9 @@ interface PlanStep {
   durationMs?: number;
 }
 
-interface TerminalLine {
+interface ConsoleLine {
   id: string;
-  type: TerminalLineType;
+  type: ConsoleLineType;
   content: string;
   timestamp?: string;
   isStreaming?: boolean;
@@ -90,9 +96,9 @@ interface TerminalLine {
   blockIndex?: number;
 }
 
-/** Terminal display settings */
-interface TerminalSettings {
-  label?: string; // Custom name for the terminal
+/** Agent console display settings */
+interface ConsoleSettings {
+  label?: string; // Custom name for the console
   accentColor?: string; // Accent color for visual distinction
   showThinking?: boolean; // Show thinking lines
   showToolCalls?: boolean; // Show tool call lines
@@ -100,12 +106,18 @@ interface TerminalSettings {
   showTimestamps?: boolean; // Show timestamps on lines
 }
 
-const DEFAULT_TERMINAL_SETTINGS: TerminalSettings = {
+const DEFAULT_CONSOLE_SETTINGS: ConsoleSettings = {
   showThinking: true,
   showToolCalls: true,
   showToolResults: true,
   showTimestamps: true,
 };
+
+// Backwards compatibility aliases (internal use only)
+type TerminalLine = ConsoleLine;
+type TerminalSettings = ConsoleSettings;
+type TerminalState = ConsoleState;
+const DEFAULT_TERMINAL_SETTINGS = DEFAULT_CONSOLE_SETTINGS;
 
 const ACCENT_COLORS = [
   { id: 'default', label: 'Default', class: 'bg-zinc-500' },
@@ -122,30 +134,30 @@ interface QueuedMessage {
   files?: UploadedFile[];
 }
 
-interface TerminalState {
+interface ConsoleState {
   id: string;
   agent: Agent;
-  lines: TerminalLine[];
+  lines: ConsoleLine[];
   isStreaming: boolean;
   currentTask?: string;
-  /** Plan step id when this terminal is executing a step (for status/cost sync) */
+  /** Plan step id when this console is executing a step (for status/cost sync) */
   currentStepId?: string;
   path?: string; // Override workspace path
   // Thread integration (Phase 2/3)
   threadId?: string;
   sessionActive?: boolean;
   // Settings
-  settings?: TerminalSettings;
-  // Message queue - allows typing while terminal is busy
+  settings?: ConsoleSettings;
+  // Message queue - allows typing while console is busy
   queuedMessage?: QueuedMessage | null;
 }
 
 interface MinimizedWidget {
   id: string;
-  type: 'terminal' | 'tasks';
+  type: 'agent-console' | 'tasks';
   title: string;
   icon: string;
-  data?: TerminalState;
+  data?: ConsoleState;
 }
 
 // ============================================================================
@@ -225,10 +237,10 @@ function PlanStepText({ text }: { text: string }) {
 }
 
 // ============================================================================
-// TERMINAL LINE COMPONENT
+// CONSOLE LINE COMPONENT
 // ============================================================================
 
-function TerminalLineItem({ line, showTimestamp = true }: { line: TerminalLine; showTimestamp?: boolean }) {
+function ConsoleLineItem({ line, showTimestamp = true }: { line: ConsoleLine; showTimestamp?: boolean }) {
   const getLineStyle = () => {
     switch (line.type) {
       case 'prompt':
@@ -290,24 +302,24 @@ function TerminalLineItem({ line, showTimestamp = true }: { line: TerminalLine; 
 }
 
 // ============================================================================
-// TERMINAL SETTINGS POPOVER
+// CONSOLE SETTINGS POPOVER
 // ============================================================================
 
-function TerminalSettingsPopover({
+function ConsoleSettingsPopover({
   settings,
   onSettingsChange,
-  terminalLabel,
+  consoleLabel,
   onLabelChange,
   onClose,
 }: {
-  settings: TerminalSettings;
-  onSettingsChange: (settings: TerminalSettings) => void;
-  terminalLabel: string;
+  settings: ConsoleSettings;
+  onSettingsChange: (settings: ConsoleSettings) => void;
+  consoleLabel: string;
   onLabelChange: (label: string) => void;
   onClose: () => void;
 }) {
   const popoverRef = useRef<HTMLDivElement>(null);
-  const [localLabel, setLocalLabel] = useState(terminalLabel);
+  const [localLabel, setLocalLabel] = useState(consoleLabel);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -320,12 +332,12 @@ function TerminalSettingsPopover({
   }, [onClose]);
 
   const handleLabelBlur = () => {
-    if (localLabel !== terminalLabel) {
+    if (localLabel !== consoleLabel) {
       onLabelChange(localLabel);
     }
   };
 
-  const toggleSetting = (key: keyof TerminalSettings) => {
+  const toggleSetting = (key: keyof ConsoleSettings) => {
     onSettingsChange({ ...settings, [key]: !settings[key] });
   };
 
@@ -336,11 +348,11 @@ function TerminalSettingsPopover({
       onClick={(e) => e.stopPropagation()}
     >
       <div className="px-3 py-2 border-b border-zinc-700">
-        <span className="text-xs font-medium text-zinc-300">Terminal Settings</span>
+        <span className="text-xs font-medium text-zinc-300">Console Settings</span>
       </div>
 
       <div className="p-3 space-y-3">
-        {/* Terminal Label */}
+        {/* Console Label */}
         <div className="space-y-1">
           <label className="text-[10px] text-zinc-500 uppercase tracking-wide">Label</label>
           <input
@@ -349,7 +361,7 @@ function TerminalSettingsPopover({
             onChange={(e) => setLocalLabel(e.target.value)}
             onBlur={handleLabelBlur}
             onKeyDown={(e) => { if (e.key === 'Enter') handleLabelBlur(); }}
-            placeholder="Terminal name..."
+            placeholder="Console name..."
             className="w-full px-2 py-1 text-xs bg-zinc-900 border border-zinc-600 rounded text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-violet-500"
           />
         </div>
@@ -424,7 +436,7 @@ function TerminalSettingsPopover({
 }
 
 // ============================================================================
-// TERMINAL CONTEXT MENU
+// CONSOLE CONTEXT MENU
 // ============================================================================
 
 interface ContextMenuPosition {
@@ -432,12 +444,12 @@ interface ContextMenuPosition {
   y: number;
 }
 
-function TerminalContextMenu({
+function ConsoleContextMenu({
   position,
   onClose,
   onMaximize,
   onMinimize,
-  onCloseTerminal,
+  onCloseConsole,
   onClear,
   onSettings,
   onSplitRight,
@@ -447,7 +459,7 @@ function TerminalContextMenu({
   onClose: () => void;
   onMaximize?: () => void;
   onMinimize?: () => void;
-  onCloseTerminal?: () => void;
+  onCloseConsole?: () => void;
   onClear?: () => void;
   onSettings?: () => void;
   onSplitRight?: () => void;
@@ -506,16 +518,16 @@ function TerminalContextMenu({
           Minimize
         </button>
       )}
-      {onCloseTerminal && (
+      {onCloseConsole && (
         <button
-          onClick={() => { onCloseTerminal(); onClose(); }}
+          onClick={() => { onCloseConsole(); onClose(); }}
           className="w-full px-3 py-1.5 text-left text-sm text-zinc-300 hover:bg-zinc-700 flex items-center gap-2"
         >
           <X className="w-4 h-4 text-red-400" />
           Close
         </button>
       )}
-      {(onMaximize || onMinimize || onCloseTerminal) && (onSplitRight || onSplitBelow) && (
+      {(onMaximize || onMinimize || onCloseConsole) && (onSplitRight || onSplitBelow) && (
         <div className="border-t border-zinc-700 my-1" />
       )}
       {onSplitRight && (
@@ -614,11 +626,11 @@ function DroppablePanel({ panelId, children, isOver }: { panelId: string; childr
 }
 
 // ============================================================================
-// TERMINAL WIDGET
+// AGENT CONSOLE WIDGET
 // ============================================================================
 
-function TerminalWidget({
-  terminal,
+function AgentConsoleWidget({
+  console: consoleState,
   onClose,
   onMinimize,
   onMaximize,
@@ -637,15 +649,15 @@ function TerminalWidget({
   onSplitRight,
   onSplitBelow,
 }: {
-  terminal: TerminalState;
+  console: ConsoleState;
   onClose?: () => void;
   onMinimize?: () => void;
   onMaximize?: () => void;
   onClear?: () => void;
-  onSendMessage: (terminalId: string, message: string, files?: UploadedFile[]) => void;
-  onSettingsChange?: (terminalId: string, settings: TerminalSettings) => void;
-  onQueueMessage?: (terminalId: string, message: string, files?: UploadedFile[]) => void;
-  onClearQueue?: (terminalId: string) => void;
+  onSendMessage: (consoleId: string, message: string, files?: UploadedFile[]) => void;
+  onSettingsChange?: (consoleId: string, settings: ConsoleSettings) => void;
+  onQueueMessage?: (consoleId: string, message: string, files?: UploadedFile[]) => void;
+  onClearQueue?: (consoleId: string) => void;
   isHighlighted?: boolean;
   isFocused?: boolean;
   onFocus?: () => void;
@@ -662,7 +674,7 @@ function TerminalWidget({
   const [showSettings, setShowSettings] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuPosition | null>(null);
 
-  const settings = { ...DEFAULT_TERMINAL_SETTINGS, ...terminal.settings };
+  const settings = { ...DEFAULT_CONSOLE_SETTINGS, ...consoleState.settings };
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -673,14 +685,14 @@ function TerminalWidget({
     if (autoScroll && outputRef.current) {
       outputRef.current.scrollTop = outputRef.current.scrollHeight;
     }
-  }, [terminal.lines, autoScroll]);
+  }, [consoleState.lines, autoScroll]);
 
   const handleSend = (message: string, files?: UploadedFile[]) => {
-    onSendMessage(terminal.id, message, files);
+    onSendMessage(consoleState.id, message, files);
   };
 
   // Filter lines based on settings
-  const filteredLines = terminal.lines.filter((line) => {
+  const filteredLines = consoleState.lines.filter((line) => {
     if (line.type === 'thinking' && settings.showThinking === false) return false;
     if (line.type === 'tool_call' && settings.showToolCalls === false) return false;
     if (line.type === 'tool_result' && settings.showToolResults === false) return false;
@@ -706,7 +718,7 @@ function TerminalWidget({
     return 'bg-zinc-900 border-zinc-800';
   };
 
-  const displayName = settings.label || terminal.agent.name;
+  const displayName = settings.label || consoleState.agent.name;
 
   return (
     <div
@@ -717,12 +729,12 @@ function TerminalWidget({
     >
       {/* Context Menu */}
       {contextMenu && (
-        <TerminalContextMenu
+        <ConsoleContextMenu
           position={contextMenu}
           onClose={() => setContextMenu(null)}
           onMaximize={onMaximize}
           onMinimize={onMinimize}
-          onCloseTerminal={onClose}
+          onCloseConsole={onClose}
           onClear={onClear}
           onSettings={() => setShowSettings(true)}
           onSplitRight={onSplitRight}
@@ -754,16 +766,16 @@ function TerminalWidget({
               <Maximize2 className="w-2 h-2 text-green-900 opacity-0 group-hover:opacity-100" />
             </button>
           </div>
-          <span className="text-sm">{terminal.agent.icon}</span>
+          <span className="text-sm">{consoleState.agent.icon}</span>
           <span className="text-xs font-medium text-zinc-300">{displayName}</span>
           {settings.label && (
-            <span className="text-[10px] text-zinc-600">({terminal.agent.name})</span>
+            <span className="text-[10px] text-zinc-600">({consoleState.agent.name})</span>
           )}
-          {terminal.isStreaming && <Loader2 className="w-3 h-3 text-violet-400 animate-spin" />}
+          {consoleState.isStreaming && <Loader2 className="w-3 h-3 text-violet-400 animate-spin" />}
         </div>
         <div className="flex items-center gap-2">
-          {terminal.currentTask && (
-            <span className="text-[10px] text-zinc-500 truncate max-w-[200px]">{terminal.currentTask}</span>
+          {consoleState.currentTask && (
+            <span className="text-[10px] text-zinc-500 truncate max-w-[200px]">{consoleState.currentTask}</span>
           )}
           <button
             onClick={(e) => { e.stopPropagation(); setAutoScroll(!autoScroll); }}
@@ -777,16 +789,16 @@ function TerminalWidget({
             <button
               onClick={(e) => { e.stopPropagation(); setShowSettings(!showSettings); }}
               className="p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-700 rounded transition-colors"
-              title="Terminal Settings"
+              title="Console Settings"
             >
               <Settings className="w-3.5 h-3.5" />
             </button>
             {showSettings && onSettingsChange && (
-              <TerminalSettingsPopover
+              <ConsoleSettingsPopover
                 settings={settings}
-                onSettingsChange={(newSettings) => onSettingsChange(terminal.id, newSettings)}
-                terminalLabel={settings.label || ''}
-                onLabelChange={(label) => onSettingsChange(terminal.id, { ...settings, label: label || undefined })}
+                onSettingsChange={(newSettings) => onSettingsChange(consoleState.id, newSettings)}
+                consoleLabel={settings.label || ''}
+                onLabelChange={(label) => onSettingsChange(consoleState.id, { ...settings, label: label || undefined })}
                 onClose={() => setShowSettings(false)}
               />
             )}
@@ -797,7 +809,7 @@ function TerminalWidget({
       {/* Output */}
       <div ref={outputRef} className="flex-1 overflow-y-auto p-3 font-mono text-sm space-y-0.5">
         {filteredLines.map((line) => (
-          <TerminalLineItem key={line.id} line={line} showTimestamp={settings.showTimestamps !== false} />
+          <ConsoleLineItem key={line.id} line={line} showTimestamp={settings.showTimestamps !== false} />
         ))}
       </div>
 
@@ -806,18 +818,21 @@ function TerminalWidget({
         <ChatInput
           onSend={handleSend}
           placeholder="Send message..."
-          disabled={terminal.isStreaming}
+          disabled={consoleState.isStreaming}
           showPrompt={true}
           promptIcon="❯"
           allowQueue={true}
-          queuedMessage={terminal.queuedMessage}
-          onQueue={onQueueMessage ? (message, files) => onQueueMessage(terminal.id, message, files) : undefined}
-          onClearQueue={onClearQueue ? () => onClearQueue(terminal.id) : undefined}
+          queuedMessage={consoleState.queuedMessage}
+          onQueue={onQueueMessage ? (message, files) => onQueueMessage(consoleState.id, message, files) : undefined}
+          onClearQueue={onClearQueue ? () => onClearQueue(consoleState.id) : undefined}
         />
       </div>
     </div>
   );
 }
+
+// Backwards compatibility alias
+const TerminalWidget = AgentConsoleWidget;
 
 // ============================================================================
 // UNIFIED AGENT STATUS WIDGET
@@ -825,7 +840,7 @@ function TerminalWidget({
 
 function UnifiedAgentStatusWidget({
   agents,
-  terminals,
+  consoles,
   onClose,
   onMinimize,
   onMaximize,
@@ -837,7 +852,7 @@ function UnifiedAgentStatusWidget({
   panelId,
 }: {
   agents: Agent[];
-  terminals: TerminalState[];
+  consoles: ConsoleState[];
   onClose?: () => void;
   onMinimize?: () => void;
   onMaximize?: () => void;
@@ -848,7 +863,7 @@ function UnifiedAgentStatusWidget({
   onMouseLeave?: () => void;
   panelId?: string;
 }) {
-  const getTerminalCount = (agentId: string) => terminals.filter(t => t.agent.id === agentId).length;
+  const getConsoleCount = (agentId: string) => consoles.filter(c => c.agent.id === agentId).length;
 
   const getBorderClass = () => {
     if (isFocused) return 'border-blue-400/60 ring-1 ring-blue-400/30';
@@ -911,8 +926,8 @@ function UnifiedAgentStatusWidget({
           </div>
         ) : (
           agents.map(agent => {
-            const terminalCount = getTerminalCount(agent.id);
-            const isBusy = terminals.some(t => t.agent.id === agent.id && t.isStreaming);
+            const consoleCount = getConsoleCount(agent.id);
+            const isBusy = consoles.some(c => c.agent.id === agent.id && c.isStreaming);
             const status = isBusy ? 'busy' : agent.status;
 
             return (
@@ -929,9 +944,9 @@ function UnifiedAgentStatusWidget({
                   <span className="text-xs font-medium text-zinc-300">{agent.name}</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  {terminalCount > 0 && (
+                  {consoleCount > 0 && (
                     <span className="text-[10px] text-zinc-500">
-                      {terminalCount} terminal{terminalCount > 1 ? 's' : ''}
+                      {consoleCount} console{consoleCount > 1 ? 's' : ''}
                     </span>
                   )}
                   <div className="flex items-center gap-1">
@@ -956,12 +971,15 @@ function UnifiedAgentStatusWidget({
 // TASKS WIDGET
 // ============================================================================
 
-/** Terminal summary for Run submenu */
-interface TerminalOption {
+/** Console summary for Run submenu */
+interface ConsoleOption {
   id: string;
   label: string;
   agentIcon: string;
 }
+
+// Backwards compatibility alias
+type TerminalOption = ConsoleOption;
 
 function TasksWidget({
   steps,
@@ -1204,7 +1222,7 @@ function TasksWidget({
                           className="w-full px-3 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-700 flex items-center gap-2"
                         >
                           <Plus className="w-3.5 h-3.5 text-violet-400 shrink-0" />
-                          New terminal
+                          New console
                         </button>
                         {terminals.map((t) => (
                           <button
@@ -1270,10 +1288,13 @@ function TasksWidget({
 
 interface LayoutRendererProps {
   node: LayoutNode;
-  terminals: TerminalState[];
+  consoles: ConsoleState[];
   agents: Agent[];
   planSteps: PlanStep[];
   minimizedWidgets: MinimizedWidget[];
+  // Real PTY terminals
+  realTerminals: TerminalInstance[];
+  onCloseRealTerminal: (id: string) => void;
   // Focus/hover state
   focusedWidgetId: string | null;
   hoveredWidgetId: string | null;
@@ -1283,7 +1304,7 @@ interface LayoutRendererProps {
   activeDragId: string | null;
   overDropId: string | null;
   // Callbacks
-  onFocusWidget: (id: string, type: 'terminal' | 'tasks' | 'agent-status') => void;
+  onFocusWidget: (id: string, type: 'agent-console' | 'tasks' | 'agent-status' | 'terminal') => void;
   onHoverWidget: (id: string | null) => void;
   onCloseTerminal: (id: string) => void;
   onMinimizeTerminal: (terminal: TerminalState) => void;
@@ -1313,20 +1334,22 @@ interface LayoutRendererProps {
   onClosePanel: (panelId: string) => void;
   // WebSocket for new TasksWidget real-time updates
   ws?: WebSocket | null;
-  // For sending task text to terminal
-  onSendTaskToTerminal?: (taskText: string, terminalId?: string) => void;
-  // For highlighting/focusing a terminal by thread ID
-  onHighlightTerminal?: (threadId: string) => void;
+  // For sending task text to console
+  onSendTaskToConsole?: (taskText: string, consoleId?: string) => void;
+  // For highlighting/focusing a console by thread ID
+  onHighlightConsole?: (threadId: string) => void;
   // Workspace path for filtering tasks/goals/sessions
   workspacePath?: string | null;
 }
 
 function LayoutRenderer({
   node,
-  terminals,
+  consoles: terminals, // Alias for backward compatibility with internal variable naming
   agents,
   planSteps,
   minimizedWidgets,
+  realTerminals,
+  onCloseRealTerminal,
   focusedWidgetId,
   hoveredWidgetId,
   highlightedTerminalId,
@@ -1352,8 +1375,8 @@ function LayoutRenderer({
   tasksVisible,
   showAgentStatus,
   ws,
-  onSendTaskToTerminal,
-  onHighlightTerminal,
+  onSendTaskToConsole,
+  onHighlightConsole,
   onCloseAgentStatus,
   onSplitPanel,
   onUpdateSizes,
@@ -1366,7 +1389,7 @@ function LayoutRenderer({
   if (node.type === 'leaf') {
     const { widgetType, widgetId } = node;
 
-    if (widgetType === 'terminal') {
+    if (widgetType === 'agent-console') {
       const terminal = terminals.find(t => t.id === widgetId);
       if (!terminal) {
         // Terminal might have been closed - show placeholder
@@ -1386,7 +1409,7 @@ function LayoutRenderer({
         <DroppablePanel panelId={node.id} isOver={isDropTarget}>
           <div className="h-full p-1">
             <TerminalWidget
-              terminal={terminal}
+              console={terminal}
               onClose={() => onCloseTerminal(terminal.id)}
               onMinimize={() => onMinimizeTerminal(terminal)}
               onMaximize={() => onMaximizeTerminal(terminal.id)}
@@ -1398,7 +1421,7 @@ function LayoutRenderer({
               isHighlighted={highlightedTerminalId === terminal.id}
               isFocused={focusedWidgetId === terminal.id}
               isHovered={hoveredWidgetId === terminal.id}
-              onFocus={() => onFocusWidget(terminal.id, 'terminal')}
+              onFocus={() => onFocusWidget(terminal.id, 'agent-console')}
               onMouseEnter={() => onHoverWidget(terminal.id)}
               onMouseLeave={() => onHoverWidget(null)}
               panelId={node.id}
@@ -1424,8 +1447,8 @@ function LayoutRenderer({
             <TasksWidgetContainer
               ws={ws}
               workspacePath={workspacePath ?? undefined}
-              onSendToTerminal={onSendTaskToTerminal}
-              onHighlightTerminal={onHighlightTerminal}
+              onSendToConsole={onSendTaskToConsole}
+              onHighlightConsole={onHighlightConsole}
               onClose={() => {
                 useWorkspaceStore.getState().setTasksVisible(false);
                 onClosePanel(node.id);
@@ -1456,7 +1479,7 @@ function LayoutRenderer({
           <div className="h-full p-1">
             <UnifiedAgentStatusWidget
               agents={agents}
-              terminals={terminals}
+              consoles={terminals}
               onClose={() => {
                 useWorkspaceStore.getState().setShowAgentStatus(false);
                 onClosePanel(node.id);
@@ -1466,6 +1489,43 @@ function LayoutRenderer({
               isHovered={hoveredWidgetId === 'agent-status-widget'}
               onFocus={() => onFocusWidget('agent-status-widget', 'agent-status')}
               onMouseEnter={() => onHoverWidget('agent-status-widget')}
+              onMouseLeave={() => onHoverWidget(null)}
+              panelId={node.id}
+            />
+          </div>
+        </DroppablePanel>
+      );
+    }
+
+    if (widgetType === 'terminal') {
+      // Real PTY-based terminal widget
+      const terminalInstance = realTerminals.find(t => t.id === widgetId);
+      if (!terminalInstance) {
+        // Terminal might have been closed - show placeholder
+        return (
+          <div className="h-full flex items-center justify-center bg-zinc-900 border border-zinc-800 rounded-lg">
+            <div className="text-center text-zinc-600">
+              <TerminalIcon className="w-8 h-8 mx-auto mb-2 opacity-50" />
+              <p className="text-xs">Terminal not found</p>
+            </div>
+          </div>
+        );
+      }
+
+      const isDropTarget = overDropId === `drop-${node.id}` && activeDragId !== node.id;
+
+      return (
+        <DroppablePanel panelId={node.id} isOver={isDropTarget}>
+          <div className="h-full p-1">
+            <RealTerminalWidget
+              terminal={terminalInstance}
+              onClose={() => onCloseRealTerminal(terminalInstance.id)}
+              onMinimize={() => {/* TODO: minimize real terminal */}}
+              onMaximize={() => onMaximizeTerminal(terminalInstance.id)}
+              isFocused={focusedWidgetId === terminalInstance.id}
+              isHovered={hoveredWidgetId === terminalInstance.id}
+              onFocus={() => onFocusWidget(terminalInstance.id, 'terminal' as any)}
+              onMouseEnter={() => onHoverWidget(terminalInstance.id)}
               onMouseLeave={() => onHoverWidget(null)}
               panelId={node.id}
             />
@@ -1498,10 +1558,12 @@ function LayoutRenderer({
           >
             <LayoutRenderer
               node={child}
-              terminals={terminals}
+              consoles={terminals}
               agents={agents}
               planSteps={planSteps}
               minimizedWidgets={minimizedWidgets}
+              realTerminals={realTerminals}
+              onCloseRealTerminal={onCloseRealTerminal}
               focusedWidgetId={focusedWidgetId}
               hoveredWidgetId={hoveredWidgetId}
               highlightedTerminalId={highlightedTerminalId}
@@ -1531,8 +1593,8 @@ function LayoutRenderer({
               onUpdateSizes={onUpdateSizes}
               onClosePanel={onClosePanel}
               ws={ws}
-              onSendTaskToTerminal={onSendTaskToTerminal}
-              onHighlightTerminal={onHighlightTerminal}
+              onSendTaskToConsole={onSendTaskToConsole}
+              onHighlightConsole={onHighlightConsole}
               workspacePath={workspacePath}
             />
           </Panel>
@@ -1562,10 +1624,13 @@ export function Workspace() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [isLoadingAgents, setIsLoadingAgents] = useState(true);
 
-  // Terminals state
+  // Terminals state (agent consoles)
   const [terminals, setTerminals] = useState<TerminalState[]>([]);
   const [minimizedWidgets, setMinimizedWidgets] = useState<MinimizedWidget[]>([]);
   const [highlightedTerminalId, setHighlightedTerminalId] = useState<string | null>(null);
+
+  // Real PTY terminals
+  const [realTerminals, setRealTerminals] = useState<TerminalInstance[]>([]);
 
   // Focus and hover state
   const [hoveredWidgetId, setHoveredWidgetId] = useState<string | null>(null);
@@ -1656,6 +1721,22 @@ export function Workspace() {
     return () => clearInterval(interval);
   }, [fetchAgents]);
 
+  // Fetch existing real terminals on mount
+  useEffect(() => {
+    const fetchTerminals = async () => {
+      try {
+        const res = await fetch(`${getApiUrl()}/api/terminals`);
+        const data = await res.json();
+        if (data.terminals) {
+          setRealTerminals(data.terminals);
+        }
+      } catch (err) {
+        console.error('Failed to fetch terminals:', err);
+      }
+    };
+    fetchTerminals();
+  }, []);
+
   // Refs for callback registration (to avoid dependency issues)
   const handleNewTerminalRef = useRef<(agentId: string) => void>(() => {});
   const handleAddStepRef = useRef<(text: string, agentId: string | null) => void>(() => {});
@@ -1675,24 +1756,58 @@ export function Workspace() {
 
   // Sync terminals to workspace store (for display in command palette)
   useEffect(() => {
-    useWorkspaceStore.getState().setTerminals(terminals.map(t => ({
+    useWorkspaceStore.getState().setConsoles(terminals.map(t => ({
       id: t.id,
       agentId: t.agent.id,
       agentName: t.agent.name,
     })));
   }, [terminals]);
 
+  // Sync real PTY terminals to workspace store (for layout commands)
+  useEffect(() => {
+    useWorkspaceStore.getState().setRealTerminals(realTerminals.map(t => ({
+      id: t.id,
+      name: t.name || 'Terminal',
+    })));
+  }, [realTerminals]);
+
   // Sync workspace path
   useEffect(() => {
     useWorkspaceStore.getState().setWorkspacePath(workspacePath);
   }, [workspacePath]);
 
-  // Register terminal creation callback for command palette (once on mount)
+  // Register console creation callback for command palette (once on mount)
   useEffect(() => {
-    useWorkspaceStore.getState().registerTerminalCallback((agentId: string) => {
+    useWorkspaceStore.getState().registerConsoleCallback((agentId: string) => {
       handleNewTerminalRef.current(agentId);
     });
   }, []);
+
+  // Register real terminal creation callback for command palette (once on mount)
+  useEffect(() => {
+    useWorkspaceStore.getState().registerTerminalCallback(async (cwd?: string) => {
+      try {
+        const res = await fetch(`${getApiUrl()}/api/terminals`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cwd: cwd || workspacePath || undefined }),
+        });
+        const data = await res.json();
+        if (data.ok && data.terminal) {
+          setRealTerminals(prev => [...prev, data.terminal]);
+          // Add to layout
+          useWorkspaceStore.getState().addPanelToLayout({
+            widgetType: 'terminal',
+            widgetId: data.terminal.id,
+          });
+        } else {
+          console.error('Failed to create terminal:', data.error);
+        }
+      } catch (err) {
+        console.error('Failed to create terminal:', err);
+      }
+    });
+  }, [workspacePath]);
 
   // Register task creation callback for command palette (once on mount)
   useEffect(() => {
@@ -1703,7 +1818,7 @@ export function Workspace() {
 
   // Register terminal action callbacks for command palette
   useEffect(() => {
-    useWorkspaceStore.getState().registerTerminalActionCallbacks({
+    useWorkspaceStore.getState().registerConsoleActionCallbacks({
       onClose: (terminalId: string) => handleCloseTerminal(terminalId),
       onMinimize: (terminalId: string) => {
         const terminal = terminalsRef.current.find(t => t.id === terminalId);
@@ -1719,11 +1834,11 @@ export function Workspace() {
 
   // Sync widgets to workspace store for arrow key navigation
   useEffect(() => {
-    const widgets: Array<{ id: string; type: 'terminal' | 'tasks' | 'agent-status' }> = [];
+    const widgets: Array<{ id: string; type: 'agent-console' | 'tasks' | 'agent-status' }> = [];
 
     // Add terminals
     terminals.forEach(t => {
-      widgets.push({ id: t.id, type: 'terminal' });
+      widgets.push({ id: t.id, type: 'agent-console' });
     });
 
     // Add tasks widget if visible
@@ -1744,33 +1859,43 @@ export function Workspace() {
     if (!useFlexibleLayout) return;
 
     const currentLayout = useWorkspaceStore.getState().layoutTree;
-    const terminalIds = terminals.map(t => t.id);
+    const consoleIds = terminals.map(t => t.id);
+
+    // Build complete widgets array including all widget types
+    const widgets = [
+      // Content widgets
+      ...terminals.map(t => ({ type: 'agent-console' as const, id: t.id })),
+      ...realTerminals.map(t => ({ type: 'terminal' as const, id: t.id })),
+      // Utility widgets
+      ...(showAgentStatus ? [{ type: 'agent-status' as const, id: 'agent-status-widget' }] : []),
+      ...(tasksVisible ? [{ type: 'tasks' as const, id: 'tasks-widget' }] : []),
+    ];
 
     // If no layout yet, create default layout
     if (!currentLayout) {
-      if (terminalIds.length > 0) {
-        const newLayout = layoutHelpers.createDefaultLayout(terminalIds, showAgentStatus);
+      if (widgets.length > 0) {
+        const newLayout = layoutHelpers.createDefaultLayout(widgets);
         useWorkspaceStore.getState().setLayoutTree(newLayout);
       }
       return;
     }
 
-    // Check if any terminals in layout no longer exist (were closed)
+    // Check if any consoles in layout no longer exist (were closed)
     // The closePanelInLayout action handles this in response to terminal close
     // But we should also handle the case where terminals were added outside of split
-    const layoutTerminalIds = collectTerminalIds(currentLayout);
-    const newTerminalIds = terminalIds.filter(id => !layoutTerminalIds.includes(id));
+    const layoutConsoleIds = collectTerminalIds(currentLayout);
+    const newConsoleIds = consoleIds.filter(id => !layoutConsoleIds.includes(id));
 
-    if (newTerminalIds.length > 0) {
-      // New terminals were added (e.g., via "New Terminal" button)
+    if (newConsoleIds.length > 0) {
+      // New consoles were added (e.g., via "New Console" button)
       // Add them to the layout in the default position (left column)
       let updatedLayout = currentLayout;
-      for (const newId of newTerminalIds) {
+      for (const newId of newConsoleIds) {
         updatedLayout = addTerminalToLayout(updatedLayout, newId);
       }
       useWorkspaceStore.getState().setLayoutTree(updatedLayout);
     }
-  }, [terminals, useFlexibleLayout, showAgentStatus]);
+  }, [terminals, realTerminals, useFlexibleLayout, showAgentStatus, tasksVisible]);
 
   // Auto-save layout when it changes
   useEffect(() => {
@@ -1782,7 +1907,7 @@ export function Workspace() {
   // Helper to collect all terminal IDs from a layout tree
   const collectTerminalIds = (node: LayoutNode): string[] => {
     if (node.type === 'leaf') {
-      return node.widgetType === 'terminal' ? [node.widgetId] : [];
+      return node.widgetType === 'agent-console' ? [node.widgetId] : [];
     }
     return node.children.flatMap(collectTerminalIds);
   };
@@ -1792,7 +1917,7 @@ export function Workspace() {
     const newLeaf: LayoutLeaf = {
       type: 'leaf',
       id: layoutHelpers.generateLayoutId(),
-      widgetType: 'terminal',
+      widgetType: 'agent-console',
       widgetId: terminalId,
     };
 
@@ -1809,7 +1934,7 @@ export function Workspace() {
 
     // Find the first vertical group containing terminals and add there
     if (tree.direction === 'vertical') {
-      const hasTerminal = tree.children.some(c => c.type === 'leaf' && c.widgetType === 'terminal');
+      const hasTerminal = tree.children.some(c => c.type === 'leaf' && c.widgetType === 'agent-console');
       if (hasTerminal) {
         const newSizes = tree.children.map(() => 100 / (tree.children.length + 1));
         newSizes.push(100 / (tree.children.length + 1));
@@ -1849,6 +1974,31 @@ export function Workspace() {
   }, [showAddMenu]);
 
   const handleWsEvent = useCallback((data: any) => {
+    // Handle terminal events (not wrapped in 'event')
+    if (data.type === 'terminal:created' && data.terminal) {
+      console.log('[WS] Terminal created:', data.terminal.id);
+      setRealTerminals(prev => {
+        // Avoid duplicates
+        if (prev.some(t => t.id === data.terminal.id)) return prev;
+        return [...prev, data.terminal];
+      });
+      return;
+    }
+    if (data.type === 'terminal:closed' && data.terminalId) {
+      console.log('[WS] Terminal closed:', data.terminalId);
+      setRealTerminals(prev => prev.filter(t => t.id !== data.terminalId));
+      return;
+    }
+    if (data.type === 'terminal:exit' && data.terminalId) {
+      console.log('[WS] Terminal exited:', data.terminalId, 'code:', data.code);
+      setRealTerminals(prev => prev.map(t =>
+        t.id === data.terminalId
+          ? { ...t, status: 'exited' as const, exitCode: data.code, exitSignal: data.signal }
+          : t
+      ));
+      return;
+    }
+
     if (data.type !== 'event') return;
     const event = data.event;
     if (!event) return;
@@ -2217,8 +2367,45 @@ export function Workspace() {
     }
   };
 
+  // Close a real PTY terminal
+  const handleCloseRealTerminal = useCallback(async (terminalId: string) => {
+    // Remove from local state first
+    setRealTerminals(prev => prev.filter(t => t.id !== terminalId));
+
+    // Try to delete on server (may already be deleted if closed via WebSocket, which is fine)
+    try {
+      const res = await fetch(`${getApiUrl()}/api/terminals/${terminalId}`, { method: 'DELETE' });
+      // 404 is expected if terminal was already closed via WebSocket message
+      if (!res.ok && res.status !== 404) {
+        console.warn('Failed to close real terminal:', res.status);
+      }
+    } catch (err) {
+      // Network errors are still worth logging
+      console.warn('Failed to close real terminal:', err);
+    }
+
+    // Also remove the panel from the layout tree
+    const currentLayoutTree = useWorkspaceStore.getState().layoutTree;
+    if (currentLayoutTree) {
+      const findPanelId = (node: LayoutNode): string | null => {
+        if (node.type === 'leaf') {
+          return node.widgetId === terminalId ? node.id : null;
+        }
+        for (const child of node.children) {
+          const found = findPanelId(child);
+          if (found) return found;
+        }
+        return null;
+      };
+      const panelId = findPanelId(currentLayoutTree);
+      if (panelId) {
+        useWorkspaceStore.getState().closePanelInLayout(panelId);
+      }
+    }
+  }, []);
+
   const handleMinimizeTerminal = (terminal: TerminalState) => {
-    setMinimizedWidgets(prev => [...prev, { id: terminal.id, type: 'terminal', title: terminal.agent.name, icon: terminal.agent.icon, data: terminal }]);
+    setMinimizedWidgets(prev => [...prev, { id: terminal.id, type: 'agent-console', title: terminal.agent.name, icon: terminal.agent.icon, data: terminal }]);
     setTerminals(prev => prev.filter(t => t.id !== terminal.id));
     // Clear focus if this terminal was focused
     if (focusedWidgetId === terminal.id) {
@@ -2266,7 +2453,7 @@ export function Workspace() {
     ));
   };
 
-  const handleFocusWidget = (widgetId: string, widgetType: 'terminal' | 'tasks' | 'agent-status') => {
+  const handleFocusWidget = (widgetId: string, widgetType: 'agent-console' | 'tasks' | 'agent-status' | 'terminal') => {
     useWorkspaceStore.getState().setFocusedWidget(widgetId, widgetType);
   };
 
@@ -2529,7 +2716,7 @@ export function Workspace() {
         ));
         handleTerminalMessage(terminalId, step.text);
       } else {
-        const minimized = minimizedWidgets.find(w => w.type === 'terminal' && w.id === terminalId && w.data);
+        const minimized = minimizedWidgets.find(w => w.type === 'agent-console' && w.id === terminalId && w.data);
         if (minimized?.data) {
           const restored: TerminalState = {
             ...minimized.data,
@@ -2609,38 +2796,37 @@ export function Workspace() {
     } else if (agents.length > 0) {
       // Create a new terminal with the first agent
       const agent = agents[0];
-      const newTerminalId = `terminal-${Date.now()}`;
-      const newTerminal: TerminalState = {
-        id: newTerminalId,
+      const newConsoleId = `terminal-${Date.now()}`;
+      const newConsole: ConsoleState = {
+        id: newConsoleId,
         agent,
         lines: [],
-        status: 'idle',
-        threadId: null,
-        settings: { effort: 'medium', autoScroll: true, streamOutput: true },
-        messageQueue: [],
+        isStreaming: false,
+        threadId: undefined,
+        settings: {},
       };
-      setTerminals(prev => [...prev, newTerminal]);
-      // Send message after terminal is created
-      setTimeout(() => handleTerminalMessage(newTerminalId, taskText), 100);
+      setTerminals(prev => [...prev, newConsole]);
+      // Send message after console is created
+      setTimeout(() => handleTerminalMessage(newConsoleId, taskText), 100);
     }
   }, [terminals, agents, handleTerminalMessage]);
 
-  // Handler for highlighting a terminal by its threadId (session ID)
+  // Handler for highlighting a console by its threadId (session ID)
   const handleHighlightTerminal = useCallback((threadId: string) => {
     // First check the ref for fast lookup
-    let terminalId = threadToTerminalRef.current[threadId];
+    let consoleId: string | undefined = threadToTerminalRef.current[threadId];
 
-    // If not in ref, search by threadId in terminals
-    if (!terminalId) {
-      const terminal = terminals.find(t => t.threadId === threadId);
-      terminalId = terminal?.id;
+    // If not in ref, search by threadId in terminals (consoles)
+    if (!consoleId) {
+      const console = terminals.find(t => t.threadId === threadId);
+      consoleId = console?.id;
     }
 
-    if (terminalId) {
-      // Highlight the terminal briefly
-      setHighlightedTerminalId(terminalId);
-      // Focus the terminal
-      handleFocusWidget(terminalId, 'terminal');
+    if (consoleId) {
+      // Highlight the console briefly
+      setHighlightedTerminalId(consoleId);
+      // Focus the console
+      handleFocusWidget(consoleId, 'agent-console');
       // Clear highlight after 2 seconds
       setTimeout(() => setHighlightedTerminalId(null), 2000);
     } else {
@@ -2656,7 +2842,7 @@ export function Workspace() {
   // Minimize/restore handlers
   const handleRestoreWidget = (widget: MinimizedWidget) => {
     setMinimizedWidgets(prev => prev.filter(w => w.id !== widget.id));
-    if (widget.type === 'terminal' && widget.data) {
+    if (widget.type === 'agent-console' && widget.data) {
       setTerminals(prev => [...prev, widget.data!]);
     }
     // Tasks widget restore: right panel is always tasks; no mode to set
@@ -2763,7 +2949,7 @@ export function Workspace() {
                 if (showAddMenu) setShowTerminalAgentMenu(false);
               }}
               className="flex items-center justify-center w-8 h-8 bg-zinc-800 hover:bg-zinc-700 rounded"
-              title="Add terminal or agent"
+              title="Add console or agent"
             >
               <Plus className="w-4 h-4" />
             </button>
@@ -2809,8 +2995,8 @@ export function Workspace() {
                       disabled={agents.length === 0}
                       className="w-full px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                     >
-                      <TerminalIcon className="w-4 h-4 text-cyan-400" />
-                      <span>Terminal</span>
+                      <MonitorDot className="w-4 h-4 text-cyan-400" />
+                      <span>Agent Console</span>
                       {agents.length > 1 && <ChevronRight className="w-4 h-4 ml-auto text-zinc-500" />}
                     </button>
                     <button
@@ -2822,6 +3008,33 @@ export function Workspace() {
                     >
                       <Globe className="w-4 h-4 text-indigo-400" />
                       <span>Agent</span>
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await fetch(`${getApiUrl()}/api/terminals`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ cwd: workspacePath || undefined }),
+                          });
+                          const data = await res.json();
+                          if (data.ok && data.terminal) {
+                            setRealTerminals(prev => [...prev, data.terminal]);
+                            // Add to layout
+                            useWorkspaceStore.getState().addPanelToLayout({
+                              widgetType: 'terminal',
+                              widgetId: data.terminal.id,
+                            });
+                          }
+                        } catch (err) {
+                          console.error('Failed to create terminal:', err);
+                        }
+                        setShowAddMenu(false);
+                      }}
+                      className="w-full px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700 flex items-center gap-2"
+                    >
+                      <TerminalIcon className="w-4 h-4 text-amber-400" />
+                      <span>Terminal</span>
                     </button>
                     {!showAgentStatus && (
                       <button
@@ -2860,17 +3073,17 @@ export function Workspace() {
             <p className="text-xs text-zinc-500 max-w-sm">Click the path in the header above to choose your project folder. Agents run in this workspace.</p>
           </div>
         ) : terminals.length === 0 ? (
-          /* Empty state - no terminals yet */
+          /* Empty state - no consoles yet */
           <div className="h-full flex flex-col items-center justify-center text-center p-4">
-            <TerminalIcon className="w-10 h-10 text-zinc-700 mb-3" />
-            <p className="text-sm text-zinc-500 mb-2">No terminals open</p>
+            <MonitorDot className="w-10 h-10 text-zinc-700 mb-3" />
+            <p className="text-sm text-zinc-500 mb-2">No consoles open</p>
             {agents.length === 0 ? (
               <button disabled className="px-3 py-1.5 bg-zinc-800 rounded text-xs flex items-center gap-1.5 opacity-50 cursor-not-allowed">
-                <Plus className="w-3.5 h-3.5" /> New Terminal
+                <Plus className="w-3.5 h-3.5" /> New Console
               </button>
             ) : agents.length === 1 ? (
               <button onClick={() => handleNewTerminal(agents[0].id)} className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-xs flex items-center gap-1.5">
-                <Plus className="w-3.5 h-3.5" /> New Terminal
+                <Plus className="w-3.5 h-3.5" /> New Console
               </button>
             ) : (
               <div className="relative">
@@ -2878,7 +3091,7 @@ export function Workspace() {
                   onClick={() => setShowEmptyStateAgentMenu(prev => !prev)}
                   className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-xs flex items-center gap-1.5"
                 >
-                  <Plus className="w-3.5 h-3.5" /> New Terminal
+                  <Plus className="w-3.5 h-3.5" /> New Console
                   <ChevronDown className="w-3 h-3 text-zinc-500" />
                 </button>
                 {showEmptyStateAgentMenu && (
@@ -2913,10 +3126,12 @@ export function Workspace() {
           >
             <LayoutRenderer
               node={layoutTree}
-              terminals={terminals}
+              consoles={terminals}
               agents={agents}
               planSteps={planSteps}
               minimizedWidgets={minimizedWidgets}
+              realTerminals={realTerminals}
+              onCloseRealTerminal={handleCloseRealTerminal}
               focusedWidgetId={focusedWidgetId}
               hoveredWidgetId={hoveredWidgetId}
               highlightedTerminalId={highlightedTerminalId}
@@ -2946,8 +3161,8 @@ export function Workspace() {
               onUpdateSizes={handleUpdatePanelSizes}
               onClosePanel={handleClosePanel}
               ws={wsRef.current}
-              onSendTaskToTerminal={handleSendTaskToTerminal}
-              onHighlightTerminal={handleHighlightTerminal}
+              onSendTaskToConsole={handleSendTaskToTerminal}
+              onHighlightConsole={handleHighlightTerminal}
               workspacePath={workspacePath}
             />
           </DndContext>
@@ -2961,7 +3176,7 @@ export function Workspace() {
                     <Panel defaultSize={Math.floor(100 / terminals.length)} minSize={20}>
                       <div className="h-full p-1">
                         <TerminalWidget
-                          terminal={terminal}
+                          console={terminal}
                           onClose={() => handleCloseTerminal(terminal.id)}
                           onMinimize={() => handleMinimizeTerminal(terminal)}
                           onMaximize={() => handleMaximizeTerminal(terminal.id)}
@@ -2973,7 +3188,7 @@ export function Workspace() {
                           isHighlighted={highlightedTerminalId === terminal.id}
                           isFocused={focusedWidgetId === terminal.id}
                           isHovered={hoveredWidgetId === terminal.id}
-                          onFocus={() => handleFocusWidget(terminal.id, 'terminal')}
+                          onFocus={() => handleFocusWidget(terminal.id, 'agent-console')}
                           onMouseEnter={() => setHoveredWidgetId(terminal.id)}
                           onMouseLeave={() => setHoveredWidgetId(null)}
                         />
@@ -2990,8 +3205,8 @@ export function Workspace() {
                 <TasksWidgetContainer
                   ws={wsRef.current}
                   workspacePath={workspacePath ?? undefined}
-                  onSendToTerminal={handleSendTaskToTerminal}
-                  onHighlightTerminal={handleHighlightTerminal}
+                  onSendToConsole={handleSendTaskToTerminal}
+                  onHighlightConsole={handleHighlightTerminal}
                   onMaximize={() => handleMaximizeTerminal('tasks-widget')}
                   isFocused={focusedWidgetId === 'tasks-widget'}
                   isHovered={hoveredWidgetId === 'tasks-widget'}
@@ -3013,7 +3228,7 @@ export function Workspace() {
               key={widget.id}
               onClick={() => handleRestoreWidget(widget)}
               className={`flex items-center gap-1 px-2 py-1 rounded text-xs cursor-pointer group transition-all duration-150 ${
-                widget.type === 'terminal' && highlightedTerminalId === widget.id
+                widget.type === 'agent-console' && highlightedTerminalId === widget.id
                   ? 'ring-1 ring-violet-400/50 terminal-tab-highlight-pulse'
                   : 'bg-zinc-800 hover:bg-zinc-700'
               }`}
@@ -3031,7 +3246,33 @@ export function Workspace() {
       {/* Maximized Widget Overlay */}
       {maximizedWidgetId && (() => {
         const maximizedTerminal = terminals.find(t => t.id === maximizedWidgetId);
+        const maximizedRealTerminal = realTerminals.find(t => t.id === maximizedWidgetId);
         const isTasksMaximized = maximizedWidgetId === 'tasks-widget';
+
+        if (maximizedRealTerminal) {
+          return (
+            <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+              <div
+                className="w-full h-full max-w-[95vw] max-h-[90vh] animate-in zoom-in-95 duration-200"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <RealTerminalWidget
+                  terminal={maximizedRealTerminal}
+                  onClose={() => handleCloseRealTerminal(maximizedRealTerminal.id)}
+                  onMinimize={() => {/* TODO: minimize real terminal */}}
+                  onMaximize={() => handleMaximizeTerminal(maximizedRealTerminal.id)}
+                  isFocused={true}
+                />
+              </div>
+              <button
+                className="absolute top-4 right-4 p-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-zinc-400 hover:text-zinc-200"
+                onClick={() => useWorkspaceStore.getState().setMaximizedWidget(null)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          );
+        }
 
         if (maximizedTerminal) {
           return (
@@ -3040,8 +3281,8 @@ export function Workspace() {
                 className="w-full h-full max-w-[95vw] max-h-[90vh] animate-in zoom-in-95 duration-200"
                 onClick={(e) => e.stopPropagation()}
               >
-                <TerminalWidget
-                  terminal={maximizedTerminal}
+                <AgentConsoleWidget
+                  console={maximizedTerminal}
                   onClose={() => handleCloseTerminal(maximizedTerminal.id)}
                   onMinimize={() => handleMinimizeTerminal(maximizedTerminal)}
                   onMaximize={() => handleMaximizeTerminal(maximizedTerminal.id)}
@@ -3073,8 +3314,8 @@ export function Workspace() {
                 <TasksWidgetContainer
                   ws={wsRef.current}
                   workspacePath={workspacePath ?? undefined}
-                  onSendToTerminal={handleSendTaskToTerminal}
-                  onHighlightTerminal={handleHighlightTerminal}
+                  onSendToConsole={handleSendTaskToTerminal}
+                  onHighlightConsole={handleHighlightTerminal}
                   onMaximize={() => handleMaximizeTerminal('tasks-widget')}
                   isFocused={true}
                 />

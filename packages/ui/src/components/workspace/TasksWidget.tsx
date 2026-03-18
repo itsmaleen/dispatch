@@ -25,7 +25,7 @@ import {
   FolderOpen,
   Trash2,
   GripVertical,
-  Terminal,
+  MonitorDot,
   StopCircle,
 } from 'lucide-react';
 import { useDraggable } from '@dnd-kit/core';
@@ -68,13 +68,13 @@ export interface TasksWidgetProps {
   recentlyCompleted: ActiveSession[];
   onDismissSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
-  onHighlightTerminal: (sessionId: string) => void;
+  onHighlightConsole: (sessionId: string) => void;
 
   // Tier 2: Work Items
   workItems: ExtractedTask[];
   onDismissTask: (taskId: string) => void;
   onCompleteTask: (taskId: string) => void;
-  onSendToTerminal: (taskId: string, terminalId?: string) => void;
+  onSendToConsole: (taskId: string, consoleId?: string) => void;
 
   // Tier 3: Goals
   goals: Goal[];
@@ -103,11 +103,11 @@ export function TasksWidget({
   recentlyCompleted,
   onDismissSession,
   onDeleteSession,
-  onHighlightTerminal,
+  onHighlightConsole,
   workItems,
   onDismissTask,
   onCompleteTask,
-  onSendToTerminal,
+  onSendToConsole,
   goals,
   inboxTasks,
   onCreateGoal,
@@ -201,7 +201,7 @@ export function TasksWidget({
             recentlyCompleted={recentlyCompleted}
             onDismissSession={onDismissSession}
             onDeleteSession={onDeleteSession}
-            onHighlightTerminal={onHighlightTerminal}
+            onHighlightConsole={onHighlightConsole}
           />
         )}
         {activeTab === 'work-items' && (
@@ -209,7 +209,7 @@ export function TasksWidget({
             items={workItems}
             onDismiss={onDismissTask}
             onComplete={onCompleteTask}
-            onSendToTerminal={onSendToTerminal}
+            onSendToConsole={onSendToConsole}
           />
         )}
         {activeTab === 'goals' && (
@@ -276,13 +276,13 @@ function ActiveSessionsTab({
   recentlyCompleted,
   onDismissSession,
   onDeleteSession,
-  onHighlightTerminal,
+  onHighlightConsole,
 }: {
   sessions: ActiveSession[];
   recentlyCompleted: ActiveSession[];
   onDismissSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
-  onHighlightTerminal: (id: string) => void;
+  onHighlightConsole: (id: string) => void;
 }) {
   if (sessions.length === 0 && recentlyCompleted.length === 0) {
     return (
@@ -302,7 +302,7 @@ function ActiveSessionsTab({
           key={session.id}
           session={session}
           onDelete={() => onDeleteSession(session.id)}
-          onHighlightTerminal={() => onHighlightTerminal(session.id)}
+          onHighlightConsole={() => onHighlightConsole(session.id)}
         />
       ))}
 
@@ -330,11 +330,11 @@ function ActiveSessionsTab({
 function ActiveSessionCard({
   session,
   onDelete,
-  onHighlightTerminal,
+  onHighlightConsole,
 }: {
   session: ActiveSession;
   onDelete: () => void;
-  onHighlightTerminal: () => void;
+  onHighlightConsole: () => void;
 }) {
   const [elapsed, setElapsed] = useState(0);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -387,8 +387,8 @@ function ActiveSessionCard({
       <div
         className="p-3 rounded-lg bg-violet-500/10 border border-violet-500/30 cursor-pointer hover:bg-violet-500/15 transition-colors"
         onContextMenu={handleContextMenu}
-        onClick={onHighlightTerminal}
-        title="Click to highlight terminal, right-click for options"
+        onClick={onHighlightConsole}
+        title="Click to highlight console, right-click for options"
       >
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
@@ -413,11 +413,11 @@ function ActiveSessionCard({
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <button
-            onClick={() => { onHighlightTerminal(); setContextMenu(null); }}
+            onClick={() => { onHighlightConsole(); setContextMenu(null); }}
             className="w-full px-3 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-700 flex items-center gap-2"
           >
-            <Terminal className="w-3.5 h-3.5 text-blue-400" />
-            Highlight Terminal
+            <MonitorDot className="w-3.5 h-3.5 text-blue-400" />
+            Highlight Console
           </button>
           <div className="h-px bg-zinc-700 my-1" />
           <button
@@ -478,12 +478,12 @@ function WorkItemsTab({
   items,
   onDismiss,
   onComplete,
-  onSendToTerminal,
+  onSendToConsole,
 }: {
   items: ExtractedTask[];
   onDismiss: (id: string) => void;
   onComplete: (id: string) => void;
-  onSendToTerminal: (id: string, terminalId?: string) => void;
+  onSendToConsole: (id: string, consoleId?: string) => void;
 }) {
   const inProgress = items.filter(t => t.status === 'doing');
   const planned = items.filter(t => t.status === 'pending');
@@ -508,7 +508,7 @@ function WorkItemsTab({
           items={inProgress}
           onDismiss={onDismiss}
           onComplete={onComplete}
-          onSendToTerminal={onSendToTerminal}
+          onSendToConsole={onSendToConsole}
         />
       )}
       {planned.length > 0 && (
@@ -518,7 +518,7 @@ function WorkItemsTab({
           items={planned}
           onDismiss={onDismiss}
           onComplete={onComplete}
-          onSendToTerminal={onSendToTerminal}
+          onSendToConsole={onSendToConsole}
         />
       )}
       {suggested.length > 0 && (
@@ -528,7 +528,7 @@ function WorkItemsTab({
           items={suggested}
           onDismiss={onDismiss}
           onComplete={onComplete}
-          onSendToTerminal={onSendToTerminal}
+          onSendToConsole={onSendToConsole}
         />
       )}
     </div>
@@ -541,14 +541,14 @@ function WorkItemGroup({
   items,
   onDismiss,
   onComplete,
-  onSendToTerminal,
+  onSendToConsole,
 }: {
   title: string;
   icon: React.ReactNode;
   items: ExtractedTask[];
   onDismiss: (id: string) => void;
   onComplete: (id: string) => void;
-  onSendToTerminal: (id: string, terminalId?: string) => void;
+  onSendToConsole: (id: string, consoleId?: string) => void;
 }) {
   return (
     <div>
@@ -564,7 +564,7 @@ function WorkItemGroup({
             item={item}
             onDismiss={() => onDismiss(item.id)}
             onComplete={() => onComplete(item.id)}
-            onSendToTerminal={() => onSendToTerminal(item.id)}
+            onSendToConsole={() => onSendToConsole(item.id)}
           />
         ))}
       </div>
@@ -576,12 +576,12 @@ function WorkItemCard({
   item,
   onDismiss,
   onComplete,
-  onSendToTerminal,
+  onSendToConsole,
 }: {
   item: ExtractedTask;
   onDismiss: () => void;
   onComplete: () => void;
-  onSendToTerminal: () => void;
+  onSendToConsole: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -616,11 +616,11 @@ function WorkItemCard({
           {menuOpen && (
             <div className="absolute top-full right-0 mt-0.5 py-1 bg-zinc-800 border border-zinc-700 rounded shadow-lg z-10 min-w-[140px]">
               <button
-                onClick={() => { onSendToTerminal(); setMenuOpen(false); }}
+                onClick={() => { onSendToConsole(); setMenuOpen(false); }}
                 className="w-full px-3 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-700 flex items-center gap-2"
               >
                 <Play className="w-3 h-3 text-violet-400" />
-                Run in terminal
+                Run in console
               </button>
               <button
                 onClick={() => { onComplete(); setMenuOpen(false); }}

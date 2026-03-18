@@ -2,10 +2,11 @@
  * Widget Types - TMux-style widget system for execution view
  */
 
-export type WidgetKind = 
+export type WidgetKind =
   | 'log'           // Real-time stdout/stderr
   | 'diff'          // File changes as they happen
-  | 'terminal'      // Raw PTY access
+  | 'terminal'      // Raw PTY access (actual shell terminal)
+  | 'agent-console' // Agent execution output viewer (renamed from old 'terminal' widget)
   | 'chat'          // Direct agent conversation
   | 'status'        // Agent state indicator
   | 'cost'          // Token usage / cost meter
@@ -97,6 +98,23 @@ export interface TerminalWidgetData {
   dimensions: { rows: number; cols: number };
 }
 
+export interface AgentConsoleWidgetData {
+  /** Agent session ID */
+  sessionId: string;
+  /** Agent ID this console is connected to */
+  agentId: string;
+  /** Console lines (thinking, tool calls, output, etc.) */
+  lines: Array<{
+    id: string;
+    type: 'prompt' | 'thinking' | 'tool_call' | 'tool_result' | 'output' | 'error' | 'info' | 'command' | 'system';
+    content: string;
+    timestamp?: string;
+    isStreaming?: boolean;
+  }>;
+  /** Is the agent currently streaming output */
+  isStreaming: boolean;
+}
+
 export interface ChatWidgetData {
   messages: Array<{
     id: string;
@@ -171,10 +189,11 @@ export interface PlanWidgetData {
 
 // ============ Widget data union ============
 
-export type WidgetData = 
+export type WidgetData =
   | { kind: 'log'; data: LogWidgetData }
   | { kind: 'diff'; data: DiffWidgetData }
   | { kind: 'terminal'; data: TerminalWidgetData }
+  | { kind: 'agent-console'; data: AgentConsoleWidgetData }
   | { kind: 'chat'; data: ChatWidgetData }
   | { kind: 'status'; data: StatusWidgetData }
   | { kind: 'cost'; data: CostWidgetData }
@@ -240,7 +259,7 @@ export const DEFAULT_LAYOUTS: Record<string, Omit<WidgetLayout, 'id'>> = {
       { id: 'log-1', kind: 'log', position: { row: 1, col: 0 }, size: 'medium', minimized: false },
       { id: 'diff-1', kind: 'diff', position: { row: 1, col: 1 }, size: 'medium', minimized: false },
       { id: 'cost-1', kind: 'cost', position: { row: 1, col: 2 }, size: 'small', minimized: false },
-      { id: 'terminal-1', kind: 'terminal', position: { row: 2, col: 0, colSpan: 3 }, size: 'large', minimized: false },
+      { id: 'agent-console-1', kind: 'agent-console', position: { row: 2, col: 0, colSpan: 3 }, size: 'large', minimized: false },
     ],
     active: false,
   },
