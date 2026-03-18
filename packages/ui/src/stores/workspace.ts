@@ -900,6 +900,7 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
   },
 
   applyLayoutPreset: (preset, widgets) => {
+    console.log('[applyLayoutPreset] Called with:', { preset, widgets });
     let newTree: LayoutNode;
 
     switch (preset) {
@@ -921,6 +922,7 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
         break;
     }
 
+    console.log('[applyLayoutPreset] New tree:', JSON.stringify(newTree, null, 2));
     set({ layoutTree: newTree });
   },
 

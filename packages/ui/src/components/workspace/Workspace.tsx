@@ -46,7 +46,7 @@ import {
 } from 'lucide-react';
 import { AgentsPanel } from '../agents/AgentsPanel';
 import { api, getServerUrl, getWsUrl } from '../../stores/app';
-import { useWorkspaceStore, type LayoutNode, type LayoutLeaf, type LayoutGroup, layoutHelpers } from '../../stores/workspace';
+import { useWorkspaceStore, type LayoutNode, type LayoutLeaf, type LayoutGroup, type WidgetType, layoutHelpers } from '../../stores/workspace';
 import { ChatInput, type UploadedFile } from './ChatInput';
 import { TasksWidgetContainer } from './TasksWidgetContainer';
 import { TerminalWidget as RealTerminalWidget } from '../terminal/TerminalWidget';
@@ -160,12 +160,43 @@ interface MinimizedWidget {
   data?: ConsoleState;
 }
 
+/** Drop position for drag-and-drop operations */
+type DropPosition = 'center' | 'left' | 'right' | 'top' | 'bottom';
+
+/** Information about the current drop zone during drag operations */
+interface DropZoneInfo {
+  panelId: string;
+  position: DropPosition;
+}
+
 // ============================================================================
 // UTILITIES
 // ============================================================================
 
 function makeTimestamp(): string {
   return new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+/**
+ * Calculate which drop zone the cursor is in based on position within the panel.
+ * Returns 'left', 'right', 'top', 'bottom' for edge zones (25% threshold),
+ * or 'center' for the middle area (swap behavior).
+ */
+function calculateDropPosition(
+  clientX: number,
+  clientY: number,
+  rect: DOMRect
+): DropPosition {
+  const EDGE_THRESHOLD = 0.25; // 25% of panel is edge zone
+
+  const relX = (clientX - rect.left) / rect.width;
+  const relY = (clientY - rect.top) / rect.height;
+
+  if (relX < EDGE_THRESHOLD) return 'left';
+  if (relX > 1 - EDGE_THRESHOLD) return 'right';
+  if (relY < EDGE_THRESHOLD) return 'top';
+  if (relY > 1 - EDGE_THRESHOLD) return 'bottom';
+  return 'center';
 }
 
 function getAgentIcon(agent: { type: string; name: string }): string {
@@ -605,21 +636,116 @@ function DraggableHandle({ panelId }: { panelId: string }) {
   );
 }
 
-function DroppablePanel({ panelId, children, isOver }: { panelId: string; children: React.ReactNode; isOver?: boolean }) {
-  const { setNodeRef, isOver: dropping } = useDroppable({
-    id: `drop-${panelId}`,
-  });
+/**
+ * Edge-aware droppable component that detects which zone (left, right, top, bottom, center)
+ * the cursor is in and shows a preview of the new cell that would be created.
+ */
+function EdgeAwareDroppable({
+  panelId,
+  children,
+  onDropZoneChange,
+  activeDropZone,
+  isDragging,
+  isSourcePanel,
+}: {
+  panelId: string;
+  children: React.ReactNode;
+  onDropZoneChange: (zone: DropZoneInfo | null) => void;
+  activeDropZone: DropZoneInfo | null;
+  isDragging: boolean;
+  isSourcePanel: boolean;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const { setNodeRef, isOver } = useDroppable({ id: `drop-${panelId}` });
 
-  const showDropIndicator = isOver || dropping;
+  // Combine refs
+  const combinedRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      setNodeRef(node);
+      (containerRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
+    },
+    [setNodeRef]
+  );
+
+  // Track mouse position to determine drop zone
+  useEffect(() => {
+    if (!isOver || !isDragging || isSourcePanel) {
+      return;
+    }
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const position = calculateDropPosition(e.clientX, e.clientY, rect);
+      onDropZoneChange({ panelId, position });
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    return () => document.removeEventListener('mousemove', handleMouseMove);
+  }, [isOver, isDragging, isSourcePanel, panelId, onDropZoneChange]);
+
+  // Clear drop zone when not hovering
+  useEffect(() => {
+    if (!isOver && activeDropZone?.panelId === panelId) {
+      onDropZoneChange(null);
+    }
+  }, [isOver, activeDropZone, panelId, onDropZoneChange]);
+
+  const isActive = activeDropZone?.panelId === panelId && isDragging && !isSourcePanel;
+  const position = activeDropZone?.position;
 
   return (
-    <div
-      ref={setNodeRef}
-      className={`h-full relative ${showDropIndicator ? 'ring-2 ring-blue-400/50 ring-inset' : ''}`}
-    >
+    <div ref={combinedRef} className="h-full relative">
       {children}
-      {showDropIndicator && (
-        <div className="absolute inset-0 bg-blue-500/10 pointer-events-none rounded-lg" />
+
+      {/* Preview of new cell that would be created */}
+      {isActive && (
+        <>
+          {/* Center: swap indicator - highlight entire panel */}
+          {position === 'center' && (
+            <div className="absolute inset-0 border-2 border-dashed border-blue-400 bg-blue-500/10 rounded-lg pointer-events-none" />
+          )}
+
+          {/* Left: show preview cell on the left side */}
+          {position === 'left' && (
+            <div className="absolute inset-0 flex pointer-events-none">
+              <div className="w-1/2 border-2 border-blue-500 bg-blue-500/20 rounded-l-lg flex items-center justify-center">
+                <div className="text-blue-400 text-sm font-medium opacity-75">New Panel</div>
+              </div>
+              <div className="w-1/2 border-2 border-blue-500/30 rounded-r-lg" />
+            </div>
+          )}
+
+          {/* Right: show preview cell on the right side */}
+          {position === 'right' && (
+            <div className="absolute inset-0 flex pointer-events-none">
+              <div className="w-1/2 border-2 border-blue-500/30 rounded-l-lg" />
+              <div className="w-1/2 border-2 border-blue-500 bg-blue-500/20 rounded-r-lg flex items-center justify-center">
+                <div className="text-blue-400 text-sm font-medium opacity-75">New Panel</div>
+              </div>
+            </div>
+          )}
+
+          {/* Top: show preview cell on the top */}
+          {position === 'top' && (
+            <div className="absolute inset-0 flex flex-col pointer-events-none">
+              <div className="h-1/2 border-2 border-blue-500 bg-blue-500/20 rounded-t-lg flex items-center justify-center">
+                <div className="text-blue-400 text-sm font-medium opacity-75">New Panel</div>
+              </div>
+              <div className="h-1/2 border-2 border-blue-500/30 rounded-b-lg" />
+            </div>
+          )}
+
+          {/* Bottom: show preview cell on the bottom */}
+          {position === 'bottom' && (
+            <div className="absolute inset-0 flex flex-col pointer-events-none">
+              <div className="h-1/2 border-2 border-blue-500/30 rounded-t-lg" />
+              <div className="h-1/2 border-2 border-blue-500 bg-blue-500/20 rounded-b-lg flex items-center justify-center">
+                <div className="text-blue-400 text-sm font-medium opacity-75">New Panel</div>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -1303,6 +1429,9 @@ interface LayoutRendererProps {
   // Drag state
   activeDragId: string | null;
   overDropId: string | null;
+  // Edge-aware drop zone state
+  dropZone: DropZoneInfo | null;
+  onDropZoneChange: (zone: DropZoneInfo | null) => void;
   // Callbacks
   onFocusWidget: (id: string, type: 'agent-console' | 'tasks' | 'agent-status' | 'terminal') => void;
   onHoverWidget: (id: string | null) => void;
@@ -1356,6 +1485,8 @@ function LayoutRenderer({
   maximizedWidgetId,
   activeDragId,
   overDropId,
+  dropZone,
+  onDropZoneChange,
   onFocusWidget,
   onHoverWidget,
   onCloseTerminal,
@@ -1392,21 +1523,19 @@ function LayoutRenderer({
     if (widgetType === 'agent-console') {
       const terminal = terminals.find(t => t.id === widgetId);
       if (!terminal) {
-        // Terminal might have been closed - show placeholder
-        return (
-          <div className="h-full flex items-center justify-center bg-zinc-900 border border-zinc-800 rounded-lg">
-            <div className="text-center text-zinc-600">
-              <TerminalIcon className="w-8 h-8 mx-auto mb-2 opacity-50" />
-              <p className="text-xs">Terminal not found</p>
-            </div>
-          </div>
-        );
+        // Terminal was closed - remove panel from layout (deferred to avoid render-time state update)
+        setTimeout(() => onClosePanel(node.id), 0);
+        return null;
       }
 
-      const isDropTarget = overDropId === `drop-${node.id}` && activeDragId !== node.id;
-
       return (
-        <DroppablePanel panelId={node.id} isOver={isDropTarget}>
+        <EdgeAwareDroppable
+          panelId={node.id}
+          onDropZoneChange={onDropZoneChange}
+          activeDropZone={dropZone}
+          isDragging={!!activeDragId}
+          isSourcePanel={activeDragId === node.id}
+        >
           <div className="h-full p-1">
             <TerminalWidget
               console={terminal}
@@ -1429,7 +1558,7 @@ function LayoutRenderer({
               onSplitBelow={() => onSplitPanel(node.id, 'vertical')}
             />
           </div>
-        </DroppablePanel>
+        </EdgeAwareDroppable>
       );
     }
 
@@ -1439,10 +1568,14 @@ function LayoutRenderer({
         return null;
       }
 
-      const isDropTarget = overDropId === `drop-${node.id}` && activeDragId !== node.id;
-
       return (
-        <DroppablePanel panelId={node.id} isOver={isDropTarget}>
+        <EdgeAwareDroppable
+          panelId={node.id}
+          onDropZoneChange={onDropZoneChange}
+          activeDropZone={dropZone}
+          isDragging={!!activeDragId}
+          isSourcePanel={activeDragId === node.id}
+        >
           <div className="h-full p-1">
             <TasksWidgetContainer
               ws={ws}
@@ -1462,7 +1595,7 @@ function LayoutRenderer({
               panelId={node.id}
             />
           </div>
-        </DroppablePanel>
+        </EdgeAwareDroppable>
       );
     }
 
@@ -1472,10 +1605,14 @@ function LayoutRenderer({
         return null;
       }
 
-      const isDropTarget = overDropId === `drop-${node.id}` && activeDragId !== node.id;
-
       return (
-        <DroppablePanel panelId={node.id} isOver={isDropTarget}>
+        <EdgeAwareDroppable
+          panelId={node.id}
+          onDropZoneChange={onDropZoneChange}
+          activeDropZone={dropZone}
+          isDragging={!!activeDragId}
+          isSourcePanel={activeDragId === node.id}
+        >
           <div className="h-full p-1">
             <UnifiedAgentStatusWidget
               agents={agents}
@@ -1493,7 +1630,7 @@ function LayoutRenderer({
               panelId={node.id}
             />
           </div>
-        </DroppablePanel>
+        </EdgeAwareDroppable>
       );
     }
 
@@ -1501,21 +1638,19 @@ function LayoutRenderer({
       // Real PTY-based terminal widget
       const terminalInstance = realTerminals.find(t => t.id === widgetId);
       if (!terminalInstance) {
-        // Terminal might have been closed - show placeholder
-        return (
-          <div className="h-full flex items-center justify-center bg-zinc-900 border border-zinc-800 rounded-lg">
-            <div className="text-center text-zinc-600">
-              <TerminalIcon className="w-8 h-8 mx-auto mb-2 opacity-50" />
-              <p className="text-xs">Terminal not found</p>
-            </div>
-          </div>
-        );
+        // Terminal was closed - remove panel from layout (deferred to avoid render-time state update)
+        setTimeout(() => onClosePanel(node.id), 0);
+        return null;
       }
 
-      const isDropTarget = overDropId === `drop-${node.id}` && activeDragId !== node.id;
-
       return (
-        <DroppablePanel panelId={node.id} isOver={isDropTarget}>
+        <EdgeAwareDroppable
+          panelId={node.id}
+          onDropZoneChange={onDropZoneChange}
+          activeDropZone={dropZone}
+          isDragging={!!activeDragId}
+          isSourcePanel={activeDragId === node.id}
+        >
           <div className="h-full p-1">
             <RealTerminalWidget
               terminal={terminalInstance}
@@ -1530,7 +1665,7 @@ function LayoutRenderer({
               panelId={node.id}
             />
           </div>
-        </DroppablePanel>
+        </EdgeAwareDroppable>
       );
     }
 
@@ -1570,6 +1705,8 @@ function LayoutRenderer({
               maximizedWidgetId={maximizedWidgetId}
               activeDragId={activeDragId}
               overDropId={overDropId}
+              dropZone={dropZone}
+              onDropZoneChange={onDropZoneChange}
               onFocusWidget={onFocusWidget}
               onHoverWidget={onHoverWidget}
               onCloseTerminal={onCloseTerminal}
@@ -1645,6 +1782,7 @@ export function Workspace() {
   // Drag-and-drop state for panel reordering
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [overDropId, setOverDropId] = useState<string | null>(null);
+  const [dropZone, setDropZone] = useState<DropZoneInfo | null>(null);
 
   // DnD sensors with pointer activation
   const sensors = useSensors(
@@ -1794,12 +1932,8 @@ export function Workspace() {
         });
         const data = await res.json();
         if (data.ok && data.terminal) {
+          // Add to state - the layout sync effect will add it to the layout
           setRealTerminals(prev => [...prev, data.terminal]);
-          // Add to layout
-          useWorkspaceStore.getState().addPanelToLayout({
-            widgetType: 'terminal',
-            widgetId: data.terminal.id,
-          });
         } else {
           console.error('Failed to create terminal:', data.error);
         }
@@ -1880,19 +2014,38 @@ export function Workspace() {
       return;
     }
 
-    // Check if any consoles in layout no longer exist (were closed)
-    // The closePanelInLayout action handles this in response to terminal close
-    // But we should also handle the case where terminals were added outside of split
-    const layoutConsoleIds = collectTerminalIds(currentLayout);
-    const newConsoleIds = consoleIds.filter(id => !layoutConsoleIds.includes(id));
+    // Check for widgets that need to be added to the layout
+    // This handles terminals/consoles that were added outside of split actions
+    // (e.g., fetched on page load or created via button click)
+    const layoutConsoleIds = collectWidgetIds(currentLayout, 'agent-console');
+    const layoutTerminalIds = collectWidgetIds(currentLayout, 'terminal');
 
-    if (newConsoleIds.length > 0) {
-      // New consoles were added (e.g., via "New Console" button)
-      // Add them to the layout in the default position (left column)
+    const newConsoleIds = consoleIds.filter(id => !layoutConsoleIds.includes(id));
+    const newTerminalIds = realTerminals.map(t => t.id).filter(id => !layoutTerminalIds.includes(id));
+
+    console.log('[LayoutSync] Check:', {
+      realTerminalIds: realTerminals.map(t => t.id),
+      layoutTerminalIds,
+      newTerminalIds,
+      layoutConsoleIds,
+      newConsoleIds,
+    });
+
+    if (newConsoleIds.length > 0 || newTerminalIds.length > 0) {
+      console.log('[LayoutSync] Adding new widgets:', { newConsoleIds, newTerminalIds });
+      // Add new widgets to the layout
       let updatedLayout = currentLayout;
+
+      // Add new agent consoles
       for (const newId of newConsoleIds) {
         updatedLayout = addTerminalToLayout(updatedLayout, newId);
       }
+
+      // Add new real terminals
+      for (const newId of newTerminalIds) {
+        updatedLayout = addRealTerminalToLayout(updatedLayout, newId);
+      }
+
       useWorkspaceStore.getState().setLayoutTree(updatedLayout);
     }
   }, [terminals, realTerminals, useFlexibleLayout, showAgentStatus, tasksVisible]);
@@ -1904,12 +2057,12 @@ export function Workspace() {
     }
   }, [layoutTree, useFlexibleLayout]);
 
-  // Helper to collect all terminal IDs from a layout tree
-  const collectTerminalIds = (node: LayoutNode): string[] => {
+  // Helper to collect all widget IDs of a specific type from a layout tree
+  const collectWidgetIds = (node: LayoutNode, widgetType: WidgetType): string[] => {
     if (node.type === 'leaf') {
-      return node.widgetType === 'agent-console' ? [node.widgetId] : [];
+      return node.widgetType === widgetType ? [node.widgetId] : [];
     }
-    return node.children.flatMap(collectTerminalIds);
+    return node.children.flatMap(c => collectWidgetIds(c, widgetType));
   };
 
   // Helper to add a terminal to the layout (adds to first vertical group or creates one)
@@ -1950,6 +2103,55 @@ export function Workspace() {
     if (tree.children.length > 0) {
       const firstChild = tree.children[0];
       const updatedFirst = addTerminalToLayout(firstChild, terminalId);
+      return {
+        ...tree,
+        children: [updatedFirst, ...tree.children.slice(1)],
+      };
+    }
+
+    return tree;
+  };
+
+  // Helper to add a real PTY terminal to the layout
+  const addRealTerminalToLayout = (tree: LayoutNode, terminalId: string): LayoutNode => {
+    const newLeaf: LayoutLeaf = {
+      type: 'leaf',
+      id: layoutHelpers.generateLayoutId(),
+      widgetType: 'terminal',
+      widgetId: terminalId,
+    };
+
+    if (tree.type === 'leaf') {
+      // Convert single leaf to vertical group
+      return {
+        type: 'group',
+        id: layoutHelpers.generateLayoutId(),
+        direction: 'vertical',
+        children: [tree, newLeaf],
+        sizes: [50, 50],
+      };
+    }
+
+    // Find the first vertical group containing content widgets and add there
+    if (tree.direction === 'vertical') {
+      const hasContent = tree.children.some(c =>
+        c.type === 'leaf' && (c.widgetType === 'agent-console' || c.widgetType === 'terminal')
+      );
+      if (hasContent) {
+        const newSizes = tree.children.map(() => 100 / (tree.children.length + 1));
+        newSizes.push(100 / (tree.children.length + 1));
+        return {
+          ...tree,
+          children: [...tree.children, newLeaf],
+          sizes: newSizes,
+        };
+      }
+    }
+
+    // For horizontal groups, try to add to the first child recursively
+    if (tree.children.length > 0) {
+      const firstChild = tree.children[0];
+      const updatedFirst = addRealTerminalToLayout(firstChild, terminalId);
       return {
         ...tree,
         children: [updatedFirst, ...tree.children.slice(1)],
@@ -2512,8 +2714,13 @@ export function Workspace() {
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
+
+    // Capture drop zone before clearing state
+    const currentDropZone = dropZone;
+
     setActiveDragId(null);
     setOverDropId(null);
+    setDropZone(null);
 
     if (!over || active.id === over.id) return;
 
@@ -2522,14 +2729,20 @@ export function Workspace() {
     const targetPanelId = (over.id as string).replace('drop-', '');
 
     if (sourcePanelId !== targetPanelId) {
-      // Swap the panels in the layout
-      useWorkspaceStore.getState().swapPanels(sourcePanelId, targetPanelId);
+      // Use the detected drop position, default to 'center' for swap behavior
+      const position = currentDropZone?.panelId === targetPanelId
+        ? currentDropZone.position
+        : 'center';
+
+      // movePanel handles all cases: center = swap, edges = split
+      useWorkspaceStore.getState().movePanel(sourcePanelId, targetPanelId, position);
     }
-  }, []);
+  }, [dropZone]);
 
   const handleDragCancel = useCallback(() => {
     setActiveDragId(null);
     setOverDropId(null);
+    setDropZone(null);
   }, []);
 
   const handleTerminalSettingsChange = (terminalId: string, settings: TerminalSettings) => {
@@ -3019,12 +3232,8 @@ export function Workspace() {
                           });
                           const data = await res.json();
                           if (data.ok && data.terminal) {
+                            // Add to state - the layout sync effect will add it to the layout
                             setRealTerminals(prev => [...prev, data.terminal]);
-                            // Add to layout
-                            useWorkspaceStore.getState().addPanelToLayout({
-                              widgetType: 'terminal',
-                              widgetId: data.terminal.id,
-                            });
                           }
                         } catch (err) {
                           console.error('Failed to create terminal:', err);
@@ -3138,6 +3347,8 @@ export function Workspace() {
               maximizedWidgetId={maximizedWidgetId}
               activeDragId={activeDragId}
               overDropId={overDropId}
+              dropZone={dropZone}
+              onDropZoneChange={setDropZone}
               onFocusWidget={handleFocusWidget}
               onHoverWidget={setHoveredWidgetId}
               onCloseTerminal={handleCloseTerminal}

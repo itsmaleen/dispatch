@@ -253,17 +253,27 @@ export function createDefaultCommands(): Command[] {
       action: {
         type: 'subcommand',
         getCommands: (): Command[] => {
-          const { consoles, realTerminals, showAgentStatus, tasksVisible } = useWorkspaceStore.getState();
-
-          // Build complete widgets array including all widget types
-          const widgets: LayoutWidgetInfo[] = [
-            // Content widgets first
-            ...consoles.map(c => ({ type: 'agent-console' as const, id: c.id })),
-            ...realTerminals.map(t => ({ type: 'terminal' as const, id: t.id })),
-            // Utility widgets
-            ...(showAgentStatus ? [{ type: 'agent-status' as const, id: 'agent-status-widget' }] : []),
-            ...(tasksVisible ? [{ type: 'tasks' as const, id: 'tasks-widget' }] : []),
-          ];
+          // Helper to get fresh widgets at execution time (not when menu opens)
+          const getWidgets = (): LayoutWidgetInfo[] => {
+            const { consoles, realTerminals, showAgentStatus, tasksVisible } = useWorkspaceStore.getState();
+            const widgets = [
+              // Content widgets first
+              ...consoles.map(c => ({ type: 'agent-console' as const, id: c.id })),
+              ...realTerminals.map(t => ({ type: 'terminal' as const, id: t.id })),
+              // Utility widgets
+              ...(showAgentStatus ? [{ type: 'agent-status' as const, id: 'agent-status-widget' }] : []),
+              ...(tasksVisible ? [{ type: 'tasks' as const, id: 'tasks-widget' }] : []),
+            ];
+            console.log('[getWidgets] Building widgets:', {
+              consoleIds: consoles.map(c => c.id),
+              terminalIds: realTerminals.map(t => t.id),
+              showAgentStatus,
+              tasksVisible,
+              totalWidgets: widgets.length,
+              widgets,
+            });
+            return widgets;
+          };
 
           return [
             {
@@ -275,7 +285,7 @@ export function createDefaultCommands(): Command[] {
               action: {
                 type: 'execute',
                 handler: () => {
-                  useWorkspaceStore.getState().applyLayoutPreset('default', widgets);
+                  useWorkspaceStore.getState().applyLayoutPreset('default', getWidgets());
                 },
               },
             },
@@ -288,7 +298,7 @@ export function createDefaultCommands(): Command[] {
               action: {
                 type: 'execute',
                 handler: () => {
-                  useWorkspaceStore.getState().applyLayoutPreset('master-stack', widgets);
+                  useWorkspaceStore.getState().applyLayoutPreset('master-stack', getWidgets());
                 },
               },
             },
@@ -301,7 +311,7 @@ export function createDefaultCommands(): Command[] {
               action: {
                 type: 'execute',
                 handler: () => {
-                  useWorkspaceStore.getState().applyLayoutPreset('even-horizontal', widgets);
+                  useWorkspaceStore.getState().applyLayoutPreset('even-horizontal', getWidgets());
                 },
               },
             },
@@ -314,7 +324,7 @@ export function createDefaultCommands(): Command[] {
               action: {
                 type: 'execute',
                 handler: () => {
-                  useWorkspaceStore.getState().applyLayoutPreset('even-vertical', widgets);
+                  useWorkspaceStore.getState().applyLayoutPreset('even-vertical', getWidgets());
                 },
               },
             },
@@ -327,7 +337,7 @@ export function createDefaultCommands(): Command[] {
               action: {
                 type: 'execute',
                 handler: () => {
-                  useWorkspaceStore.getState().applyLayoutPreset('quad', widgets);
+                  useWorkspaceStore.getState().applyLayoutPreset('quad', getWidgets());
                 },
               },
             },
