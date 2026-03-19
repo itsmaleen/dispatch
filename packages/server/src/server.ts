@@ -26,6 +26,7 @@ import { executeTerminalTool, getTerminalToolSchema } from './services/terminal-
 import { getAgentConsoleLauncher, type AgentConsoleLauncher, type AgentConsole, type LaunchAgentOptions } from './services/agent-console-launcher';
 import { getSemanticSearchService, type CommandInfo } from './services/semantic-search';
 import type { TerminalClientMessage, CreateTerminalOptions, TerminalToolInput } from '@acc/contracts';
+import { initAnalytics, getAnalytics, shutdownAnalytics, DispatchEvents } from './analytics';
 
 interface ManagedAdapter {
   implementation: AdapterImplementation;
@@ -292,6 +293,12 @@ export class CommandCenterServer {
       try {
         const extractor = getExtractor();
         const result = await extractor.extract(output);
+        
+        // Track task extraction
+        getAnalytics().record(DispatchEvents.TASK_EXTRACTED, {
+          taskCount: result.tasks?.length ?? 0,
+        });
+        
         return c.json({ ok: true, ...result });
       } catch (error) {
         return c.json({ 
@@ -464,6 +471,12 @@ export class CommandCenterServer {
           name,
           worktreePath,
           resume,
+        });
+        
+        // Track session creation
+        getAnalytics().record(DispatchEvents.SESSION_CREATED, {
+          hasWorktree: !!worktreePath,
+          isResume: !!resume,
         });
 
         return c.json({ 
@@ -2333,6 +2346,16 @@ Format your response as plain text only:
   }
 
   async start(): Promise<void> {
+    // Initialize analytics (best-effort, won't crash if it fails)
+    const analytics = initAnalytics({
+      appVersion: process.env.npm_package_version ?? '0.0.1',
+      clientType: 'desktop',
+    });
+    analytics.record(DispatchEvents.APP_LAUNCHED, {
+      platform: process.platform,
+      arch: process.arch,
+    });
+    
     // Ensure database schema is up to date before anything else
     // This runs migrations and verifies all columns exist
     const taskStore = getTaskStore();
@@ -2638,6 +2661,12 @@ Format your response as plain text only:
   }
 
   async stop(): Promise<void> {
+    // Track app shutdown
+    getAnalytics().record(DispatchEvents.APP_SHUTDOWN);
+    
+    // Flush analytics before shutting down
+    await shutdownAnalytics();
+    
     // Shutdown session manager
     const sessionManager = getSessionManager();
     await sessionManager.shutdown();

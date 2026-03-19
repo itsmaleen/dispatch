@@ -14,3 +14,4 @@ export * from './adapters/types';
 export * from './server';
 export * from './services/terminal-manager';
 export * from './services/terminal-tool';
+export * from './analytics';
