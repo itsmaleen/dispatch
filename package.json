@@ -6,6 +6,7 @@
   "author": "Marlin & Molty",
   "license": "MIT",
   "workspaces": [
+    "packages/analytics",
     "packages/contracts",
     "packages/server",
     "packages/ui"
