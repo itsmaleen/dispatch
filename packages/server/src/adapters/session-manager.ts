@@ -16,8 +16,11 @@ import {
 } from '../persistence/sqlite-store';
 import { getExtractor, getPromptSummarizer } from '../extractor';
 import { getTaskStore, type Task } from '../persistence/task-store';
+import { getReactiveTaskStore } from '../persistence/reactive-task-store';
 import { getWorktreeManager } from '../services/worktree-manager';
-import type { WorktreeInfo, WorktreeChanges, MergeResult } from '@acc/contracts';
+import { getThreadNamer } from '../services/thread-namer';
+import { getOverlapDetector, type OverlapWarning } from '../services/overlap-detector';
+import type { WorktreeInfo, WorktreeChanges, MergeResult, ConsoleThread } from '@acc/contracts';
 
 /** Active session bound to a thread */
 export interface Session {
@@ -43,6 +46,16 @@ export interface SessionEvents {
   'prompt.summary_updated': (data: { sessionId: string; summary: string }) => void;
   // Task updates
   'tasks.updated': (tasks: Task[]) => void;
+  // Thread overlap warning (Phase 4)
+  'thread.overlap_warning': (warning: OverlapWarning) => void;
+  // Thread evolution suggestion (Phase 5)
+  'thread.evolution_suggested': (data: {
+    threadId: string;
+    currentName: string;
+    suggestedName: string;
+    evolutionType: 'evolution' | 'new_topic';
+    confidence: number;
+  }) => void;
 }
 
 /** Options for creating a session */
@@ -214,6 +227,7 @@ export class SessionManager extends EventEmitter {
     // Track active session (Tier 1)
     // Use quick heuristic summary first for immediate UI feedback
     const taskStore = getTaskStore();
+    const reactiveStore = getReactiveTaskStore();
     const quickSummary = this.generateQuickSummary(options.message);
     taskStore.startSession({
       id: threadId,
@@ -233,6 +247,21 @@ export class SessionManager extends EventEmitter {
       promptText: options.message,
       projectPath: session.cwd,
     });
+
+    // Phase 1 & 2: Get or create ConsoleThread with AI-generated name, auto-create Goal
+    // Phase 5: Also check for thread evolution
+    this.ensureConsoleThreadAndGoal(threadId, options.message, session.cwd)
+      .then(consoleThread => {
+        // Check for evolution every 3 prompts (not on first prompt)
+        if (consoleThread.sessionCount >= 3 && consoleThread.sessionCount % 3 === 0) {
+          this.checkThreadEvolution(consoleThread, options.message).catch(err => {
+            console.error('[SessionManager] Thread evolution check failed:', err);
+          });
+        }
+      })
+      .catch(err => {
+        console.error('[SessionManager] ConsoleThread/Goal creation failed:', err);
+      });
 
     // Generate better AI summary asynchronously (don't block)
     this.generateAISummary(threadId, options.message).catch(err => {
@@ -341,6 +370,137 @@ export class SessionManager extends EventEmitter {
   private updateSessionSummary(sessionId: string, summary: string): void {
     const taskStore = getTaskStore();
     taskStore.updateSessionSummary(sessionId, summary);
+  }
+
+  /**
+   * Phase 5: Check if thread topic has evolved
+   *
+   * Uses AI to detect if the new prompt represents a topic change.
+   * Emits 'thread.evolution_suggested' event if evolution detected.
+   */
+  private async checkThreadEvolution(
+    consoleThread: ConsoleThread,
+    newPrompt: string
+  ): Promise<void> {
+    const threadNamer = getThreadNamer();
+
+    // Get recent context (summaries of recent prompts in this thread)
+    // Use recently completed sessions for context
+    const taskStore = getTaskStore();
+    const recentSessions = taskStore.getRecentlyCompletedSessions(5, consoleThread.projectPath);
+
+    // Build context from recent sessions' summaries (excluding current)
+    const recentContext = recentSessions
+      .filter((s: { id: string }) => s.id !== consoleThread.id)
+      .map((s: { summary?: string }) => s.summary || '')
+      .filter(Boolean)
+      .join('. ');
+
+    const evolution = await threadNamer.shouldEvolve(
+      consoleThread.name,
+      recentContext,
+      newPrompt
+    );
+
+    console.log(`[SessionManager] Evolution check for "${consoleThread.name}":`, evolution);
+
+    // Only emit for significant changes
+    if (evolution.shouldEvolve && evolution.evolutionType !== 'continuation') {
+      // For 'evolution' type, auto-update the name and store previous
+      if (evolution.evolutionType === 'evolution' && evolution.suggestedName) {
+        const reactiveStore = getReactiveTaskStore();
+        reactiveStore.updateThreadName(
+          consoleThread.id,
+          evolution.suggestedName,
+          true // Track previous name
+        );
+
+        console.log(`[SessionManager] Thread evolved: "${consoleThread.name}" → "${evolution.suggestedName}"`);
+      }
+
+      // For 'new_topic', emit event for user decision
+      if (evolution.evolutionType === 'new_topic' && evolution.suggestedName) {
+        this.emit('thread.evolution_suggested', {
+          threadId: consoleThread.id,
+          currentName: consoleThread.name,
+          suggestedName: evolution.suggestedName,
+          evolutionType: evolution.evolutionType,
+          confidence: evolution.confidence,
+        });
+      }
+    }
+  }
+
+  /**
+   * Phase 1 & 2: Ensure ConsoleThread exists and auto-create Goal
+   *
+   * - Gets or creates a ConsoleThread for this console/thread
+   * - Generates an AI thread name from the first prompt
+   * - Auto-creates a Goal linked to the thread
+   */
+  private async ensureConsoleThreadAndGoal(
+    threadId: string,
+    prompt: string,
+    projectPath: string
+  ): Promise<ConsoleThread> {
+    const reactiveStore = getReactiveTaskStore();
+
+    // Check if we already have a console thread for this thread ID
+    // (threadId is used as both the message thread ID and console ID in current design)
+    let consoleThread = reactiveStore.getActiveThreadForConsole(threadId, projectPath);
+
+    if (consoleThread) {
+      // Thread exists - increment session count
+      reactiveStore.incrementThreadSessionCount(consoleThread.id);
+      console.log(`[SessionManager] Using existing thread "${consoleThread.name}" (sessions: ${consoleThread.sessionCount + 1})`);
+      return consoleThread;
+    }
+
+    // New thread - generate AI name
+    const threadNamer = getThreadNamer();
+    let threadName: string;
+
+    try {
+      threadName = await threadNamer.generateName(prompt);
+      console.log(`[SessionManager] Generated thread name: "${threadName}"`);
+    } catch (err) {
+      console.error('[SessionManager] Thread name generation failed, using fallback:', err);
+      threadName = this.generateQuickSummary(prompt);
+    }
+
+    // Create the console thread
+    consoleThread = reactiveStore.createConsoleThread({
+      id: threadId, // Use threadId as the ConsoleThread ID for simplicity
+      name: threadName,
+      consoleId: threadId, // In current design, threadId = consoleId
+      projectPath,
+    });
+
+    console.log(`[SessionManager] Created ConsoleThread "${threadName}" (id: ${consoleThread.id})`);
+
+    // Phase 4: Check for overlap with other active threads
+    try {
+      const overlapDetector = getOverlapDetector();
+      const warning = await overlapDetector.checkOverlap(
+        threadName,
+        threadId,
+        consoleThread.id,
+        projectPath
+      );
+
+      if (warning) {
+        console.log(`[SessionManager] Thread overlap detected: "${threadName}" overlaps with "${warning.existingThreadName}"`);
+        this.emit('thread.overlap_warning', warning);
+      }
+    } catch (err) {
+      console.error('[SessionManager] Overlap check failed:', err);
+    }
+
+    // Phase 2: Auto-create a Goal for this thread
+    const goal = reactiveStore.createGoalForThread(consoleThread);
+    console.log(`[SessionManager] Auto-created Goal "${goal.title}" (id: ${goal.id}) for thread "${consoleThread.name}"`);
+
+    return consoleThread;
   }
 
   /** Process query in background */
@@ -609,7 +769,7 @@ export class SessionManager extends EventEmitter {
 
     // Extract tasks using persistent Claude Code subprocess
     const result = await extractor.extract(output);
-    
+
     if (result.tasks.length === 0) {
       console.log('[SessionManager] No tasks extracted from output');
       return;
@@ -622,6 +782,14 @@ export class SessionManager extends EventEmitter {
     }
 
     console.log(`[SessionManager] Extracted ${result.tasks.length} tasks:`, counts);
+
+    // Phase 2: Get the goal ID from the thread's ConsoleThread
+    let goalId: string | undefined;
+    const consoleThread = taskStore.getConsoleThread(source.threadId);
+    if (consoleThread?.goalId) {
+      goalId = consoleThread.goalId;
+      console.log(`[SessionManager] Associating tasks with goal ${goalId}`);
+    }
 
     // Add or update tasks by status
     for (const task of result.tasks) {
@@ -640,6 +808,8 @@ export class SessionManager extends EventEmitter {
         agentId: source.agentId,
         agentName: source.agentName,
         projectPath: source.projectPath,
+        goalId, // Phase 2: Auto-associate with thread's goal
+        consoleId: source.threadId, // Phase 3: Associate with console for Next Actions
       };
 
       if (task.status === 'completed') {

@@ -2374,6 +2374,32 @@ Format your response as plain text only:
       getQueryManager().notifyDataChanged('active_sessions');
     });
 
+    // Phase 4: Forward thread overlap warnings
+    sessionManager.on('thread.overlap_warning', (warning) => {
+      this.broadcastRaw({
+        type: 'event',
+        event: {
+          type: 'thread.overlap_warning',
+          payload: warning,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    });
+
+    // Phase 5: Forward thread evolution suggestions
+    sessionManager.on('thread.evolution_suggested', (data) => {
+      this.broadcastRaw({
+        type: 'event',
+        event: {
+          type: 'thread.evolution_suggested',
+          payload: data,
+          timestamp: new Date().toISOString(),
+        },
+      });
+      // Also notify about console threads changes
+      getQueryManager().notifyDataChanged('console_threads');
+    });
+
     return new Promise<void>((resolve, reject) => {
       // Create HTTP server with Hono handler
       this.httpServer = createServer(async (req, res) => {

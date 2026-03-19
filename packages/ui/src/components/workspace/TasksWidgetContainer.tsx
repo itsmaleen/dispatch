@@ -19,11 +19,13 @@ import {
   useTasks,
   useInboxTasks,
   useGoals,
+  useConsoleThreads,
 } from '../../hooks/useRealtimeQuery';
 import type {
   ActiveSession,
   ExtractedTask,
   Goal,
+  ConsoleThread,
 } from '@acc/contracts';
 
 // ============================================================================
@@ -66,6 +68,16 @@ function parseGoal(raw: any): Goal {
     createdAt: parseDate(raw.createdAt ?? raw.created_at),
     updatedAt: parseDate(raw.updatedAt ?? raw.updated_at),
     completedAt: raw.completedAt || raw.completed_at ? parseDate(raw.completedAt ?? raw.completed_at) : undefined,
+  };
+}
+
+function parseConsoleThread(raw: any): ConsoleThread {
+  return {
+    ...raw,
+    previousNames: raw.previousNames || raw.previous_names || [],
+    sessionCount: raw.sessionCount ?? raw.session_count ?? 0,
+    createdAt: parseDate(raw.createdAt ?? raw.created_at),
+    updatedAt: parseDate(raw.updatedAt ?? raw.updated_at),
   };
 }
 
@@ -129,6 +141,7 @@ export function TasksWidgetContainer({
   const { data: tasksData } = useTasks(ws ?? null, { limit: 100, includeCompleted: true, projectPath: workspacePath });
   const { data: inboxTasksData } = useInboxTasks(ws ?? null, workspacePath);
   const { data: goalsData } = useGoals(ws ?? null, { projectPath: workspacePath });
+  const { data: threadsData } = useConsoleThreads(ws ?? null, { status: 'active', projectPath: workspacePath });
 
   // Parse and memoize data with proper date handling
   const activeSessions = useMemo(() => {
@@ -156,6 +169,11 @@ export function TasksWidgetContainer({
     return goalsData.map(parseGoal);
   }, [goalsData]);
 
+  const threads = useMemo(() => {
+    if (!threadsData) return [];
+    return threadsData.map(parseConsoleThread);
+  }, [threadsData]);
+
   // ============================================================================
   // Legacy Event Handling
   // Some events need special UI logic that can't be handled by reactive queries
@@ -165,6 +183,28 @@ export function TasksWidgetContainer({
   // Local state for optimistic updates and prompt lifecycle
   const [localActiveSessions, setLocalActiveSessions] = useState<ActiveSession[]>([]);
   const [localRecentlyCompleted, setLocalRecentlyCompleted] = useState<ActiveSession[]>([]);
+
+  // Phase 4: Overlap warning state
+  interface OverlapWarningState {
+    newThreadId: string;
+    newThreadName: string;
+    newConsoleId: string;
+    existingThreadId: string;
+    existingThreadName: string;
+    existingConsoleId: string;
+    similarity: number;
+  }
+  const [overlapWarning, setOverlapWarning] = useState<OverlapWarningState | null>(null);
+
+  // Phase 5: Evolution suggestion state
+  interface EvolutionSuggestionState {
+    threadId: string;
+    currentName: string;
+    suggestedName: string;
+    evolutionType: 'evolution' | 'new_topic';
+    confidence: number;
+  }
+  const [evolutionSuggestion, setEvolutionSuggestion] = useState<EvolutionSuggestionState | null>(null);
 
   // Merge reactive data with local overrides (deduplicated by id)
   const mergedActiveSessions = useMemo(() => {
@@ -244,6 +284,16 @@ export function TasksWidgetContainer({
           setLocalActiveSessions(prev => prev.map(s =>
             s.id === sessionId ? { ...s, summary } : s
           ));
+        }
+
+        // Phase 4: Handle thread overlap warnings
+        if (evt.type === 'thread.overlap_warning') {
+          setOverlapWarning(evt.payload);
+        }
+
+        // Phase 5: Handle thread evolution suggestions
+        if (evt.type === 'thread.evolution_suggested') {
+          setEvolutionSuggestion(evt.payload);
         }
 
         // Clear local state when it's superseded by reactive updates
@@ -374,6 +424,30 @@ export function TasksWidgetContainer({
     }
   }, []);
 
+  // Phase 4: Dismiss overlap warning
+  const handleDismissOverlapWarning = useCallback(() => {
+    setOverlapWarning(null);
+  }, []);
+
+  // Phase 5: Evolution suggestion handlers
+  const handleDismissEvolutionSuggestion = useCallback(() => {
+    setEvolutionSuggestion(null);
+  }, []);
+
+  const handleAcceptEvolution = useCallback(async () => {
+    if (!evolutionSuggestion) return;
+
+    try {
+      // Create a new thread with the suggested name
+      // For now, just dismiss - in the future, this could create a new thread
+      // via API call: POST /threads with { name: evolutionSuggestion.suggestedName }
+      console.log(`[TasksWidgetContainer] User accepted evolution to: "${evolutionSuggestion.suggestedName}"`);
+      setEvolutionSuggestion(null);
+    } catch (err) {
+      console.error('[TasksWidgetContainer] Failed to accept evolution:', err);
+    }
+  }, [evolutionSuggestion]);
+
   // ============================================================================
   // Render
   // ============================================================================
@@ -384,6 +458,7 @@ export function TasksWidgetContainer({
       onTabChange={setActiveTab}
       activeSessions={mergedActiveSessions}
       recentlyCompleted={mergedRecentlyCompleted}
+      threads={threads}
       onDismissSession={handleDismissSession}
       onDeleteSession={handleDeleteSession}
       onHighlightConsole={handleHighlightConsole}
@@ -398,6 +473,11 @@ export function TasksWidgetContainer({
       onMoveToGoal={handleMoveToGoal}
       onSuggestGoalGroupings={handleSuggestGoalGroupings}
       isLoadingSuggestions={isLoadingSuggestions}
+      overlapWarning={overlapWarning}
+      onDismissOverlapWarning={handleDismissOverlapWarning}
+      evolutionSuggestion={evolutionSuggestion}
+      onDismissEvolutionSuggestion={handleDismissEvolutionSuggestion}
+      onAcceptEvolution={handleAcceptEvolution}
       panelId={panelId}
       isFocused={isFocused}
       isHovered={isHovered}

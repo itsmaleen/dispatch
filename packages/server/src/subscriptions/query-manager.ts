@@ -12,7 +12,7 @@
 
 import { getTaskStore } from '../persistence/task-store';
 import type { Task } from '../persistence/task-store';
-import type { Goal, ActiveSession } from '@acc/contracts';
+import type { Goal, ActiveSession, ConsoleThread } from '@acc/contracts';
 
 // ============================================================================
 // Types
@@ -186,6 +186,30 @@ export class QuerySubscriptionManager {
         return getTaskStore().getCounts(projectPath);
       },
       dependencies: ['tasks'],
+    });
+
+    // Console threads list (Phase 1)
+    this.registerQuery({
+      name: 'threads.list',
+      execute: (params) => {
+        const consoleId = params.consoleId as string | undefined;
+        const status = params.status as 'active' | 'completed' | 'abandoned' | undefined;
+        const projectPath = params.projectPath as string | undefined;
+        return getTaskStore().listConsoleThreads({ consoleId, status, projectPath });
+      },
+      dependencies: ['console_threads'],
+    });
+
+    // Active thread for a specific console (Phase 1)
+    this.registerQuery({
+      name: 'threads.active',
+      execute: (params) => {
+        const consoleId = params.consoleId as string;
+        const projectPath = params.projectPath as string | undefined;
+        if (!consoleId) return null;
+        return getTaskStore().getActiveThreadForConsole(consoleId, projectPath);
+      },
+      dependencies: ['console_threads'],
     });
   }
 
