@@ -451,11 +451,13 @@ export class WorktreeManager extends EventEmitter implements IWorktreeManager {
         console.log(`[WorktreeManager] Auto-committed uncommitted changes in ${branch}`);
       }
 
+      // Use provided message or default
+      const mergeMessage = message || `Merge branch '${branch}'`;
+
       // Checkout target branch in the main repo
       await git.checkout(this.repoPath, target);
 
       // Merge the branch
-      const mergeMessage = message || `Merge branch '${branch}'`;
       const mergeCommit = await git.merge(this.repoPath, branch, {
         message: mergeMessage,
         noFf: true,

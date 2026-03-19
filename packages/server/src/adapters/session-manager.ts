@@ -20,6 +20,7 @@ import { getReactiveTaskStore } from '../persistence/reactive-task-store';
 import { getWorktreeManager } from '../services/worktree-manager';
 import { getThreadNamer } from '../services/thread-namer';
 import { getOverlapDetector, type OverlapWarning } from '../services/overlap-detector';
+import { getMergeMessageGenerator } from '../services/merge-message-generator';
 import type { WorktreeInfo, WorktreeChanges, MergeResult, ConsoleThread } from '@acc/contracts';
 
 /** Active session bound to a thread */
@@ -1048,15 +1049,47 @@ export class SessionManager extends EventEmitter {
 
     const metadata = thread.metadata as any;
     const branch = metadata?.worktreeBranch;
+    const baseBranch = metadata?.worktreeBaseBranch;
 
     if (!branch) {
       throw new Error(`Thread ${threadId} worktree has no branch info`);
     }
 
+    // Generate merge message from conversation context if not provided
+    let mergeMessage = options.message;
+    if (!mergeMessage) {
+      console.log(`[SessionManager] Generating merge message from conversation context...`);
+      try {
+        // Get conversation history for this thread
+        const messages = this.getMessages(threadId);
+        const conversationMessages = messages.map(m => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+        }));
+
+        const generator = getMergeMessageGenerator();
+        const result = await generator.generate({
+          branch,
+          targetBranch: options.targetBranch || baseBranch || 'main',
+          messages: conversationMessages,
+          threadName: thread.name,
+        });
+
+        mergeMessage = result.fullMessage;
+        console.log(`[SessionManager] Generated merge message: ${result.title}`);
+      } catch (genError) {
+        console.error(`[SessionManager] Failed to generate merge message:`, genError);
+        // Fall back to thread name or branch name
+        mergeMessage = thread.name
+          ? `Merge: ${thread.name}`
+          : `Merge branch '${branch}'`;
+      }
+    }
+
     const worktreeManager = getWorktreeManager(thread.projectPath);
     const result = await worktreeManager.merge(branch, {
       targetBranch: options.targetBranch,
-      message: options.message,
+      message: mergeMessage,
     });
 
     // If merge succeeded and removeAfterMerge, clean up
