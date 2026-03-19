@@ -24,6 +24,7 @@ import { initQueryManager, getQueryManager } from './subscriptions/query-manager
 import { getTerminalManager, type TerminalManager } from './services/terminal-manager';
 import { executeTerminalTool, getTerminalToolSchema } from './services/terminal-tool';
 import { getAgentConsoleLauncher, type AgentConsoleLauncher, type AgentConsole, type LaunchAgentOptions } from './services/agent-console-launcher';
+import { getSemanticSearchService, type CommandInfo } from './services/semantic-search';
 import type { TerminalClientMessage, CreateTerminalOptions, TerminalToolInput } from '@acc/contracts';
 
 interface ManagedAdapter {
@@ -303,10 +304,68 @@ export class CommandCenterServer {
     // Get extractor status
     this.app.get('/extract/status', (c) => {
       const extractor = getExtractor();
-      return c.json({ 
-        ok: true, 
+      return c.json({
+        ok: true,
         ready: extractor.ready,
         busy: extractor.busy,
+      });
+    });
+
+    // ============ Semantic Search Routes ============
+
+    // Initialize semantic search with command corpus
+    this.app.post('/api/commands/init', async (c) => {
+      const { commands } = await c.req.json<{ commands: CommandInfo[] }>();
+
+      if (!commands || !Array.isArray(commands)) {
+        return c.json({ ok: false, error: 'commands array is required' }, 400);
+      }
+
+      const service = getSemanticSearchService();
+      service.setCommands(commands);
+
+      return c.json({
+        ok: true,
+        commandCount: commands.length,
+        ready: service.isReady(),
+      });
+    });
+
+    // Semantic search for commands
+    this.app.post('/api/commands/semantic-search', async (c) => {
+      const { query } = await c.req.json<{ query: string }>();
+
+      if (!query || typeof query !== 'string') {
+        return c.json({ ok: false, error: 'query string is required' }, 400);
+      }
+
+      const service = getSemanticSearchService();
+
+      if (!service.isReady()) {
+        return c.json({
+          ok: false,
+          error: 'Semantic search not initialized. Call /api/commands/init first.',
+        }, 503);
+      }
+
+      const response = await service.search(query);
+
+      return c.json({
+        ok: true,
+        results: response.results,
+        cached: response.cached,
+        latencyMs: response.latencyMs,
+      });
+    });
+
+    // Get semantic search status
+    this.app.get('/api/commands/semantic-search/status', (c) => {
+      const service = getSemanticSearchService();
+      return c.json({
+        ok: true,
+        ready: service.isReady(),
+        cache: service.getCacheStats(),
+        diagnostics: service.getDiagnostics(),
       });
     });
 

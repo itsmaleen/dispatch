@@ -1,8 +1,9 @@
 import { useEffect, useRef, useMemo, useCallback } from 'react';
-import { Search, ChevronRight, ArrowLeft } from 'lucide-react';
+import { Search, ChevronRight, ArrowLeft, Loader2 } from 'lucide-react';
 import { useCommandPaletteStore } from '../../stores/command-palette';
 import { useWorkspaceStore } from '../../stores/workspace';
-import { commandRegistry } from '../../lib/commands/registry';
+import { commandRegistry, mergeWithSemanticResults } from '../../lib/commands/registry';
+import { useSemanticSearch } from '../../hooks/useSemanticSearch';
 import { CommandGroup } from './CommandGroup';
 import { CommandItem } from './CommandItem';
 import type { Command } from '../../lib/commands/types';
@@ -19,6 +20,8 @@ export function CommandPalette() {
     inputMode,
     inputValue,
     preselectedCommandId,
+    semanticResults,
+    isSemanticLoading,
     close,
     setQuery,
     setSelectedIndex,
@@ -30,7 +33,25 @@ export function CommandPalette() {
     setInputValue,
     setRecentSelection,
     getRecentSelection,
+    setSemanticResults,
+    setSemanticLoading,
   } = useCommandPaletteStore();
+
+  // Semantic search (only at root level, with sufficient query length)
+  const { results: rawSemanticResults, isLoading: semanticLoading } = useSemanticSearch(query, {
+    debounceMs: 300,
+    minQueryLength: 2,
+    enabled: isOpen && subcommandStack.length === 0 && query.length >= 2,
+  });
+
+  // Sync semantic results to store
+  useEffect(() => {
+    setSemanticResults(rawSemanticResults);
+  }, [rawSemanticResults, setSemanticResults]);
+
+  useEffect(() => {
+    setSemanticLoading(semanticLoading);
+  }, [semanticLoading, setSemanticLoading]);
 
   // Subscribe to workspace state that affects command visibility
   // This ensures commands re-filter when focus or showAgentStatus changes
@@ -63,19 +84,37 @@ export function CommandPalette() {
     return currentCommands;
   }, [currentCommands, query, subcommandStack.length]);
 
+  // Merge fuzzy + semantic results at root level
+  const enhancedCommands = useMemo(() => {
+    if (subcommandStack.length > 0 || !query.trim()) {
+      // No semantic search in subcommand mode or without query
+      return filteredCommands;
+    }
+    // Only merge if we have semantic results
+    if (semanticResults.length === 0) {
+      return filteredCommands;
+    }
+    return mergeWithSemanticResults(filteredCommands, semanticResults, query);
+  }, [filteredCommands, semanticResults, query, subcommandStack.length]);
+
+  // Build a set of semantic match IDs for quick lookup
+  const semanticMatchIds = useMemo(() => {
+    return new Set(semanticResults.map(r => r.commandId));
+  }, [semanticResults]);
+
   // Group commands (only at root level)
   const groups = useMemo(() => {
     if (subcommandStack.length > 0) return null;
-    return commandRegistry.getGroups(filteredCommands);
-  }, [filteredCommands, subcommandStack.length]);
+    return commandRegistry.getGroups(enhancedCommands);
+  }, [enhancedCommands, subcommandStack.length]);
 
   // Flat list for navigation
   const flatCommands = useMemo(() => {
     if (groups) {
       return groups.flatMap((g) => g.commands);
     }
-    return filteredCommands;
-  }, [groups, filteredCommands]);
+    return subcommandStack.length > 0 ? filteredCommands : enhancedCommands;
+  }, [groups, filteredCommands, enhancedCommands, subcommandStack.length]);
 
   // Handle preselected command on open
   useEffect(() => {
@@ -267,6 +306,10 @@ export function CommandPalette() {
             }
             className="flex-1 bg-transparent text-zinc-100 placeholder:text-zinc-500 outline-none text-sm"
           />
+          {/* Semantic search loading indicator */}
+          {isSemanticLoading && (
+            <Loader2 className="w-4 h-4 text-violet-400 animate-spin flex-shrink-0" />
+          )}
         </div>
 
         {/* Command list */}
@@ -292,6 +335,7 @@ export function CommandPalette() {
                   selectedIndex={selectedIndex}
                   startIndex={startIndex}
                   onSelectCommand={executeCommand}
+                  semanticMatchIds={semanticMatchIds}
                 />
               );
             })
@@ -299,13 +343,12 @@ export function CommandPalette() {
             // Flat view (subcommand level)
             <div className="py-2 space-y-0.5">
               {filteredCommands.map((command, index) => (
-                <div key={command.id} data-selected={selectedIndex === index}>
-                  <CommandItem
-                    command={command}
-                    isSelected={selectedIndex === index}
-                    onSelect={() => executeCommand(command)}
-                  />
-                </div>
+                <CommandItem
+                  key={command.id}
+                  command={command}
+                  isSelected={selectedIndex === index}
+                  onSelect={() => executeCommand(command)}
+                />
               ))}
             </div>
           )}

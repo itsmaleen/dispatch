@@ -13,6 +13,12 @@ interface InputModeState {
   onSubmit: ((value: string) => void) | null;
 }
 
+/** Semantic search result from the server */
+export interface SemanticResult {
+  commandId: string;
+  score: number;
+}
+
 interface CommandPaletteState {
   // UI state (ephemeral - not persisted)
   isOpen: boolean;
@@ -25,6 +31,10 @@ interface CommandPaletteState {
 
   // Input mode (for "Create Task" etc.)
   inputMode: InputModeState;
+
+  // Semantic search state
+  semanticResults: SemanticResult[];
+  isSemanticLoading: boolean;
 
   // Persisted: recent selections per command (commandId -> subcommandId)
   recentSelections: Record<string, string>;
@@ -51,6 +61,10 @@ interface CommandPaletteState {
   setRecentSelection: (commandId: string, subcommandId: string) => void;
   getRecentSelection: (commandId: string) => string | undefined;
 
+  // Semantic search
+  setSemanticResults: (results: SemanticResult[]) => void;
+  setSemanticLoading: (loading: boolean) => void;
+
   // Helper to get preselected command ID (set during open)
   preselectedCommandId: string | null;
 }
@@ -69,6 +83,8 @@ export const useCommandPaletteStore = create<CommandPaletteState>()(
         placeholder: '',
         onSubmit: null,
       },
+      semanticResults: [],
+      isSemanticLoading: false,
       recentSelections: {},
       preselectedCommandId: null,
 
@@ -93,6 +109,8 @@ export const useCommandPaletteStore = create<CommandPaletteState>()(
           inputValue: '',
           subcommandStack: [],
           inputMode: { active: false, placeholder: '', onSubmit: null },
+          semanticResults: [],
+          isSemanticLoading: false,
           preselectedCommandId: null,
         });
       },
@@ -178,6 +196,15 @@ export const useCommandPaletteStore = create<CommandPaletteState>()(
 
       getRecentSelection: (commandId) => {
         return get().recentSelections[commandId];
+      },
+
+      // Semantic search
+      setSemanticResults: (results) => {
+        set({ semanticResults: results });
+      },
+
+      setSemanticLoading: (loading) => {
+        set({ isSemanticLoading: loading });
       },
     }),
     {
