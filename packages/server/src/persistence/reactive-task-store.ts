@@ -16,10 +16,10 @@
  *   store.dismissTask(id); // Automatically broadcasts tasks.updated
  */
 
-import { getTaskStore, type Task, type TaskStore } from './task-store';
+import { getTaskStore, type Task, type TaskStore, type CreateConsoleThreadInput, type ListConsoleThreadsOptions } from './task-store';
 import { getSyncEventEmitter } from '../events/sync-events';
 import { getQueryManager } from '../subscriptions/query-manager';
-import type { Goal, GoalCreatedVia } from '@acc/contracts';
+import type { Goal, GoalCreatedVia, ConsoleThread, ThreadStatus } from '@acc/contracts';
 
 // ============================================================================
 // Reactive Task Store
@@ -47,6 +47,10 @@ export class ReactiveTaskStore {
 
   private notifySessionsChanged(): void {
     getQueryManager().notifyDataChanged('active_sessions');
+  }
+
+  private notifyThreadsChanged(): void {
+    getQueryManager().notifyDataChanged('console_threads');
   }
 
   // --------------------------------------------------------------------------
@@ -194,6 +198,62 @@ export class ReactiveTaskStore {
   getSession(id: string) { return this.store.getSession(id); }
   getActiveSessions(projectPath?: string) { return this.store.getActiveSessions(projectPath); }
   getRecentlyCompletedSessions(limit?: number, projectPath?: string) { return this.store.getRecentlyCompletedSessions(limit, projectPath); }
+
+  // Console Threads (read)
+  getConsoleThread(id: string) { return this.store.getConsoleThread(id); }
+  getActiveThreadForConsole(consoleId: string, projectPath?: string) { return this.store.getActiveThreadForConsole(consoleId, projectPath); }
+  listConsoleThreads(options?: ListConsoleThreadsOptions) { return this.store.listConsoleThreads(options); }
+  getThreadByGoalId(goalId: string) { return this.store.getThreadByGoalId(goalId); }
+
+  // --------------------------------------------------------------------------
+  // Console Thread Mutations (auto-emit events)
+  // --------------------------------------------------------------------------
+
+  /** Create a new console thread */
+  createConsoleThread(input: CreateConsoleThreadInput): ConsoleThread {
+    const thread = this.store.createConsoleThread(input);
+    this.notifyThreadsChanged();
+    return thread;
+  }
+
+  /** Update thread name */
+  updateThreadName(threadId: string, newName: string, trackPrevious = true): void {
+    this.store.updateThreadName(threadId, newName, trackPrevious);
+    this.notifyThreadsChanged();
+  }
+
+  /** Update thread topic signature */
+  updateThreadTopicSignature(threadId: string, signature: { concepts: string[]; domain?: string }): void {
+    this.store.updateThreadTopicSignature(threadId, signature);
+    this.notifyThreadsChanged();
+  }
+
+  /** Link thread to a goal */
+  linkThreadToGoal(threadId: string, goalId: string): void {
+    this.store.linkThreadToGoal(threadId, goalId);
+    this.notifyThreadsChanged();
+    this.notifyGoalsChanged();
+  }
+
+  /** Increment session count for a thread */
+  incrementThreadSessionCount(threadId: string): void {
+    this.store.incrementThreadSessionCount(threadId);
+    this.notifyThreadsChanged();
+  }
+
+  /** Update thread status */
+  updateThreadStatus(threadId: string, status: ThreadStatus): void {
+    this.store.updateThreadStatus(threadId, status);
+    this.notifyThreadsChanged();
+  }
+
+  /** Create a goal for a thread */
+  createGoalForThread(thread: ConsoleThread): Goal {
+    const goal = this.store.createGoalForThread(thread);
+    this.notifyGoalsChanged();
+    this.notifyThreadsChanged();
+    return goal;
+  }
 }
 
 // ============================================================================

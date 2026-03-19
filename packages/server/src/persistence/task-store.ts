@@ -51,14 +51,36 @@ CREATE TABLE IF NOT EXISTS goals (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   description TEXT,
-  created_via TEXT NOT NULL CHECK (created_via IN ('plan', 'manual', 'ai-suggestion')),
+  created_via TEXT NOT NULL CHECK (created_via IN ('plan', 'manual', 'ai-suggestion', 'auto')),
   session_id TEXT,
   status TEXT NOT NULL CHECK (status IN ('active', 'completed', 'archived')) DEFAULT 'active',
   -- NOTE: project_path is added via migration 4, not in base schema
+  -- NOTE: thread_id is added via migration 5
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   completed_at TEXT
 );
+
+-- Console threads table for tracking conversation context
+CREATE TABLE IF NOT EXISTS console_threads (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  console_id TEXT NOT NULL,
+  goal_id TEXT,
+  project_path TEXT NOT NULL,
+  worktree_path TEXT,
+  status TEXT NOT NULL CHECK (status IN ('active', 'completed', 'abandoned')) DEFAULT 'active',
+  previous_names_json TEXT DEFAULT '[]',
+  topic_signature_json TEXT,
+  session_count INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_console_threads_console ON console_threads(console_id);
+CREATE INDEX IF NOT EXISTS idx_console_threads_goal ON console_threads(goal_id);
+CREATE INDEX IF NOT EXISTS idx_console_threads_project ON console_threads(project_path);
+CREATE INDEX IF NOT EXISTS idx_console_threads_status ON console_threads(status);
 
 -- Active sessions table for tracking running prompts
 CREATE TABLE IF NOT EXISTS active_sessions (
@@ -101,6 +123,8 @@ import type {
   ActiveSession,
   ExtractedTaskStatus,
   ExtractedTaskCategory,
+  ConsoleThread,
+  ThreadStatus,
 } from '@acc/contracts';
 
 export interface Task {
@@ -112,6 +136,7 @@ export interface Task {
   confidence: number;
   source?: TaskSource;
   goalId?: string;
+  consoleId?: string;
   projectPath?: string;
   threadId?: string;
   turnId?: string;
@@ -132,6 +157,7 @@ interface TaskRow {
   source_type: string | null;
   source_data: string | null;
   goal_id: string | null;
+  console_id: string | null;
   project_path: string | null;
   thread_id: string | null;
   turn_id: string | null;
@@ -149,6 +175,7 @@ interface GoalRow {
   description: string | null;
   created_via: string;
   session_id: string | null;
+  thread_id: string | null;
   project_path: string | null;
   status: string;
   created_at: string;
@@ -170,6 +197,21 @@ interface ActiveSessionRow {
   dismissed: number;
 }
 
+interface ConsoleThreadRow {
+  id: string;
+  name: string;
+  console_id: string;
+  goal_id: string | null;
+  project_path: string;
+  worktree_path: string | null;
+  status: string;
+  previous_names_json: string;
+  topic_signature_json: string | null;
+  session_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CreateTaskInput {
   text: string;
   summary?: string;
@@ -177,6 +219,7 @@ export interface CreateTaskInput {
   confidence?: number;
   source?: TaskSource;
   goalId?: string;
+  consoleId?: string;
   projectPath?: string;
   threadId?: string;
   turnId?: string;
@@ -207,6 +250,21 @@ export interface ListGoalsOptions {
   status?: GoalStatus | GoalStatus[];
   sessionId?: string;
   projectPath?: string;
+  limit?: number;
+}
+
+export interface CreateConsoleThreadInput {
+  id?: string;
+  name: string;
+  consoleId: string;
+  projectPath: string;
+  worktreePath?: string;
+}
+
+export interface ListConsoleThreadsOptions {
+  consoleId?: string;
+  projectPath?: string;
+  status?: ThreadStatus | ThreadStatus[];
   limit?: number;
 }
 
@@ -323,6 +381,51 @@ export class TaskStore {
       this.recordMigration(4, 'Add project_path column to tasks, goals, and active_sessions');
     }
 
+    // Migration 5: Add console_threads table and thread_id to goals
+    if (currentVersion < 5) {
+      // Create console_threads table if it doesn't exist (may exist from base schema for new DBs)
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS console_threads (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          console_id TEXT NOT NULL,
+          goal_id TEXT,
+          project_path TEXT NOT NULL,
+          worktree_path TEXT,
+          status TEXT NOT NULL CHECK (status IN ('active', 'completed', 'abandoned')) DEFAULT 'active',
+          previous_names_json TEXT DEFAULT '[]',
+          topic_signature_json TEXT,
+          session_count INTEGER DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+
+      // Create indexes
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_console_threads_console ON console_threads(console_id)');
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_console_threads_goal ON console_threads(goal_id)');
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_console_threads_project ON console_threads(project_path)');
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_console_threads_status ON console_threads(status)');
+
+      // Add thread_id column to goals for bidirectional reference
+      if (!this.hasColumn('goals', 'thread_id')) {
+        this.db.exec('ALTER TABLE goals ADD COLUMN thread_id TEXT');
+        this.db.exec('CREATE INDEX IF NOT EXISTS idx_goals_thread ON goals(thread_id)');
+      }
+
+      // Add console_id column to tasks for Phase 3
+      if (!this.hasColumn('tasks', 'console_id')) {
+        this.db.exec('ALTER TABLE tasks ADD COLUMN console_id TEXT');
+        this.db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_console ON tasks(console_id)');
+      }
+
+      // Update goals created_via constraint to include 'auto'
+      // SQLite doesn't support ALTER CONSTRAINT, but the check is in the INSERT
+      // So we just need to ensure new inserts can use 'auto'
+
+      this.recordMigration(5, 'Add console_threads table, thread_id to goals, console_id to tasks');
+    }
+
     console.log('[TaskStore] Migrations complete');
   }
 
@@ -428,8 +531,8 @@ export class TaskStore {
     const sourceData = input.source ? JSON.stringify(input.source) : null;
 
     const stmt = this.db.prepare(`
-      INSERT INTO tasks (id, text, summary, status, category, confidence, source_type, source_data, goal_id, project_path, thread_id, turn_id, agent_id, agent_name, created_at, updated_at, completed_at, text_hash)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (id, text, summary, status, category, confidence, source_type, source_data, goal_id, console_id, project_path, thread_id, turn_id, agent_id, agent_name, created_at, updated_at, completed_at, text_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -442,6 +545,7 @@ export class TaskStore {
       sourceType,
       sourceData,
       input.goalId ?? null,
+      input.consoleId ?? null,
       input.projectPath ?? null,
       input.threadId ?? null,
       input.turnId ?? null,
@@ -664,6 +768,7 @@ export class TaskStore {
       confidence: row.confidence,
       source,
       goalId: row.goal_id ?? undefined,
+      consoleId: row.console_id ?? undefined,
       projectPath: row.project_path ?? undefined,
       threadId: row.thread_id ?? undefined,
       turnId: row.turn_id ?? undefined,
@@ -873,6 +978,7 @@ export class TaskStore {
       description: row.description ?? undefined,
       createdVia: row.created_via as GoalCreatedVia,
       sessionId: row.session_id ?? undefined,
+      threadId: row.thread_id ?? undefined,
       projectPath: row.project_path ?? undefined,
       taskIds: [], // Populated separately if needed
       completedCount: counts?.completed ?? 0,
@@ -1008,6 +1114,217 @@ export class TaskStore {
       projectPath: row.project_path ?? undefined,
       startedAt: new Date(row.started_at),
       durationMs: row.duration_ms ?? undefined,
+    };
+  }
+
+  // ============================================================================
+  // CONSOLE THREADS (Phase 1 - Thread concept with naming)
+  // ============================================================================
+
+  /** Create a new console thread */
+  createConsoleThread(input: CreateConsoleThreadInput): ConsoleThread {
+    const id = input.id || `thread-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const now = new Date().toISOString();
+
+    const stmt = this.db.prepare(`
+      INSERT INTO console_threads (id, name, console_id, project_path, worktree_path, status, session_count, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'active', 0, ?, ?)
+    `);
+
+    stmt.run(
+      id,
+      input.name,
+      input.consoleId,
+      input.projectPath,
+      input.worktreePath ?? null,
+      now,
+      now
+    );
+
+    return this.getConsoleThread(id)!;
+  }
+
+  /** Get console thread by ID */
+  getConsoleThread(id: string): ConsoleThread | null {
+    const stmt = this.db.prepare('SELECT * FROM console_threads WHERE id = ?');
+    const row = stmt.get(id) as ConsoleThreadRow | undefined;
+    return row ? this.rowToConsoleThread(row) : null;
+  }
+
+  /** Get active thread for a console */
+  getActiveThreadForConsole(consoleId: string, projectPath?: string): ConsoleThread | null {
+    let sql = `
+      SELECT * FROM console_threads
+      WHERE console_id = ? AND status = 'active'
+    `;
+    const params: unknown[] = [consoleId];
+
+    if (projectPath) {
+      sql += ' AND project_path = ?';
+      params.push(projectPath);
+    }
+
+    sql += ' ORDER BY updated_at DESC LIMIT 1';
+
+    const stmt = this.db.prepare(sql);
+    const row = stmt.get(...params) as ConsoleThreadRow | undefined;
+    return row ? this.rowToConsoleThread(row) : null;
+  }
+
+  /** List console threads with filters */
+  listConsoleThreads(options: ListConsoleThreadsOptions = {}): ConsoleThread[] {
+    const { consoleId, projectPath, status, limit = 50 } = options;
+
+    let sql = 'SELECT * FROM console_threads WHERE 1=1';
+    const params: unknown[] = [];
+
+    if (consoleId) {
+      sql += ' AND console_id = ?';
+      params.push(consoleId);
+    }
+
+    if (projectPath) {
+      sql += ' AND project_path = ?';
+      params.push(projectPath);
+    }
+
+    if (status) {
+      if (Array.isArray(status)) {
+        sql += ` AND status IN (${status.map(() => '?').join(',')})`;
+        params.push(...status);
+      } else {
+        sql += ' AND status = ?';
+        params.push(status);
+      }
+    }
+
+    sql += ' ORDER BY updated_at DESC LIMIT ?';
+    params.push(limit);
+
+    const stmt = this.db.prepare(sql);
+    const rows = stmt.all(...params) as ConsoleThreadRow[];
+    return rows.map(r => this.rowToConsoleThread(r));
+  }
+
+  /** Update console thread name */
+  updateThreadName(id: string, newName: string, trackPrevious = true): void {
+    const now = new Date().toISOString();
+
+    if (trackPrevious) {
+      // Get current name and add to history
+      const thread = this.getConsoleThread(id);
+      if (thread && thread.name !== newName) {
+        const previousNames = thread.previousNames || [];
+        previousNames.push(thread.name);
+
+        const stmt = this.db.prepare(`
+          UPDATE console_threads
+          SET name = ?, previous_names_json = ?, updated_at = ?
+          WHERE id = ?
+        `);
+        stmt.run(newName, JSON.stringify(previousNames), now, id);
+        return;
+      }
+    }
+
+    const stmt = this.db.prepare(`
+      UPDATE console_threads SET name = ?, updated_at = ? WHERE id = ?
+    `);
+    stmt.run(newName, now, id);
+  }
+
+  /** Update thread topic signature */
+  updateThreadTopicSignature(id: string, signature: { concepts: string[]; domain?: string }): void {
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(`
+      UPDATE console_threads SET topic_signature_json = ?, updated_at = ? WHERE id = ?
+    `);
+    stmt.run(JSON.stringify(signature), now, id);
+  }
+
+  /** Link thread to a goal */
+  linkThreadToGoal(threadId: string, goalId: string): void {
+    const now = new Date().toISOString();
+
+    // Update thread with goal reference
+    const stmt1 = this.db.prepare(`
+      UPDATE console_threads SET goal_id = ?, updated_at = ? WHERE id = ?
+    `);
+    stmt1.run(goalId, now, threadId);
+
+    // Update goal with thread reference
+    const stmt2 = this.db.prepare(`
+      UPDATE goals SET thread_id = ?, updated_at = ? WHERE id = ?
+    `);
+    stmt2.run(threadId, now, goalId);
+  }
+
+  /** Increment session count for a thread */
+  incrementThreadSessionCount(id: string): void {
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(`
+      UPDATE console_threads SET session_count = session_count + 1, updated_at = ? WHERE id = ?
+    `);
+    stmt.run(now, id);
+  }
+
+  /** Update thread status */
+  updateThreadStatus(id: string, status: ThreadStatus): void {
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(`
+      UPDATE console_threads SET status = ?, updated_at = ? WHERE id = ?
+    `);
+    stmt.run(status, now, id);
+  }
+
+  /** Create a goal for a thread (Phase 2 helper) */
+  createGoalForThread(thread: ConsoleThread): Goal {
+    const goal = this.createGoal({
+      title: thread.name,
+      createdVia: 'auto',
+      sessionId: thread.id, // Use thread ID as session reference
+      projectPath: thread.projectPath,
+    });
+
+    // Link thread to goal
+    this.linkThreadToGoal(thread.id, goal.id);
+
+    return goal;
+  }
+
+  /** Get thread by goal ID */
+  getThreadByGoalId(goalId: string): ConsoleThread | null {
+    const stmt = this.db.prepare('SELECT * FROM console_threads WHERE goal_id = ?');
+    const row = stmt.get(goalId) as ConsoleThreadRow | undefined;
+    return row ? this.rowToConsoleThread(row) : null;
+  }
+
+  private rowToConsoleThread(row: ConsoleThreadRow): ConsoleThread {
+    let previousNames: string[] = [];
+    try {
+      previousNames = JSON.parse(row.previous_names_json || '[]');
+    } catch {
+      previousNames = [];
+    }
+
+    let topicSignature: string | undefined;
+    if (row.topic_signature_json) {
+      topicSignature = row.topic_signature_json;
+    }
+
+    return {
+      id: row.id,
+      name: row.name,
+      consoleId: row.console_id,
+      goalId: row.goal_id ?? undefined,
+      projectPath: row.project_path,
+      worktreePath: row.worktree_path ?? undefined,
+      status: row.status as ThreadStatus,
+      previousNames: previousNames.length > 0 ? previousNames : undefined,
+      topicSignature,
+      sessionCount: row.session_count,
+      createdAt: new Date(row.created_at),
+      updatedAt: new Date(row.updated_at),
     };
   }
 

@@ -50,7 +50,48 @@ export type TaskSource =
 // ============================================================================
 
 export type GoalStatus = 'active' | 'completed' | 'archived';
-export type GoalCreatedVia = 'plan' | 'manual' | 'ai-suggestion';
+export type GoalCreatedVia = 'plan' | 'manual' | 'ai-suggestion' | 'auto';
+
+// ============================================================================
+// CONSOLE THREAD (conversation context within a console)
+// ============================================================================
+
+export type ThreadStatus = 'active' | 'completed' | 'abandoned';
+
+export interface ConsoleThread {
+  /** Unique thread ID */
+  id: string;
+
+  /** AI-generated name (3-8 words, imperative voice) */
+  name: string;
+
+  /** Physical console/terminal pane ID this thread belongs to */
+  consoleId: string;
+
+  /** Auto-created goal for this thread */
+  goalId?: string;
+
+  /** Workspace path */
+  projectPath: string;
+
+  /** Worktree path (if in a git worktree) */
+  worktreePath?: string;
+
+  /** Thread status */
+  status: ThreadStatus;
+
+  /** Previous names if thread evolved */
+  previousNames?: string[];
+
+  /** Semantic signature for topic drift detection */
+  topicSignature?: string;
+
+  /** Number of sessions/prompts in this thread */
+  sessionCount: number;
+
+  createdAt: Date;
+  updatedAt: Date;
+}
 
 export interface Goal {
   id: string;
@@ -66,6 +107,9 @@ export interface Goal {
 
   /** Terminal session that spawned this goal (for auto-grouping) */
   sessionId?: string;
+
+  /** Associated thread ID (for auto-created goals) */
+  threadId?: string;
 
   /** Workspace path this goal belongs to */
   projectPath?: string;
@@ -144,6 +188,9 @@ export interface ExtractedTask {
 
   /** Parent goal ID (if assigned to a goal) */
   goalId?: string;
+
+  /** Console this task should be executed in */
+  consoleId?: string;
 
   /** Workspace path this task belongs to */
   projectPath?: string;

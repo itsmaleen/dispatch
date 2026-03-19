@@ -176,7 +176,7 @@ export function useRealtimeQuery<T>(
 // All hooks accept an optional projectPath (workspacePath) to filter by workspace
 // ============================================================================
 
-import type { ActiveSession, ExtractedTask, Goal } from '@acc/contracts';
+import type { ActiveSession, ExtractedTask, Goal, ConsoleThread } from '@acc/contracts';
 
 /**
  * Subscribe to active sessions (currently running prompts)
@@ -279,4 +279,26 @@ export function useGoals(
  */
 export function useGoal(ws: WebSocket | null, goalId: string, projectPath?: string) {
   return useRealtimeQuery<Goal & { tasks: ExtractedTask[] }>(ws, 'goals.get', { goalId, projectPath });
+}
+
+/**
+ * Subscribe to console threads list
+ * @param ws - WebSocket connection
+ * @param options - Filter options including consoleId, status, and projectPath
+ */
+export function useConsoleThreads(
+  ws: WebSocket | null,
+  options: { consoleId?: string; status?: ConsoleThread['status']; projectPath?: string } = {}
+) {
+  return useRealtimeQuery<ConsoleThread[]>(ws, 'threads.list', options);
+}
+
+/**
+ * Subscribe to active thread for a specific console
+ * @param ws - WebSocket connection
+ * @param consoleId - Console ID to get thread for
+ * @param projectPath - Optional workspace path to filter by
+ */
+export function useActiveThreadForConsole(ws: WebSocket | null, consoleId: string, projectPath?: string) {
+  return useRealtimeQuery<ConsoleThread | null>(ws, 'threads.active', { consoleId, projectPath });
 }

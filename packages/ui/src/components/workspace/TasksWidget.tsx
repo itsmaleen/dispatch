@@ -3,11 +3,11 @@
  *
  * Tabs:
  * - Active: Currently running prompts (Tier 1)
- * - Work Items: Extracted tasks from agent outputs (Tier 2)
+ * - Next Actions: High-confidence tasks grouped by console (Tier 2)
  * - Goals: Organizing containers with progress tracking (Tier 3)
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Sparkles,
   Plus,
@@ -27,12 +27,14 @@ import {
   GripVertical,
   MonitorDot,
   StopCircle,
+  AlertTriangle,
 } from 'lucide-react';
 import { useDraggable } from '@dnd-kit/core';
 import type {
   ActiveSession,
   ExtractedTask,
   Goal,
+  ConsoleThread,
 } from '@acc/contracts';
 
 // Inline DraggableHandle (duplicated from Workspace.tsx to avoid circular deps)
@@ -63,14 +65,15 @@ export interface TasksWidgetProps {
   activeTab: TasksTab;
   onTabChange: (tab: TasksTab) => void;
 
-  // Tier 1: Active Sessions
+  // Tier 1: Active Sessions (grouped by thread)
   activeSessions: ActiveSession[];
   recentlyCompleted: ActiveSession[];
+  threads: ConsoleThread[];
   onDismissSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
   onHighlightConsole: (sessionId: string) => void;
 
-  // Tier 2: Work Items
+  // Tier 2: Work Items (Next Actions)
   workItems: ExtractedTask[];
   onDismissTask: (taskId: string) => void;
   onCompleteTask: (taskId: string) => void;
@@ -84,6 +87,25 @@ export interface TasksWidgetProps {
   onMoveToGoal: (taskId: string, goalId: string) => void;
   onSuggestGoalGroupings: () => void;
   isLoadingSuggestions?: boolean;
+
+  // Phase 4: Overlap warning
+  overlapWarning?: {
+    newThreadName: string;
+    existingThreadName: string;
+    existingConsoleId: string;
+  } | null;
+  onDismissOverlapWarning?: () => void;
+
+  // Phase 5: Evolution suggestion
+  evolutionSuggestion?: {
+    threadId: string;
+    currentName: string;
+    suggestedName: string;
+    evolutionType: 'evolution' | 'new_topic';
+    confidence: number;
+  } | null;
+  onDismissEvolutionSuggestion?: () => void;
+  onAcceptEvolution?: () => void;
 
   // UI state
   panelId?: string;
@@ -101,6 +123,7 @@ export function TasksWidget({
   onTabChange,
   activeSessions,
   recentlyCompleted,
+  threads,
   onDismissSession,
   onDeleteSession,
   onHighlightConsole,
@@ -115,6 +138,11 @@ export function TasksWidget({
   onMoveToGoal,
   onSuggestGoalGroupings,
   isLoadingSuggestions,
+  overlapWarning,
+  onDismissOverlapWarning,
+  evolutionSuggestion,
+  onDismissEvolutionSuggestion,
+  onAcceptEvolution,
   panelId,
   isFocused,
   isHovered,
@@ -183,7 +211,7 @@ export function TasksWidget({
           active={activeTab === 'work-items'}
           onClick={() => onTabChange('work-items')}
           count={workItemsCount}
-          label="Work Items"
+          label="Next Actions"
         />
         <TabButton
           active={activeTab === 'goals'}
@@ -193,12 +221,79 @@ export function TasksWidget({
         />
       </div>
 
+      {/* Phase 4: Overlap Warning Banner */}
+      {overlapWarning && (
+        <div className="flex-shrink-0 bg-amber-500/10 border-b border-amber-500/30 px-3 py-2">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-amber-200">
+                <span className="font-medium">"{overlapWarning.newThreadName}"</span> overlaps with{' '}
+                <span className="font-medium">"{overlapWarning.existingThreadName}"</span> on another console.
+              </p>
+              <div className="flex gap-2 mt-1.5">
+                <button
+                  onClick={onDismissOverlapWarning}
+                  className="text-[10px] px-2 py-0.5 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 transition-colors"
+                >
+                  Keep separate
+                </button>
+              </div>
+            </div>
+            <button
+              onClick={onDismissOverlapWarning}
+              className="p-0.5 text-zinc-500 hover:text-zinc-300 transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Phase 5: Evolution Suggestion Banner */}
+      {evolutionSuggestion && (
+        <div className="flex-shrink-0 bg-blue-500/10 border-b border-blue-500/30 px-3 py-2">
+          <div className="flex items-start gap-2">
+            <Sparkles className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-blue-200">
+                This seems different from <span className="font-medium">"{evolutionSuggestion.currentName}"</span>.
+              </p>
+              <p className="text-[10px] text-blue-300/70 mt-0.5">
+                Suggested: <span className="font-medium">"{evolutionSuggestion.suggestedName}"</span>
+              </p>
+              <div className="flex gap-2 mt-1.5">
+                <button
+                  onClick={onAcceptEvolution}
+                  className="text-[10px] px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-500 text-white transition-colors"
+                >
+                  Start new thread
+                </button>
+                <button
+                  onClick={onDismissEvolutionSuggestion}
+                  className="text-[10px] px-2 py-0.5 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 transition-colors"
+                >
+                  Keep current
+                </button>
+              </div>
+            </div>
+            <button
+              onClick={onDismissEvolutionSuggestion}
+              className="p-0.5 text-zinc-500 hover:text-zinc-300 transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Tab Content */}
       <div className="flex-1 overflow-y-auto">
         {activeTab === 'active' && (
           <ActiveSessionsTab
             sessions={activeSessions}
             recentlyCompleted={recentlyCompleted}
+            threads={threads}
             onDismissSession={onDismissSession}
             onDeleteSession={onDeleteSession}
             onHighlightConsole={onHighlightConsole}
@@ -268,22 +363,74 @@ function TabButton({
 }
 
 // ============================================================================
-// TIER 1: ACTIVE SESSIONS TAB
+// TIER 1: ACTIVE SESSIONS TAB (Grouped by Thread)
 // ============================================================================
+
+interface ThreadGroup {
+  thread: ConsoleThread | null;
+  sessions: ActiveSession[];
+}
 
 function ActiveSessionsTab({
   sessions,
   recentlyCompleted,
+  threads,
   onDismissSession,
   onDeleteSession,
   onHighlightConsole,
 }: {
   sessions: ActiveSession[];
   recentlyCompleted: ActiveSession[];
+  threads: ConsoleThread[];
   onDismissSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   onHighlightConsole: (id: string) => void;
 }) {
+  // Group sessions by their thread (session.id is the threadId)
+  const threadGroups = useMemo(() => {
+    const groups: ThreadGroup[] = [];
+    const threadMap = new Map(threads.map(t => [t.id, t]));
+    const orphanSessions: ActiveSession[] = [];
+
+    // Group sessions by thread
+    const sessionsByThread = new Map<string, ActiveSession[]>();
+    for (const session of sessions) {
+      // The session.id corresponds to the thread ID
+      const threadId = session.id;
+      const thread = threadMap.get(threadId);
+
+      if (thread) {
+        const existing = sessionsByThread.get(thread.id) || [];
+        existing.push(session);
+        sessionsByThread.set(thread.id, existing);
+      } else {
+        orphanSessions.push(session);
+      }
+    }
+
+    // Convert to groups
+    for (const [threadId, threadSessions] of sessionsByThread) {
+      const thread = threadMap.get(threadId);
+      if (thread) {
+        groups.push({ thread, sessions: threadSessions });
+      }
+    }
+
+    // Add orphan sessions (no thread yet or thread not loaded)
+    if (orphanSessions.length > 0) {
+      groups.push({ thread: null, sessions: orphanSessions });
+    }
+
+    // Sort by most recent session
+    groups.sort((a, b) => {
+      const aLatest = Math.max(...a.sessions.map(s => s.startedAt.getTime()));
+      const bLatest = Math.max(...b.sessions.map(s => s.startedAt.getTime()));
+      return bLatest - aLatest;
+    });
+
+    return groups;
+  }, [sessions, threads]);
+
   if (sessions.length === 0 && recentlyCompleted.length === 0) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-zinc-600 text-sm p-4">
@@ -296,13 +443,14 @@ function ActiveSessionsTab({
 
   return (
     <div className="p-2 space-y-2">
-      {/* Currently Running */}
-      {sessions.map((session) => (
-        <ActiveSessionCard
-          key={session.id}
-          session={session}
-          onDelete={() => onDeleteSession(session.id)}
-          onHighlightConsole={() => onHighlightConsole(session.id)}
+      {/* Currently Running - Grouped by Thread */}
+      {threadGroups.map((group, idx) => (
+        <ThreadSessionGroup
+          key={group.thread?.id || `orphan-${idx}`}
+          thread={group.thread}
+          sessions={group.sessions}
+          onDeleteSession={onDeleteSession}
+          onHighlightConsole={onHighlightConsole}
         />
       ))}
 
@@ -318,6 +466,7 @@ function ActiveSessionsTab({
             <RecentSessionCard
               key={session.id}
               session={session}
+              threadName={threads.find(t => t.id === session.id)?.name}
               onDismiss={() => onDismissSession(session.id)}
             />
           ))}
@@ -327,12 +476,65 @@ function ActiveSessionsTab({
   );
 }
 
+function ThreadSessionGroup({
+  thread,
+  sessions,
+  onDeleteSession,
+  onHighlightConsole,
+}: {
+  thread: ConsoleThread | null;
+  sessions: ActiveSession[];
+  onDeleteSession: (id: string) => void;
+  onHighlightConsole: (id: string) => void;
+}) {
+  // For threads with a name, show the thread header
+  // For orphan sessions (no thread), show them directly
+  if (!thread) {
+    return (
+      <>
+        {sessions.map((session) => (
+          <ActiveSessionCard
+            key={session.id}
+            session={session}
+            onDelete={() => onDeleteSession(session.id)}
+            onHighlightConsole={() => onHighlightConsole(session.id)}
+          />
+        ))}
+      </>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5">
+      {/* Thread Header */}
+      <div className="flex items-center gap-2 px-2 py-1">
+        <div className="w-1.5 h-1.5 rounded-full bg-violet-400" />
+        <span className="text-xs font-medium text-zinc-300">{thread.name}</span>
+        <span className="text-[10px] text-zinc-600">Console {thread.consoleId.slice(-4)}</span>
+      </div>
+
+      {/* Sessions in this thread */}
+      {sessions.map((session) => (
+        <ActiveSessionCard
+          key={session.id}
+          session={session}
+          threadName={thread.name}
+          onDelete={() => onDeleteSession(session.id)}
+          onHighlightConsole={() => onHighlightConsole(session.id)}
+        />
+      ))}
+    </div>
+  );
+}
+
 function ActiveSessionCard({
   session,
+  threadName,
   onDelete,
   onHighlightConsole,
 }: {
   session: ActiveSession;
+  threadName?: string;
   onDelete: () => void;
   onHighlightConsole: () => void;
 }) {
@@ -435,9 +637,11 @@ function ActiveSessionCard({
 
 function RecentSessionCard({
   session,
+  threadName,
   onDismiss,
 }: {
   session: ActiveSession;
+  threadName?: string;
   onDismiss: () => void;
 }) {
   const formatDuration = (ms?: number) => {
@@ -451,9 +655,14 @@ function RecentSessionCard({
   return (
     <div className="p-2 rounded border border-zinc-800 bg-zinc-800/30 group">
       <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
           <Check className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-          <span className="text-xs text-zinc-300 truncate">{session.summary}</span>
+          <div className="flex flex-col min-w-0 flex-1">
+            {threadName && (
+              <span className="text-[10px] text-zinc-500 truncate">{threadName}</span>
+            )}
+            <span className="text-xs text-zinc-300 truncate">{session.summary}</span>
+          </div>
         </div>
         <div className="flex items-center gap-1.5">
           <span className="text-[10px] text-zinc-500">{formatDuration(session.durationMs)}</span>
@@ -471,8 +680,17 @@ function RecentSessionCard({
 }
 
 // ============================================================================
-// TIER 2: WORK ITEMS TAB
+// TIER 2: NEXT ACTIONS TAB (formerly Work Items)
+// Groups actions by console and shows suggestions separately
 // ============================================================================
+
+// Minimum confidence to show as a "Next Action" (vs suggestion)
+const MIN_ACTION_CONFIDENCE = 0.75;
+
+interface ConsoleActionGroup {
+  consoleId: string;
+  actions: ExtractedTask[];
+}
 
 function WorkItemsTab({
   items,
@@ -485,86 +703,125 @@ function WorkItemsTab({
   onComplete: (id: string) => void;
   onSendToConsole: (id: string, consoleId?: string) => void;
 }) {
-  const inProgress = items.filter(t => t.status === 'doing');
-  const planned = items.filter(t => t.status === 'pending');
-  const suggested = items.filter(t => t.status === 'suggested');
+  // Filter out completed/dismissed and split by confidence
+  const activeItems = items.filter(t => t.status !== 'completed' && t.status !== 'dismissed');
 
-  if (items.length === 0) {
+  // High-confidence planned items become "Next Actions"
+  // Status 'doing' is shown in Active tab, so exclude here
+  // Status 'pending' (planned) with high confidence → Next Actions
+  // Status 'suggested' or low confidence → Suggestions
+  const nextActions = activeItems.filter(
+    t => t.status === 'pending' && t.confidence >= MIN_ACTION_CONFIDENCE
+  );
+  const suggestions = activeItems.filter(
+    t => t.status === 'suggested' || (t.status === 'pending' && t.confidence < MIN_ACTION_CONFIDENCE)
+  );
+
+  // Group next actions by console
+  const actionsByConsole = useMemo(() => {
+    const groups = new Map<string, ExtractedTask[]>();
+
+    for (const action of nextActions) {
+      const consoleId = action.consoleId || 'unknown';
+      const existing = groups.get(consoleId) || [];
+      existing.push(action);
+      groups.set(consoleId, existing);
+    }
+
+    // Convert to array and sort by most recent
+    return Array.from(groups.entries())
+      .map(([consoleId, actions]) => ({ consoleId, actions }))
+      .sort((a, b) => {
+        const aLatest = Math.max(...a.actions.map(t => t.createdAt.getTime()));
+        const bLatest = Math.max(...b.actions.map(t => t.createdAt.getTime()));
+        return bLatest - aLatest;
+      });
+  }, [nextActions]);
+
+  if (activeItems.length === 0) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-zinc-600 text-sm p-4">
         <Target className="w-8 h-8 mb-2 opacity-50" />
-        <span>No work items</span>
-        <span className="text-xs mt-1">Tasks will appear as agents work</span>
+        <span>No next actions</span>
+        <span className="text-xs mt-1">Actions will appear as agents work</span>
       </div>
     );
   }
 
   return (
     <div className="p-2 space-y-3">
-      {inProgress.length > 0 && (
-        <WorkItemGroup
-          title="In Progress"
-          icon={<Loader2 className="w-3.5 h-3.5 text-violet-400 animate-spin" />}
-          items={inProgress}
-          onDismiss={onDismiss}
-          onComplete={onComplete}
-          onSendToConsole={onSendToConsole}
-        />
+      {/* Next Actions grouped by console */}
+      {actionsByConsole.length > 0 && (
+        <div className="space-y-3">
+          {actionsByConsole.map((group) => (
+            <ConsoleActionsGroup
+              key={group.consoleId}
+              consoleId={group.consoleId}
+              actions={group.actions}
+              onDismiss={onDismiss}
+              onComplete={onComplete}
+              onSendToConsole={onSendToConsole}
+            />
+          ))}
+        </div>
       )}
-      {planned.length > 0 && (
-        <WorkItemGroup
-          title="Planned"
-          icon={<div className="w-2.5 h-2.5 rounded-full border-2 border-zinc-500" />}
-          items={planned}
-          onDismiss={onDismiss}
-          onComplete={onComplete}
-          onSendToConsole={onSendToConsole}
-        />
-      )}
-      {suggested.length > 0 && (
-        <WorkItemGroup
-          title="Suggested"
-          icon={<Sparkles className="w-3.5 h-3.5 text-amber-400" />}
-          items={suggested}
-          onDismiss={onDismiss}
-          onComplete={onComplete}
-          onSendToConsole={onSendToConsole}
-        />
+
+      {/* Suggestions */}
+      {suggestions.length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 px-2 pt-2 mb-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+            <span className="text-xs font-medium text-zinc-400">Suggestions</span>
+            <span className="text-[10px] text-zinc-600">({suggestions.length})</span>
+          </div>
+          <div className="space-y-1">
+            {suggestions.map((item) => (
+              <WorkItemCard
+                key={item.id}
+                item={item}
+                isSuggestion
+                onDismiss={() => onDismiss(item.id)}
+                onComplete={() => onComplete(item.id)}
+                onSendToConsole={() => onSendToConsole(item.id, item.consoleId)}
+              />
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
 }
 
-function WorkItemGroup({
-  title,
-  icon,
-  items,
+function ConsoleActionsGroup({
+  consoleId,
+  actions,
   onDismiss,
   onComplete,
   onSendToConsole,
 }: {
-  title: string;
-  icon: React.ReactNode;
-  items: ExtractedTask[];
+  consoleId: string;
+  actions: ExtractedTask[];
   onDismiss: (id: string) => void;
   onComplete: (id: string) => void;
   onSendToConsole: (id: string, consoleId?: string) => void;
 }) {
+  const displayId = consoleId === 'unknown' ? 'Unassigned' : `Console ${consoleId.slice(-4)}`;
+
   return (
     <div>
       <div className="flex items-center gap-2 px-2 mb-1.5">
-        {icon}
-        <span className="text-xs font-medium text-zinc-400">{title}</span>
-        <span className="text-[10px] text-zinc-600">({items.length})</span>
+        <div className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+        <span className="text-xs font-medium text-zinc-400">{displayId}</span>
+        <span className="text-[10px] text-zinc-600">({actions.length})</span>
       </div>
       <div className="space-y-1">
-        {items.map((item) => (
+        {actions.map((item) => (
           <WorkItemCard
             key={item.id}
             item={item}
             onDismiss={() => onDismiss(item.id)}
             onComplete={() => onComplete(item.id)}
-            onSendToConsole={() => onSendToConsole(item.id)}
+            onSendToConsole={() => onSendToConsole(item.id, consoleId)}
           />
         ))}
       </div>
@@ -574,11 +831,13 @@ function WorkItemGroup({
 
 function WorkItemCard({
   item,
+  isSuggestion = false,
   onDismiss,
   onComplete,
   onSendToConsole,
 }: {
   item: ExtractedTask;
+  isSuggestion?: boolean;
   onDismiss: () => void;
   onComplete: () => void;
   onSendToConsole: () => void;

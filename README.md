@@ -157,6 +157,26 @@ cd packages/server && bun run dev
 cd packages/ui && bun dev
 ```
 
+### Worktree Development
+
+For parallel feature development using git worktrees:
+
+```bash
+# Create a new worktree for a feature branch
+git worktree add ~/.acc/worktrees/agent-command-center/my-feature -b my-feature
+
+# Test changes in the worktree
+cd ~/.acc/worktrees/agent-command-center/my-feature
+bun install
+bun run dev
+
+# When done, commit and merge back to main
+git add . && git commit -m "feat: my feature"
+git checkout main && git merge my-feature
+```
+
+See [docs/WORKTREE-WORKFLOW.md](docs/WORKTREE-WORKFLOW.md) for detailed workflow documentation.
+
 ## Stack
 
 - **Runtime**: Bun + Node.js
