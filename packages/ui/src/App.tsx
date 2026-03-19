@@ -12,6 +12,7 @@ import { useCommandPaletteStore } from "./stores/command-palette";
 import { useWorkspaceStore } from "./stores/workspace";
 import { commandRegistry } from "./lib/commands/registry";
 import { createDefaultCommands } from "./lib/commands/default-commands";
+import { initSemanticSearch } from "./hooks/useSemanticSearch";
 import { Settings, FolderOpen, Users, Layout } from "lucide-react";
 
 type View =
@@ -60,8 +61,29 @@ export function App() {
   // Initialize command registry with default commands (once)
   useEffect(() => {
     commandRegistry.clear();
-    commandRegistry.registerAll(createDefaultCommands());
-  }, []);
+    const commands = createDefaultCommands();
+    commandRegistry.registerAll(commands);
+
+    // Initialize semantic search service with command corpus (async, non-blocking)
+    if (serverReady) {
+      const commandInfos = commands.map(cmd => ({
+        id: cmd.id,
+        label: cmd.label,
+        description: cmd.description,
+        keywords: cmd.keywords,
+        category: cmd.category,
+      }));
+      initSemanticSearch(commandInfos).then(result => {
+        if (result.ok) {
+          console.log('[App] Semantic search initialized successfully');
+        } else {
+          console.warn('[App] Semantic search init returned error:', result.error);
+        }
+      }).catch(err => {
+        console.warn('[App] Failed to init semantic search:', err);
+      });
+    }
+  }, [serverReady]);
 
   // Register navigation callback for command palette
   const handleNavigate = useCallback((targetView: string) => {

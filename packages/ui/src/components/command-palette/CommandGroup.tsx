@@ -6,6 +6,8 @@ interface CommandGroupProps {
   selectedIndex: number;
   startIndex: number;
   onSelectCommand: (command: Command) => void;
+  /** Set of command IDs that were matched via semantic search */
+  semanticMatchIds?: Set<string>;
 }
 
 export function CommandGroup({
@@ -13,6 +15,7 @@ export function CommandGroup({
   selectedIndex,
   startIndex,
   onSelectCommand,
+  semanticMatchIds,
 }: CommandGroupProps) {
   return (
     <div className="py-2">
@@ -29,6 +32,7 @@ export function CommandGroup({
             command={command}
             isSelected={selectedIndex === startIndex + index}
             onSelect={() => onSelectCommand(command)}
+            isSemanticMatch={semanticMatchIds?.has(command.id)}
           />
         ))}
       </div>

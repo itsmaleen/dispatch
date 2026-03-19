@@ -20,6 +20,16 @@ export interface Command {
   isVisible?: () => boolean;
 }
 
+/** Command with search scoring metadata */
+export interface ScoredCommand extends Command {
+  /** Fuzzy search score (0-100) */
+  fuzzyScore: number;
+  /** Semantic search score (0-100), undefined if not matched semantically */
+  semanticScore?: number;
+  /** Whether this command was matched/boosted by semantic search */
+  isSemanticMatch: boolean;
+}
+
 export interface CommandGroup {
   id: CommandCategory;
   label: string;

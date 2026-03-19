@@ -1,4 +1,4 @@
-import type { Command, CommandGroup, CommandCategory } from './types';
+import type { Command, CommandGroup, CommandCategory, ScoredCommand } from './types';
 
 /**
  * Fuzzy match: check if all query characters appear in target in order
@@ -182,3 +182,70 @@ class CommandRegistry {
 
 // Singleton instance
 export const commandRegistry = new CommandRegistry();
+
+/** Semantic search result from the server */
+export interface SemanticSearchResult {
+  commandId: string;
+  score: number;
+}
+
+/**
+ * Merge fuzzy search results with semantic search results
+ *
+ * - Deduplicates by command ID
+ * - Boosts commands that appear in both fuzzy + semantic
+ * - Orders by combined score (fuzzy score or 90% of semantic score, whichever is higher)
+ * - Marks commands that were matched semantically
+ */
+export function mergeWithSemanticResults(
+  fuzzyCommands: Command[],
+  semanticResults: SemanticSearchResult[],
+  query: string
+): ScoredCommand[] {
+  const semanticMap = new Map(semanticResults.map(r => [r.commandId, r.score]));
+  const seen = new Set<string>();
+  const enhanced: ScoredCommand[] = [];
+
+  // Process fuzzy results first (they maintain category order)
+  for (const cmd of fuzzyCommands) {
+    if (seen.has(cmd.id)) continue;
+    seen.add(cmd.id);
+
+    const fuzzyScore = scoreMatch(query, cmd);
+    const semanticScore = semanticMap.get(cmd.id);
+
+    enhanced.push({
+      ...cmd,
+      fuzzyScore,
+      semanticScore,
+      isSemanticMatch: semanticScore !== undefined,
+    });
+  }
+
+  // Add semantic-only results (not in fuzzy results)
+  for (const { commandId, score } of semanticResults) {
+    if (seen.has(commandId)) continue;
+
+    const cmd = commandRegistry.getById(commandId);
+    if (!cmd) continue;
+
+    // Check visibility
+    if (cmd.isVisible && !cmd.isVisible()) continue;
+
+    seen.add(commandId);
+    enhanced.push({
+      ...cmd,
+      fuzzyScore: 0,
+      semanticScore: score,
+      isSemanticMatch: true,
+    });
+  }
+
+  // Sort by combined score
+  // Fuzzy score takes priority, but semantic-only results get 90% weight
+  return enhanced.sort((a, b) => {
+    const scoreA = Math.max(a.fuzzyScore, (a.semanticScore || 0) * 0.9);
+    const scoreB = Math.max(b.fuzzyScore, (b.semanticScore || 0) * 0.9);
+    return scoreB - scoreA;
+  });
+}
