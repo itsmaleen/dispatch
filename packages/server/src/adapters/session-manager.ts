@@ -27,6 +27,10 @@ export interface Session {
   status: 'idle' | 'running' | 'error';
   currentTurnId?: string;
   outputBuffer: string;
+  /** Timestamp of last activity (SDK event received) */
+  lastActivityAt?: number;
+  /** Timeout handle for activity monitoring */
+  activityTimeout?: ReturnType<typeof setTimeout>;
 }
 
 /** Session events */
@@ -75,6 +79,9 @@ export interface ThreadSummary {
   hasSession: boolean;
 }
 
+/** Session activity timeout - if no SDK events for this duration, consider session stuck */
+const SESSION_ACTIVITY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
 export class SessionManager extends EventEmitter {
   private store: SqliteThreadStore;
   private sessions = new Map<string, Session>();
@@ -84,6 +91,50 @@ export class SessionManager extends EventEmitter {
     super();
     this.store = getThreadStore();
     this.sdkOptions = sdkOptions;
+  }
+
+  /** Start activity timeout monitoring for a session */
+  private startActivityTimeout(session: Session, turnId: string): void {
+    this.clearActivityTimeout(session);
+    session.lastActivityAt = Date.now();
+
+    session.activityTimeout = setTimeout(() => {
+      if (session.status === 'running' && session.currentTurnId === turnId) {
+        const inactiveMs = Date.now() - (session.lastActivityAt || 0);
+        console.warn(
+          `[SessionManager] Session ${session.threadId} appears stuck - no activity for ${Math.round(inactiveMs / 1000)}s`
+        );
+
+        // Emit timeout error
+        const err = new Error(
+          `Session timed out - no activity for ${Math.round(inactiveMs / 60000)} minutes. ` +
+          'The Claude Code process may have stopped responding. Try sending a new message.'
+        );
+        session.status = 'error';
+        this.emit('turn.error', session.threadId, turnId, err);
+
+        // Try to abort the query
+        if (session.query) {
+          session.query.return?.().catch(() => {});
+          session.query = null;
+        }
+      }
+    }, SESSION_ACTIVITY_TIMEOUT_MS);
+  }
+
+  /** Clear activity timeout for a session */
+  private clearActivityTimeout(session: Session): void {
+    if (session.activityTimeout) {
+      clearTimeout(session.activityTimeout);
+      session.activityTimeout = undefined;
+    }
+  }
+
+  /** Reset activity timeout (call when SDK event received) */
+  private resetActivityTimeout(session: Session, turnId: string): void {
+    session.lastActivityAt = Date.now();
+    // Restart the timeout
+    this.startActivityTimeout(session, turnId);
   }
 
   /** Initialize the session manager */
@@ -385,12 +436,21 @@ export class SessionManager extends EventEmitter {
       session.query = queryIter;
       console.log(`[SessionManager] SDK query created, starting iteration...`);
 
+      // Start activity timeout monitoring
+      this.startActivityTimeout(session, turnId);
+
       for await (const event of queryIter) {
+        // Reset timeout on each event (session is still active)
+        this.resetActivityTimeout(session, turnId);
+
         console.log(`[SessionManager] SDK event: ${event.type}`);
         const result = this.handleSDKMessage(session, event, turnId);
         if (result.sessionId) capturedSessionId = result.sessionId;
         if (result.usage) usage = result.usage;
       }
+
+      // Clear timeout since query completed successfully
+      this.clearActivityTimeout(session);
 
       // Store assistant message
       this.getStore().appendMessage({
@@ -530,6 +590,8 @@ export class SessionManager extends EventEmitter {
         this.emit('turn.error', thread.id, turnId, emitError);
       }
     } finally {
+      // Always clear timeout and query reference
+      this.clearActivityTimeout(session);
       session.query = null;
     }
   }

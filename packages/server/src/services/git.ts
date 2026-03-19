@@ -195,6 +195,70 @@ export async function getDefaultBranch(dir: string): Promise<string> {
 // BRANCH OPERATIONS
 // ============================================================================
 
+/** A branch entry with metadata */
+export interface BranchEntry {
+  name: string;
+  isCurrent: boolean;
+  isRemote: boolean;
+}
+
+/**
+ * List all branches (local and remote) in a repository
+ */
+export async function listBranches(dir: string): Promise<BranchEntry[]> {
+  const result = await git(['branch', '-a', '--no-color'], { cwd: dir });
+
+  if (!result) {
+    return [];
+  }
+
+  const branches: BranchEntry[] = [];
+  const seenRemotes = new Set<string>();
+
+  for (const line of result.split('\n')) {
+    if (!line.trim()) continue;
+
+    const isCurrent = line.startsWith('*');
+    const branchName = line.replace(/^\*?\s+/, '').trim();
+
+    // Skip HEAD pointer entries like "remotes/origin/HEAD -> origin/main"
+    if (branchName.includes('->')) continue;
+
+    // Check if it's a remote branch
+    const isRemote = branchName.startsWith('remotes/');
+
+    if (isRemote) {
+      // Extract remote branch name (e.g., "remotes/origin/main" -> "origin/main")
+      const remoteBranch = branchName.replace(/^remotes\//, '');
+
+      // Skip if we've already seen this remote branch name
+      // (can happen with multiple remotes)
+      if (seenRemotes.has(remoteBranch)) continue;
+      seenRemotes.add(remoteBranch);
+
+      branches.push({
+        name: remoteBranch,
+        isCurrent: false,
+        isRemote: true,
+      });
+    } else {
+      branches.push({
+        name: branchName,
+        isCurrent,
+        isRemote: false,
+      });
+    }
+  }
+
+  // Sort: local branches first, then remote, both alphabetically
+  return branches.sort((a, b) => {
+    if (a.isRemote !== b.isRemote) {
+      return a.isRemote ? 1 : -1;
+    }
+    return a.name.localeCompare(b.name);
+  });
+}
+
 /**
  * Check if a branch exists
  */

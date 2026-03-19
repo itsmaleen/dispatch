@@ -503,6 +503,13 @@ export function WorktreeButton({
   );
 }
 
+/** Branch entry from the API */
+interface BranchEntry {
+  name: string;
+  isCurrent: boolean;
+  isRemote: boolean;
+}
+
 /**
  * EnableWorktreeDialog - Modal to enable worktree for a thread
  */
@@ -525,12 +532,37 @@ export function EnableWorktreeDialog({
   onClose,
   onEnabled,
 }: EnableWorktreeDialogProps) {
-  const [branch, setBranch] = useState('');
+  const [branchMode, setBranchMode] = useState<'new' | 'existing'>('new');
+  const [newBranchName, setNewBranchName] = useState('');
   const [baseBranch, setBaseBranch] = useState('main');
+  const [selectedExistingBranch, setSelectedExistingBranch] = useState('');
+  const [existingBranches, setExistingBranches] = useState<BranchEntry[]>([]);
+  const [isLoadingBranches, setIsLoadingBranches] = useState(false);
   const [enabling, setEnabling] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
 
   const serverUrl = getServerUrl();
+
+  // Fetch branches when dialog opens
+  useEffect(() => {
+    if (isOpen && cwd) {
+      setIsLoadingBranches(true);
+      fetch(`${serverUrl}/git/branches?cwd=${encodeURIComponent(cwd)}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.ok && data.branches) {
+            setExistingBranches(data.branches);
+          }
+        })
+        .catch(() => {
+          // Silently fail - user can still create new branch
+        })
+        .finally(() => {
+          setIsLoadingBranches(false);
+        });
+    }
+  }, [isOpen, cwd, serverUrl]);
 
   // Generate default branch name from thread name
   useEffect(() => {
@@ -540,21 +572,41 @@ export function EnableWorktreeDialog({
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-+|-+$/g, '')
         .slice(0, 40);
-      setBranch(`agent/${sanitized}`);
+      setNewBranchName(`agent/${sanitized}`);
     }
   }, [isOpen, threadName]);
+
+  // Reset state when dialog closes
+  useEffect(() => {
+    if (!isOpen) {
+      setBranchMode('new');
+      setSelectedExistingBranch('');
+      setDropdownOpen(false);
+      setError(null);
+    }
+  }, [isOpen]);
+
+  const handleSelectBranch = (branch: string, mode: 'new' | 'existing') => {
+    setBranchMode(mode);
+    if (mode === 'existing') {
+      setSelectedExistingBranch(branch);
+    }
+    setDropdownOpen(false);
+  };
 
   const handleEnable = async () => {
     setEnabling(true);
     setError(null);
 
     try {
+      const branchToUse = branchMode === 'existing' ? selectedExistingBranch : newBranchName;
+
       const res = await fetch(`${serverUrl}/threads/${threadId}/worktree`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          branch: branch || undefined,
-          baseBranch,
+          branch: branchToUse || undefined,
+          baseBranch: branchMode === 'new' ? baseBranch : undefined,
           cwd, // Pass cwd so server can create thread if needed
           name: threadName,
         }),
@@ -575,6 +627,18 @@ export function EnableWorktreeDialog({
       setEnabling(false);
     }
   };
+
+  // Get display text for the dropdown button
+  const getDropdownDisplayText = () => {
+    if (branchMode === 'existing' && selectedExistingBranch) {
+      return selectedExistingBranch;
+    }
+    return 'Create new branch...';
+  };
+
+  // Separate local and remote branches
+  const localBranches = existingBranches.filter((b) => !b.isRemote);
+  const remoteBranches = existingBranches.filter((b) => b.isRemote);
 
   if (!isOpen) return null;
 
@@ -623,27 +687,150 @@ export function EnableWorktreeDialog({
           )}
 
           <div className="space-y-3">
+            {/* Branch Selection Dropdown */}
             <div>
-              <label className="block text-xs text-zinc-500 mb-1">Branch Name</label>
-              <input
-                type="text"
-                value={branch}
-                onChange={(e) => setBranch(e.target.value)}
-                placeholder="agent/feature-name"
-                className="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-violet-500"
-              />
+              <label className="block text-xs text-zinc-500 mb-1">Branch</label>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setDropdownOpen(!dropdownOpen)}
+                  className="w-full flex items-center justify-between px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 hover:border-zinc-600 focus:outline-none focus:border-violet-500"
+                >
+                  <span className="truncate">
+                    {isLoadingBranches ? (
+                      <span className="flex items-center gap-2 text-zinc-400">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        Loading branches...
+                      </span>
+                    ) : (
+                      getDropdownDisplayText()
+                    )}
+                  </span>
+                  <ChevronDown className={`w-4 h-4 text-zinc-400 transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                {/* Dropdown Menu */}
+                {dropdownOpen && !isLoadingBranches && (
+                  <div className="absolute z-10 w-full mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                    {/* Create New Branch Option */}
+                    <button
+                      type="button"
+                      onClick={() => handleSelectBranch('', 'new')}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-zinc-700 ${
+                        branchMode === 'new' ? 'bg-violet-600/20 text-violet-300' : 'text-zinc-200'
+                      }`}
+                    >
+                      <FilePlus className="w-4 h-4 text-green-400" />
+                      Create new branch...
+                    </button>
+
+                    {/* Divider */}
+                    {(localBranches.length > 0 || remoteBranches.length > 0) && (
+                      <div className="border-t border-zinc-700 my-1" />
+                    )}
+
+                    {/* Local Branches */}
+                    {localBranches.length > 0 && (
+                      <>
+                        <div className="px-3 py-1 text-xs text-zinc-500 uppercase tracking-wider">
+                          Local Branches
+                        </div>
+                        {localBranches.map((branch) => (
+                          <button
+                            key={branch.name}
+                            type="button"
+                            onClick={() => handleSelectBranch(branch.name, 'existing')}
+                            className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-zinc-700 ${
+                              branchMode === 'existing' && selectedExistingBranch === branch.name
+                                ? 'bg-violet-600/20 text-violet-300'
+                                : 'text-zinc-200'
+                            }`}
+                          >
+                            <GitBranch className="w-4 h-4 text-zinc-400" />
+                            <span className="truncate">{branch.name}</span>
+                            {branch.isCurrent && (
+                              <span className="ml-auto text-xs text-green-400">(current)</span>
+                            )}
+                          </button>
+                        ))}
+                      </>
+                    )}
+
+                    {/* Remote Branches */}
+                    {remoteBranches.length > 0 && (
+                      <>
+                        <div className="border-t border-zinc-700 my-1" />
+                        <div className="px-3 py-1 text-xs text-zinc-500 uppercase tracking-wider">
+                          Remote Branches
+                        </div>
+                        {remoteBranches.map((branch) => (
+                          <button
+                            key={branch.name}
+                            type="button"
+                            onClick={() => handleSelectBranch(branch.name, 'existing')}
+                            className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-zinc-700 ${
+                              branchMode === 'existing' && selectedExistingBranch === branch.name
+                                ? 'bg-violet-600/20 text-violet-300'
+                                : 'text-zinc-200'
+                            }`}
+                          >
+                            <GitBranch className="w-4 h-4 text-blue-400" />
+                            <span className="truncate">{branch.name}</span>
+                          </button>
+                        ))}
+                      </>
+                    )}
+
+                    {/* No branches message */}
+                    {localBranches.length === 0 && remoteBranches.length === 0 && (
+                      <div className="px-3 py-2 text-sm text-zinc-500">
+                        No existing branches found
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
-            <div>
-              <label className="block text-xs text-zinc-500 mb-1">Base Branch</label>
-              <input
-                type="text"
-                value={baseBranch}
-                onChange={(e) => setBaseBranch(e.target.value)}
-                placeholder="main"
-                className="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-violet-500"
-              />
-            </div>
+            {/* New Branch Name Input (only shown when creating new branch) */}
+            {branchMode === 'new' && (
+              <>
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Branch Name</label>
+                  <input
+                    type="text"
+                    value={newBranchName}
+                    onChange={(e) => setNewBranchName(e.target.value)}
+                    placeholder="agent/feature-name"
+                    className="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-violet-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Base Branch</label>
+                  <input
+                    type="text"
+                    value={baseBranch}
+                    onChange={(e) => setBaseBranch(e.target.value)}
+                    placeholder="main"
+                    className="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-violet-500"
+                  />
+                </div>
+              </>
+            )}
+
+            {/* Info about existing branch selection */}
+            {branchMode === 'existing' && selectedExistingBranch && (
+              <div className="flex items-start gap-2 p-3 bg-blue-900/20 border border-blue-800 rounded-lg text-blue-400 text-sm">
+                <GitBranch className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="font-medium">Using existing branch</p>
+                  <p className="text-blue-400/70 text-xs mt-1">
+                    The worktree will be created from branch "{selectedExistingBranch}".
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -657,7 +844,7 @@ export function EnableWorktreeDialog({
           </button>
           <button
             onClick={handleEnable}
-            disabled={enabling}
+            disabled={enabling || (branchMode === 'existing' && !selectedExistingBranch)}
             className="flex items-center gap-2 px-4 py-2 text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg"
           >
             {enabling ? (

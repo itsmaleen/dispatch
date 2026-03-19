@@ -617,6 +617,27 @@ export class CommandCenterServer {
       }
     });
 
+    // ============ Git API ============
+
+    // List branches in a repository
+    this.app.get('/git/branches', async (c) => {
+      const cwd = c.req.query('cwd');
+      if (!cwd) {
+        return c.json({ ok: false, error: 'cwd parameter required' }, 400);
+      }
+
+      try {
+        const { listBranches } = await import('./services/git');
+        const branches = await listBranches(cwd);
+        return c.json({ ok: true, branches });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to list branches',
+        }, 500);
+      }
+    });
+
     // ============ Extracted Tasks API ============
 
     // List extracted tasks

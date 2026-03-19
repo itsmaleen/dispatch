@@ -1826,6 +1826,11 @@ export function Workspace() {
   // Real PTY terminals
   const [realTerminals, setRealTerminals] = useState<TerminalInstance[]>([]);
 
+  // WebSocket connection state
+  const [wsConnected, setWsConnected] = useState(false);
+  const wsReconnectAttempts = useRef(0);
+  const wsReconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Focus and hover state
   const [hoveredWidgetId, setHoveredWidgetId] = useState<string | null>(null);
   const focusedWidgetId = useWorkspaceStore(state => state.focusedWidgetId);
@@ -2307,6 +2312,49 @@ export function Workspace() {
       return false;
     };
 
+    // Also check minimized widgets for matching terminal
+    const matchesMinimizedWidget = (w: MinimizedWidget) => {
+      if (w.type !== 'agent-console' || !w.data) return false;
+      const t = w.data;
+      if (threadId) {
+        if (t.threadId === threadId) return true;
+        const mappedTerminalId = threadToTerminalRef.current[threadId];
+        if (mappedTerminalId && t.id === mappedTerminalId) return true;
+        return false;
+      }
+      if (adapterId) return t.agent.id === adapterId;
+      return false;
+    };
+
+    // Helper to update both visible terminals AND minimized widgets
+    // Takes a function that receives the full previous array and returns the new array
+    const updateAllTerminalsRaw = (
+      terminalUpdater: (prev: TerminalState[]) => TerminalState[],
+      minimizedUpdater?: (prev: MinimizedWidget[]) => MinimizedWidget[]
+    ) => {
+      setTerminals(terminalUpdater);
+      if (minimizedUpdater) {
+        setMinimizedWidgets(minimizedUpdater);
+      } else {
+        // Default: apply same logic to minimized widgets
+        setMinimizedWidgets(prev => prev.map(w => {
+          if (!matchesMinimizedWidget(w) || !w.data) return w;
+          // Create a single-element array, run the updater, extract the result
+          const updated = terminalUpdater([w.data]);
+          return updated.length > 0 && updated[0] !== w.data
+            ? { ...w, data: updated[0] }
+            : w;
+        }));
+      }
+    };
+
+    // Simple helper for common case: update matching terminal with a transform function
+    const updateAllTerminals = (updater: (t: TerminalState) => TerminalState) => {
+      updateAllTerminalsRaw(
+        prev => prev.map(t => matchesTerminal(t) ? updater(t) : t)
+      );
+    };
+
     if (!adapterId && !threadId) return;
 
     console.log('[WS Event]', event.type, { adapterId, threadId }, event.payload);
@@ -2335,9 +2383,7 @@ export function Workspace() {
               timestamp: makeTimestamp(),
               isStreaming: true,
             };
-            setTerminals(prev => prev.map(t =>
-              matchesTerminal(t) ? { ...t, lines: [...t.lines, line], isStreaming: true } : t
-            ));
+            updateAllTerminals(t => ({ ...t, lines: [...t.lines, line], isStreaming: true }));
           } else if (blockType === 'tool_use' || blockType === 'server_tool_use') {
             const toolName = block?.name ?? 'Tool';
             const idx = blockIndex ?? 0;
@@ -2350,9 +2396,7 @@ export function Workspace() {
               isStreaming: true,
               blockIndex: idx,
             };
-            setTerminals(prev => prev.map(t =>
-              matchesTerminal(t) ? { ...t, lines: [...t.lines, line], isStreaming: true } : t
-            ));
+            updateAllTerminals(t => ({ ...t, lines: [...t.lines, line], isStreaming: true }));
           }
         }
 
@@ -2363,7 +2407,7 @@ export function Workspace() {
 
           if (deltaType === 'text_delta' && delta.text) {
             // Append text delta to terminal output
-            setTerminals(prev => prev.map(t => {
+            updateAllTerminalsRaw(prev => prev.map(t => {
               if (!matchesTerminal(t)) return t;
               const lastLine = t.lines[t.lines.length - 1];
               if (lastLine?.type === 'output' && lastLine.isStreaming) {
@@ -2389,7 +2433,7 @@ export function Workspace() {
             }));
           } else if (deltaType === 'thinking_delta' && delta.thinking) {
             // Append to last thinking line or create one
-            setTerminals(prev => prev.map(t => {
+            updateAllTerminalsRaw(prev => prev.map(t => {
               if (!matchesTerminal(t)) return t;
               let idx = -1;
               for (let i = t.lines.length - 1; i >= 0; i--) {
@@ -2429,7 +2473,7 @@ export function Workspace() {
               toolInputByBlockRef.current[blockIdx] = acc;
               const detail = tryExtractToolDetail(acc);
               if (detail != null) {
-                setTerminals(prev => prev.map(t => {
+                updateAllTerminalsRaw(prev => prev.map(t => {
                   if (!matchesTerminal(t)) return t;
                   const lineIdx = t.lines.findIndex(
                     (l) => l.type === 'tool_call' && l.blockIndex === blockIdx
@@ -2454,7 +2498,7 @@ export function Workspace() {
 
     if (event.type === 'activity' && event.payload) {
       const activityType = event.payload.activityType;
-      const lineType: TerminalLineType = 
+      const lineType: TerminalLineType =
         activityType === 'thinking' ? 'thinking' :
         activityType === 'file_read' ? 'tool_call' :
         activityType === 'file_write' ? 'tool_call' :
@@ -2468,27 +2512,25 @@ export function Workspace() {
         isStreaming: event.payload.status === 'running',
       };
 
-      setTerminals(prev => prev.map(t =>
-        matchesTerminal(t) ? { 
-          ...t, 
-          lines: [...t.lines, line],
-          isStreaming: event.payload.status === 'running',
-        } : t
-      ));
+      updateAllTerminals(t => ({
+        ...t,
+        lines: [...t.lines, line],
+        isStreaming: event.payload.status === 'running',
+      }));
     }
 
     if (event.type === 'content.delta' && event.payload?.delta) {
       // Append to last output line or create new one
-      setTerminals(prev => prev.map(t => {
+      updateAllTerminalsRaw(prev => prev.map(t => {
         if (!matchesTerminal(t)) return t;
-        
+
         const lastLine = t.lines[t.lines.length - 1];
         if (lastLine?.type === 'output' && lastLine.isStreaming) {
           // Append to existing streaming output
           return {
             ...t,
-            lines: t.lines.map((l, i) => 
-              i === t.lines.length - 1 
+            lines: t.lines.map((l, i) =>
+              i === t.lines.length - 1
                 ? { ...l, content: l.content + event.payload.delta }
                 : l
             ),
@@ -2509,6 +2551,28 @@ export function Workspace() {
       }));
     }
 
+    // Handle turn error: stop streaming and show error
+    if (event.type === 'turn.error') {
+      const errorMessage = event.payload?.message || event.payload?.error || 'Session error occurred';
+      console.error('[WS] Turn error:', errorMessage);
+
+      updateAllTerminals(t => ({
+        ...t,
+        isStreaming: false,
+        currentStepId: undefined,
+        lines: [
+          ...t.lines.map(l => ({ ...l, isStreaming: false })),
+          {
+            id: `error-${Date.now()}`,
+            type: 'error' as const,
+            content: `Error: ${errorMessage}`,
+            timestamp: makeTimestamp(),
+          },
+        ],
+      }));
+      return;
+    }
+
     // Handle turn/item completion: update terminal streaming state and sync plan step + cost
     if (event.type === 'turn.completed' || event.type === 'item.completed') {
       if (event.type === 'turn.completed') toolInputByBlockRef.current = {};
@@ -2518,16 +2582,14 @@ export function Workspace() {
       const queuedMsg = matchedTerminal?.queuedMessage;
       const terminalIdForQueue = matchedTerminal?.id;
 
-      setTerminals(prev => prev.map(t =>
-        !matchesTerminal(t) ? t : {
-          ...t,
-          isStreaming: false,
-          currentStepId: undefined,
-          lines: t.lines.map(l => ({ ...l, isStreaming: false })),
-          // Clear queued message since we'll send it
-          queuedMessage: queuedMsg ? null : t.queuedMessage,
-        }
-      ));
+      updateAllTerminals(t => ({
+        ...t,
+        isStreaming: false,
+        currentStepId: undefined,
+        lines: t.lines.map(l => ({ ...l, isStreaming: false })),
+        // Clear queued message since we'll send it
+        queuedMessage: queuedMsg ? null : t.queuedMessage,
+      }));
 
       if (stepIdToComplete && usage) {
         setPlanSteps(prev => prev.map(s =>
@@ -2550,27 +2612,80 @@ export function Workspace() {
     }
   }, []);
 
-  // WebSocket connection for streaming events
+  // WebSocket connection for streaming events with reconnection
   useEffect(() => {
-    console.log('[WS] Connecting to', getWebSocketUrl());
-    const ws = new WebSocket(getWebSocketUrl());
-    wsRef.current = ws;
+    let isCleaningUp = false;
 
-    ws.onopen = () => console.log('[WS] Connected');
-    
-    ws.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        handleWsEvent(data);
-      } catch (err) {
-        console.error('[WS] Parse error:', err);
-      }
+    const connect = () => {
+      if (isCleaningUp) return;
+
+      console.log('[WS] Connecting to', getWebSocketUrl());
+      const ws = new WebSocket(getWebSocketUrl());
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        console.log('[WS] Connected');
+        setWsConnected(true);
+        wsReconnectAttempts.current = 0;
+      };
+
+      ws.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          handleWsEvent(data);
+        } catch (err) {
+          console.error('[WS] Parse error:', err);
+        }
+      };
+
+      ws.onerror = (e) => {
+        console.warn('[WS] Error:', e);
+      };
+
+      ws.onclose = () => {
+        console.warn('[WS] Closed');
+        setWsConnected(false);
+        wsRef.current = null;
+
+        // Mark all streaming terminals as disconnected
+        setTerminals(prev => prev.map(t =>
+          !t.isStreaming ? t : {
+            ...t,
+            isStreaming: false,
+            lines: [
+              ...t.lines.map(l => ({ ...l, isStreaming: false })),
+              {
+                id: `disconnect-${Date.now()}`,
+                type: 'system' as const,
+                content: 'Connection lost. Reconnecting...',
+                timestamp: makeTimestamp(),
+              },
+            ],
+          }
+        ));
+
+        // Reconnect with exponential backoff (max 30 seconds)
+        if (!isCleaningUp) {
+          const delay = Math.min(1000 * Math.pow(2, wsReconnectAttempts.current), 30000);
+          console.log(`[WS] Reconnecting in ${delay}ms (attempt ${wsReconnectAttempts.current + 1})`);
+          wsReconnectAttempts.current++;
+
+          wsReconnectTimeoutRef.current = setTimeout(connect, delay);
+        }
+      };
     };
 
-    ws.onerror = (e) => console.warn('[WS] Error:', e);
-    ws.onclose = () => console.warn('[WS] Closed');
+    connect();
 
-    return () => ws.close();
+    return () => {
+      isCleaningUp = true;
+      if (wsReconnectTimeoutRef.current) {
+        clearTimeout(wsReconnectTimeoutRef.current);
+      }
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
   }, [handleWsEvent]);
 
   // Terminal handlers
