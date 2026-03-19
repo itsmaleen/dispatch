@@ -1,0 +1,134 @@
+/**
+ * Agent Console Types
+ *
+ * Types for agent consoles - isolated agent sessions running in worktrees.
+ */
+
+/** Status of an agent console */
+export type AgentConsoleStatus =
+  | 'initializing' // Worktree being created
+  | 'ready' // Ready to receive prompts
+  | 'running' // Agent actively working
+  | 'paused' // User paused the agent
+  | 'completed' // Agent finished successfully
+  | 'failed' // Agent encountered error
+  | 'merged'; // Branch merged, worktree cleaned up
+
+/** An agent console instance */
+export interface AgentConsole {
+  /** Unique identifier */
+  id: string;
+
+  /** Human-readable title for the task */
+  title: string;
+
+  /** The task/prompt this agent is working on */
+  task: string;
+
+  /** Current status */
+  status: AgentConsoleStatus;
+
+  /** Branch name for this agent's work */
+  branch: string;
+
+  /** Base branch (e.g., "main") */
+  baseBranch: string;
+
+  /** Path to the worktree directory */
+  worktreePath: string;
+
+  /** Thread ID for the session */
+  threadId: string;
+
+  /** When this console was created */
+  createdAt: Date;
+
+  /** When the agent started working */
+  startedAt?: Date;
+
+  /** When the agent finished */
+  completedAt?: Date;
+
+  /** Error message if failed */
+  error?: string;
+}
+
+/** Options for launching an agent console */
+export interface LaunchAgentOptions {
+  /** The task for the agent to work on */
+  task: string;
+
+  /** Short title for the task (auto-generated if not provided) */
+  title?: string;
+
+  /** Branch name (auto-generated if not provided) */
+  branch?: string;
+
+  /** Base branch to branch from (default: "main") */
+  baseBranch?: string;
+
+  /** Start working immediately after creation */
+  autoStart?: boolean;
+}
+
+/** Result of launching an agent console */
+export interface LaunchResult {
+  success: boolean;
+  console?: AgentConsole;
+  error?: string;
+}
+
+// ============================================================================
+// WEBSOCKET EVENTS
+// ============================================================================
+
+/** Agent console created event */
+export interface AgentConsoleCreatedEvent {
+  type: 'agent-console.created';
+  payload: AgentConsole;
+  timestamp: string;
+}
+
+/** Agent console started event */
+export interface AgentConsoleStartedEvent {
+  type: 'agent-console.started';
+  payload: { consoleId: string };
+  timestamp: string;
+}
+
+/** Agent console completed event */
+export interface AgentConsoleCompletedEvent {
+  type: 'agent-console.completed';
+  payload: { consoleId: string };
+  timestamp: string;
+}
+
+/** Agent console failed event */
+export interface AgentConsoleFailedEvent {
+  type: 'agent-console.failed';
+  payload: { consoleId: string; error: string };
+  timestamp: string;
+}
+
+/** Agent console status changed event */
+export interface AgentConsoleStatusChangedEvent {
+  type: 'agent-console.status_changed';
+  payload: { consoleId: string; status: AgentConsoleStatus };
+  timestamp: string;
+}
+
+/** Agent console removed event */
+export interface AgentConsoleRemovedEvent {
+  type: 'agent-console.removed';
+  payload: { consoleId: string };
+  timestamp: string;
+}
+
+/** All agent console events */
+export type AgentConsoleEvent =
+  | AgentConsoleCreatedEvent
+  | AgentConsoleStartedEvent
+  | AgentConsoleCompletedEvent
+  | AgentConsoleFailedEvent
+  | AgentConsoleStatusChangedEvent
+  | AgentConsoleRemovedEvent;

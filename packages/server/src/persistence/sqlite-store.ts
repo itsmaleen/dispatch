@@ -169,7 +169,7 @@ export class SqliteThreadStore {
     return rows.map(r => this.rowToThread(r));
   }
 
-  updateThread(threadId: string, update: Partial<Pick<Thread, 'name' | 'sessionId' | 'metadata'>>): void {
+  updateThread(threadId: string, update: Partial<Pick<Thread, 'name' | 'metadata' | 'worktreePath'>> & { sessionId?: string | null }): void {
     const sets: string[] = ['last_active_at = datetime(\'now\')'];
     const values: unknown[] = [];
 
@@ -179,11 +179,15 @@ export class SqliteThreadStore {
     }
     if (update.sessionId !== undefined) {
       sets.push('session_id = ?');
-      values.push(update.sessionId);
+      values.push(update.sessionId ?? null); // Support clearing sessionId with null
     }
     if (update.metadata !== undefined) {
       sets.push('metadata_json = ?');
       values.push(JSON.stringify(update.metadata));
+    }
+    if ('worktreePath' in update) {
+      sets.push('worktree_path = ?');
+      values.push(update.worktreePath === undefined ? null : update.worktreePath);
     }
 
     values.push(threadId);

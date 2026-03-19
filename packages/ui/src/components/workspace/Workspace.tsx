@@ -42,6 +42,7 @@ import {
   SplitSquareVertical,
   LayoutGrid,
   GripVertical,
+  GitBranch,
   Terminal as TerminalIcon, // Keep for command line icon usage
 } from 'lucide-react';
 import { AgentsPanel } from '../agents/AgentsPanel';
@@ -50,6 +51,7 @@ import { useWorkspaceStore, type LayoutNode, type LayoutLeaf, type LayoutGroup, 
 import { ChatInput, type UploadedFile } from './ChatInput';
 import { TasksWidgetContainer } from './TasksWidgetContainer';
 import { TerminalWidget as RealTerminalWidget } from '../terminal/TerminalWidget';
+import { WorktreePanel, WorktreeButton, EnableWorktreeDialog } from './WorktreePanel';
 import type { TerminalInstance } from '@acc/contracts';
 
 // ============================================================================
@@ -150,6 +152,9 @@ interface ConsoleState {
   settings?: ConsoleSettings;
   // Message queue - allows typing while console is busy
   queuedMessage?: QueuedMessage | null;
+  // Worktree isolation
+  worktreePath?: string;
+  worktreeBranch?: string;
 }
 
 interface MinimizedWidget {
@@ -765,6 +770,9 @@ function AgentConsoleWidget({
   onSettingsChange,
   onQueueMessage,
   onClearQueue,
+  onWorktreeEnabled,
+  onWorktreeMerged,
+  workspacePath,
   isHighlighted,
   isFocused,
   onFocus,
@@ -784,6 +792,9 @@ function AgentConsoleWidget({
   onSettingsChange?: (consoleId: string, settings: ConsoleSettings) => void;
   onQueueMessage?: (consoleId: string, message: string, files?: UploadedFile[]) => void;
   onClearQueue?: (consoleId: string) => void;
+  onWorktreeEnabled?: (consoleId: string, worktreePath: string, branch: string) => void;
+  onWorktreeMerged?: (consoleId: string) => void;
+  workspacePath?: string;
   isHighlighted?: boolean;
   isFocused?: boolean;
   onFocus?: () => void;
@@ -799,6 +810,8 @@ function AgentConsoleWidget({
   const [autoScroll, setAutoScroll] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuPosition | null>(null);
+  const [showWorktreePanel, setShowWorktreePanel] = useState(false);
+  const [showEnableWorktreeDialog, setShowEnableWorktreeDialog] = useState(false);
 
   const settings = { ...DEFAULT_CONSOLE_SETTINGS, ...consoleState.settings };
 
@@ -903,6 +916,16 @@ function AgentConsoleWidget({
           {consoleState.currentTask && (
             <span className="text-[10px] text-zinc-500 truncate max-w-[200px]">{consoleState.currentTask}</span>
           )}
+          {/* Worktree button - show for Claude Code consoles (even before thread exists) */}
+          {consoleState.agent.type === 'claude-code' && (
+            <WorktreeButton
+              threadId={consoleState.threadId || consoleState.id}
+              hasWorktree={!!consoleState.worktreePath}
+              branch={consoleState.worktreeBranch}
+              onEnableWorktree={() => setShowEnableWorktreeDialog(true)}
+              onShowChanges={() => setShowWorktreePanel(true)}
+            />
+          )}
           <button
             onClick={(e) => { e.stopPropagation(); setAutoScroll(!autoScroll); }}
             className={`text-xs px-2 py-0.5 rounded ${
@@ -953,6 +976,31 @@ function AgentConsoleWidget({
           onClearQueue={onClearQueue ? () => onClearQueue(consoleState.id) : undefined}
         />
       </div>
+
+      {/* Worktree Panel - show if worktree is enabled */}
+      {consoleState.worktreePath && consoleState.threadId && (
+        <WorktreePanel
+          threadId={consoleState.threadId}
+          isOpen={showWorktreePanel}
+          onClose={() => setShowWorktreePanel(false)}
+          onMerged={() => onWorktreeMerged?.(consoleState.id)}
+        />
+      )}
+
+      {/* Enable Worktree Dialog - works even before thread exists */}
+      <EnableWorktreeDialog
+        threadId={consoleState.threadId || `thread-${consoleState.id}`}
+        threadName={settings.label || consoleState.agent.name}
+        cwd={consoleState.path || workspacePath}
+        hasExistingSession={consoleState.lines.some(l => l.type === 'output' || l.type === 'prompt')}
+        isOpen={showEnableWorktreeDialog}
+        onClose={() => setShowEnableWorktreeDialog(false)}
+        onEnabled={(worktreePath, branch) => {
+          console.log('[AgentConsoleWidget] onEnabled called:', { consoleId: consoleState.id, worktreePath, branch, hasCallback: !!onWorktreeEnabled });
+          onWorktreeEnabled?.(consoleState.id, worktreePath, branch);
+          setShowEnableWorktreeDialog(false);
+        }}
+      />
     </div>
   );
 }
@@ -1443,6 +1491,8 @@ interface LayoutRendererProps {
   onSettingsChange: (terminalId: string, settings: TerminalSettings) => void;
   onQueueMessage: (terminalId: string, message: string, files?: UploadedFile[]) => void;
   onClearQueue: (terminalId: string) => void;
+  onWorktreeEnabled?: (terminalId: string, worktreePath: string, branch: string) => void;
+  onWorktreeMerged?: (terminalId: string) => void;
   // Tasks widget props (legacy - kept for old TasksWidget)
   onExecute: () => void;
   isExecuting: boolean;
@@ -1497,6 +1547,8 @@ function LayoutRenderer({
   onSettingsChange,
   onQueueMessage,
   onClearQueue,
+  onWorktreeEnabled,
+  onWorktreeMerged,
   onExecute,
   isExecuting,
   onStepAgentChange,
@@ -1547,6 +1599,9 @@ function LayoutRenderer({
               onSettingsChange={onSettingsChange}
               onQueueMessage={onQueueMessage}
               onClearQueue={onClearQueue}
+              onWorktreeEnabled={onWorktreeEnabled}
+              onWorktreeMerged={onWorktreeMerged}
+              workspacePath={workspacePath ?? undefined}
               isHighlighted={highlightedTerminalId === terminal.id}
               isFocused={focusedWidgetId === terminal.id}
               isHovered={hoveredWidgetId === terminal.id}
@@ -1717,6 +1772,8 @@ function LayoutRenderer({
               onSettingsChange={onSettingsChange}
               onQueueMessage={onQueueMessage}
               onClearQueue={onClearQueue}
+              onWorktreeEnabled={onWorktreeEnabled}
+              onWorktreeMerged={onWorktreeMerged}
               onExecute={onExecute}
               isExecuting={isExecuting}
               onStepAgentChange={onStepAgentChange}
@@ -2763,6 +2820,56 @@ export function Workspace() {
     ));
   };
 
+  // Handle worktree enabled - update console state with worktree info
+  const handleWorktreeEnabled = (terminalId: string, worktreePath: string, branch: string) => {
+    console.log('[Worktree] Enabling worktree:', { terminalId, worktreePath, branch });
+    setTerminals(prev => {
+      const updated = prev.map(t => {
+        if (t.id !== terminalId) return t;
+
+        // If thread didn't exist before, set it now (worktree was enabled before first message)
+        const threadId = t.threadId || `thread-${terminalId}`;
+        if (!t.threadId) {
+          // Register mapping for WebSocket events
+          threadToTerminalRef.current[threadId] = terminalId;
+        }
+
+        console.log('[Worktree] Updating terminal:', { id: t.id, threadId, worktreePath, branch });
+        return {
+          ...t,
+          threadId,
+          worktreePath,
+          worktreeBranch: branch,
+          path: worktreePath,
+        };
+      });
+      console.log('[Worktree] Updated terminals:', updated.map(t => ({ id: t.id, worktreePath: t.worktreePath, worktreeBranch: t.worktreeBranch })));
+      return updated;
+    });
+  };
+
+  // Handle worktree merged - clear worktree info from console state
+  const handleWorktreeMerged = (terminalId: string) => {
+    console.log('[Worktree] Merged worktree:', { terminalId });
+    setTerminals(prev => {
+      const updated = prev.map(t => {
+        if (t.id !== terminalId) return t;
+
+        // Revert path to workspace path (worktree path is no longer valid)
+        const originalPath = workspacePath || t.path;
+
+        console.log('[Worktree] Clearing worktree state, reverting to:', { id: t.id, originalPath });
+        return {
+          ...t,
+          worktreePath: undefined,
+          worktreeBranch: undefined,
+          path: originalPath,
+        };
+      });
+      return updated;
+    });
+  };
+
   const handleTerminalMessage = async (terminalId: string, message: string, files?: UploadedFile[]) => {
     const terminal = terminals.find(t => t.id === terminalId);
     if (!terminal) return;
@@ -3359,6 +3466,8 @@ export function Workspace() {
               onSettingsChange={handleTerminalSettingsChange}
               onQueueMessage={handleQueueMessage}
               onClearQueue={handleClearQueue}
+              onWorktreeEnabled={handleWorktreeEnabled}
+              onWorktreeMerged={handleWorktreeMerged}
               onExecute={handleExecute}
               isExecuting={isExecuting}
               onStepAgentChange={handleStepAgentChange}
@@ -3396,6 +3505,9 @@ export function Workspace() {
                           onSettingsChange={handleTerminalSettingsChange}
                           onQueueMessage={handleQueueMessage}
                           onClearQueue={handleClearQueue}
+                          onWorktreeEnabled={handleWorktreeEnabled}
+                          onWorktreeMerged={handleWorktreeMerged}
+                          workspacePath={workspacePath ?? undefined}
                           isHighlighted={highlightedTerminalId === terminal.id}
                           isFocused={focusedWidgetId === terminal.id}
                           isHovered={hoveredWidgetId === terminal.id}
@@ -3502,6 +3614,9 @@ export function Workspace() {
                   onSettingsChange={handleTerminalSettingsChange}
                   onQueueMessage={handleQueueMessage}
                   onClearQueue={handleClearQueue}
+                  onWorktreeEnabled={handleWorktreeEnabled}
+                  onWorktreeMerged={handleWorktreeMerged}
+                  workspacePath={workspacePath ?? undefined}
                   isFocused={true}
                 />
               </div>

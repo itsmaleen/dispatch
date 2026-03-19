@@ -23,6 +23,7 @@ import { initSyncEventEmitter, getSyncEventEmitter, type SyncEvent } from './eve
 import { initQueryManager, getQueryManager } from './subscriptions/query-manager';
 import { getTerminalManager, type TerminalManager } from './services/terminal-manager';
 import { executeTerminalTool, getTerminalToolSchema } from './services/terminal-tool';
+import { getAgentConsoleLauncher, type AgentConsoleLauncher, type AgentConsole, type LaunchAgentOptions } from './services/agent-console-launcher';
 import type { TerminalClientMessage, CreateTerminalOptions, TerminalToolInput } from '@acc/contracts';
 
 interface ManagedAdapter {
@@ -60,6 +61,7 @@ export class CommandCenterServer {
   private connectedAgents = new Map<string, ConnectedAgent>();
   private tasks = new Map<string, Task>();
   private terminalManager: TerminalManager | null = null;
+  private agentConsoleLauncher: AgentConsoleLauncher | null = null;
   private _port: number;
   
   /** Actual port the server is listening on (may differ from requested if port was in use) */
@@ -477,14 +479,140 @@ export class CommandCenterServer {
       }>();
 
       const manager = getSessionManager();
-      
+
       try {
         const forked = await manager.forkThread(id, { name, fromMessageId });
         return c.json({ ok: true, thread: forked });
       } catch (error) {
-        return c.json({ 
-          ok: false, 
+        return c.json({
+          ok: false,
           error: error instanceof Error ? error.message : 'Fork failed',
+        }, 500);
+      }
+    });
+
+    // ============ Thread Worktree Routes ============
+
+    // Enable worktree isolation for a thread
+    this.app.post('/threads/:id/worktree', async (c) => {
+      const id = c.req.param('id');
+      let branch: string | undefined;
+      let baseBranch: string | undefined;
+      let cwd: string | undefined;
+      let name: string | undefined;
+
+      try {
+        const body = await c.req.json<{ branch?: string; baseBranch?: string; cwd?: string; name?: string }>();
+        branch = body.branch;
+        baseBranch = body.baseBranch;
+        cwd = body.cwd;
+        name = body.name;
+      } catch {
+        // No body or invalid JSON, use defaults
+      }
+
+      const manager = getSessionManager();
+
+      try {
+        const result = await manager.enableWorktree(id, { branch, baseBranch, cwd, name });
+        return c.json({ ok: true, ...result });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to enable worktree',
+        }, 500);
+      }
+    });
+
+    // Get worktree info for a thread
+    this.app.get('/threads/:id/worktree', async (c) => {
+      const id = c.req.param('id');
+      const manager = getSessionManager();
+
+      try {
+        const worktree = await manager.getWorktreeInfo(id);
+        if (!worktree) {
+          return c.json({ ok: false, error: 'No worktree for this thread' }, 404);
+        }
+        return c.json({ ok: true, worktree });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to get worktree info',
+        }, 500);
+      }
+    });
+
+    // Get changes in thread's worktree
+    this.app.get('/threads/:id/worktree/changes', async (c) => {
+      const id = c.req.param('id');
+      const manager = getSessionManager();
+
+      try {
+        const changes = await manager.getWorktreeChanges(id);
+        if (!changes) {
+          return c.json({ ok: false, error: 'No worktree for this thread' }, 404);
+        }
+        return c.json({ ok: true, changes });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to get worktree changes',
+        }, 500);
+      }
+    });
+
+    // Merge thread's worktree branch
+    this.app.post('/threads/:id/worktree/merge', async (c) => {
+      const id = c.req.param('id');
+      let targetBranch: string | undefined;
+      let message: string | undefined;
+      let removeAfterMerge: boolean | undefined;
+
+      try {
+        const body = await c.req.json<{
+          targetBranch?: string;
+          message?: string;
+          removeAfterMerge?: boolean;
+        }>();
+        targetBranch = body.targetBranch;
+        message = body.message;
+        removeAfterMerge = body.removeAfterMerge;
+      } catch {
+        // No body or invalid JSON, use defaults
+      }
+
+      const manager = getSessionManager();
+
+      try {
+        const result = await manager.mergeWorktree(id, {
+          targetBranch,
+          message,
+          removeAfterMerge,
+        });
+        return c.json({ ok: true, ...result });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to merge worktree',
+        }, 500);
+      }
+    });
+
+    // Remove thread's worktree without merging
+    this.app.delete('/threads/:id/worktree', async (c) => {
+      const id = c.req.param('id');
+      const force = c.req.query('force') === 'true';
+
+      const manager = getSessionManager();
+
+      try {
+        await manager.removeWorktree(id, force);
+        return c.json({ ok: true });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to remove worktree',
         }, 500);
       }
     });
@@ -1270,6 +1398,200 @@ Format your response as plain text only:
         }, 500);
       }
     });
+
+    // ============ Agent Console Routes (Worktree-isolated agents) ============
+
+    // List all agent consoles
+    this.app.get('/api/agent-consoles', (c) => {
+      if (!this.agentConsoleLauncher) {
+        return c.json({ ok: false, error: 'Agent console launcher not initialized' }, 500);
+      }
+      const consoles = this.agentConsoleLauncher.list();
+      return c.json({ ok: true, consoles });
+    });
+
+    // List active agent consoles only
+    this.app.get('/api/agent-consoles/active', (c) => {
+      if (!this.agentConsoleLauncher) {
+        return c.json({ ok: false, error: 'Agent console launcher not initialized' }, 500);
+      }
+      const consoles = this.agentConsoleLauncher.listActive();
+      return c.json({ ok: true, consoles });
+    });
+
+    // Launch a new agent console
+    this.app.post('/api/agent-consoles', async (c) => {
+      if (!this.agentConsoleLauncher) {
+        return c.json({ ok: false, error: 'Agent console launcher not initialized' }, 500);
+      }
+
+      const options = await c.req.json<LaunchAgentOptions>();
+
+      if (!options.task) {
+        return c.json({ ok: false, error: 'task is required' }, 400);
+      }
+
+      try {
+        const result = await this.agentConsoleLauncher.launch(options);
+        if (result.success) {
+          return c.json({ ok: true, console: result.console });
+        } else {
+          return c.json({ ok: false, error: result.error }, 500);
+        }
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to launch agent console',
+        }, 500);
+      }
+    });
+
+    // Get agent console by ID
+    this.app.get('/api/agent-consoles/:id', (c) => {
+      const id = c.req.param('id');
+      if (!this.agentConsoleLauncher) {
+        return c.json({ ok: false, error: 'Agent console launcher not initialized' }, 500);
+      }
+
+      const agentConsole = this.agentConsoleLauncher.get(id);
+      if (!agentConsole) {
+        return c.json({ ok: false, error: 'Agent console not found' }, 404);
+      }
+
+      return c.json({ ok: true, console: agentConsole });
+    });
+
+    // Start an agent console (send the initial task)
+    this.app.post('/api/agent-consoles/:id/start', async (c) => {
+      const id = c.req.param('id');
+      if (!this.agentConsoleLauncher) {
+        return c.json({ ok: false, error: 'Agent console launcher not initialized' }, 500);
+      }
+
+      try {
+        await this.agentConsoleLauncher.start(id);
+        return c.json({ ok: true });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to start agent console',
+        }, 500);
+      }
+    });
+
+    // Send a message to an agent console
+    this.app.post('/api/agent-consoles/:id/send', async (c) => {
+      const id = c.req.param('id');
+      const { message } = await c.req.json<{ message: string }>();
+
+      if (!this.agentConsoleLauncher) {
+        return c.json({ ok: false, error: 'Agent console launcher not initialized' }, 500);
+      }
+
+      if (!message) {
+        return c.json({ ok: false, error: 'message is required' }, 400);
+      }
+
+      try {
+        await this.agentConsoleLauncher.sendMessage(id, message);
+        return c.json({ ok: true });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to send message',
+        }, 500);
+      }
+    });
+
+    // Get worktree info for an agent console
+    this.app.get('/api/agent-consoles/:id/worktree', async (c) => {
+      const id = c.req.param('id');
+      if (!this.agentConsoleLauncher) {
+        return c.json({ ok: false, error: 'Agent console launcher not initialized' }, 500);
+      }
+
+      try {
+        const worktree = await this.agentConsoleLauncher.getWorktreeInfo(id);
+        if (!worktree) {
+          return c.json({ ok: false, error: 'Worktree not found' }, 404);
+        }
+        return c.json({ ok: true, worktree });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to get worktree info',
+        }, 500);
+      }
+    });
+
+    // Get changes made by an agent console
+    this.app.get('/api/agent-consoles/:id/changes', async (c) => {
+      const id = c.req.param('id');
+      if (!this.agentConsoleLauncher) {
+        return c.json({ ok: false, error: 'Agent console launcher not initialized' }, 500);
+      }
+
+      try {
+        const changes = await this.agentConsoleLauncher.getChanges(id);
+        if (!changes) {
+          return c.json({ ok: false, error: 'Agent console not found' }, 404);
+        }
+        return c.json({ ok: true, changes });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to get changes',
+        }, 500);
+      }
+    });
+
+    // Merge agent console work into target branch
+    this.app.post('/api/agent-consoles/:id/merge', async (c) => {
+      const id = c.req.param('id');
+      const { targetBranch, message, removeAfterMerge } = await c.req.json<{
+        targetBranch?: string;
+        message?: string;
+        removeAfterMerge?: boolean;
+      }>();
+
+      if (!this.agentConsoleLauncher) {
+        return c.json({ ok: false, error: 'Agent console launcher not initialized' }, 500);
+      }
+
+      try {
+        const result = await this.agentConsoleLauncher.merge(id, {
+          targetBranch,
+          message,
+          removeAfterMerge,
+        });
+        return c.json({ ok: true, ...result });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to merge',
+        }, 500);
+      }
+    });
+
+    // Remove an agent console
+    this.app.delete('/api/agent-consoles/:id', async (c) => {
+      const id = c.req.param('id');
+      const force = c.req.query('force') === 'true';
+
+      if (!this.agentConsoleLauncher) {
+        return c.json({ ok: false, error: 'Agent console launcher not initialized' }, 500);
+      }
+
+      try {
+        await this.agentConsoleLauncher.remove(id, force);
+        return c.json({ ok: true });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to remove agent console',
+        }, 500);
+      }
+    });
   }
 
   private async createAdapter(config: AdapterConfig): Promise<AdapterImplementation> {
@@ -1430,6 +1752,85 @@ Format your response as plain text only:
         type: 'terminal:error',
         terminalId,
         error: error.message,
+      });
+    });
+  }
+
+  // ============ Agent Console Event Forwarding ============
+
+  /** Set up event forwarding from AgentConsoleLauncher to WebSocket clients */
+  private setupAgentConsoleEventForwarding(): void {
+    if (!this.agentConsoleLauncher) return;
+
+    // Forward console:created events
+    this.agentConsoleLauncher.on('console:created', (agentConsole: AgentConsole) => {
+      this.broadcastRaw({
+        type: 'event',
+        event: {
+          type: 'agent-console.created',
+          payload: agentConsole,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    });
+
+    // Forward console:started events
+    this.agentConsoleLauncher.on('console:started', (consoleId: string) => {
+      this.broadcastRaw({
+        type: 'event',
+        event: {
+          type: 'agent-console.started',
+          payload: { consoleId },
+          timestamp: new Date().toISOString(),
+        },
+      });
+    });
+
+    // Forward console:completed events
+    this.agentConsoleLauncher.on('console:completed', (consoleId: string) => {
+      this.broadcastRaw({
+        type: 'event',
+        event: {
+          type: 'agent-console.completed',
+          payload: { consoleId },
+          timestamp: new Date().toISOString(),
+        },
+      });
+    });
+
+    // Forward console:failed events
+    this.agentConsoleLauncher.on('console:failed', (consoleId: string, error: string) => {
+      this.broadcastRaw({
+        type: 'event',
+        event: {
+          type: 'agent-console.failed',
+          payload: { consoleId, error },
+          timestamp: new Date().toISOString(),
+        },
+      });
+    });
+
+    // Forward console:status_changed events
+    this.agentConsoleLauncher.on('console:status_changed', (consoleId: string, status: string) => {
+      this.broadcastRaw({
+        type: 'event',
+        event: {
+          type: 'agent-console.status_changed',
+          payload: { consoleId, status },
+          timestamp: new Date().toISOString(),
+        },
+      });
+    });
+
+    // Forward console:removed events
+    this.agentConsoleLauncher.on('console:removed', (consoleId: string) => {
+      this.broadcastRaw({
+        type: 'event',
+        event: {
+          type: 'agent-console.removed',
+          payload: { consoleId },
+          timestamp: new Date().toISOString(),
+        },
       });
     });
   }
@@ -1856,6 +2257,12 @@ Format your response as plain text only:
     // Initialize terminal manager for PTY-based shell terminals
     this.terminalManager = getTerminalManager();
     this.setupTerminalEventForwarding();
+
+    // Initialize agent console launcher for worktree-isolated agents
+    // Uses the current working directory as the repo path
+    const repoPath = process.cwd();
+    this.agentConsoleLauncher = getAgentConsoleLauncher(repoPath);
+    this.setupAgentConsoleEventForwarding();
 
     // Initialize session manager
     const sessionManager = getSessionManager();

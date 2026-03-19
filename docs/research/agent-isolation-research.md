@@ -298,30 +298,171 @@ branch_b = agent.branch("Try approach B")
 - Deterministic replay for debugging
 - Safe experimentation with branching
 
-### Strategy 3: Metadata Branch (Entire Pattern)
+### Strategy 3: Entire.io — Production-Ready Checkpoint System
 
-Store checkpoint metadata on a separate git branch, keeping code history clean.
+Entire.io provides a **complete, production-ready checkpoint solution** that we can leverage directly rather than building from scratch.
 
-#### Repository
-- **GitHub**: https://github.com/entireio/cli
+#### Repository & License
+- **GitHub**: https://github.com/entireio/cli (MIT License, 3.7k stars)
+- **Docs**: https://docs.entire.io
 
-#### How It Works
+#### Architecture Overview
+
+Entire uses a **dual-branch approach** that keeps your code history clean:
 
 ```
-main                    # Clean code commits only
-├── feature/auth        # Feature work
-└── entire/checkpoints/v1  # Agent session metadata (hidden)
-    ├── session-001.json
-    ├── session-002.json
-    └── checkpoint-abc.json
+main                           # Clean code commits only (your work)
+├── feature/auth               # Feature branches (untouched by Entire)
+│
+├── entire/<sessionID>-<worktreeID>   # Shadow branches (temporary, local-only)
+│   └── [mid-session checkpoints]     # For rewind during active sessions
+│
+└── entire/checkpoints/v1      # Checkpoint metadata branch (synced to remote)
+    └── sharded-json/          # Session & checkpoint JSON files
+        ├── a3/b2c4d5e6f7.json
+        └── ...
 ```
 
-#### Benefits
+**Key insight**: Entire never creates commits on your active branch — all metadata lives separately.
 
-- Code commits stay clean and human-readable
-- Full session context preserved separately
-- Can rewind to any checkpoint
-- Resume from any previous agent session exactly
+#### What Gets Captured Per Checkpoint
+
+| Data | Description |
+|------|-------------|
+| 12-char hex ID | Unique checkpoint identifier (e.g., `a3b2c4d5e6f7`) |
+| Session transcripts | Full conversation history (prompts + responses) |
+| Tool calls | Every tool invocation with arguments |
+| File modifications | Which files changed, with diffs |
+| Token metrics | Input, output, cache reads, cache writes, API calls |
+| Line attribution | % of code written by AI vs human |
+| Timestamps | Session start, end, duration |
+| Agent identity | Which AI agent (Claude, Gemini, etc.) |
+
+#### Checkpoint Types
+
+1. **Temporary checkpoints** — Stored on shadow branches during active sessions
+   - Enable mid-session rewind (`entire rewind --list`)
+   - Never pushed to remote
+   - Cleaned up after session ends
+
+2. **Committed checkpoints** — Attached to git commits via trailers
+   - Format: `Entire-Checkpoint: a3b2c4d5e6f7`
+   - Permanently stored on `entire/checkpoints/v1` branch
+   - Synced to GitHub for team visibility
+
+#### Session-Checkpoint Relationships
+
+Entire handles complex real-world patterns:
+
+| Pattern | Description |
+|---------|-------------|
+| 1:1 | One session → one commit (most common) |
+| 1:many | Multiple sessions → one squashed commit |
+| many:1 | One long session → multiple commits |
+| many:many | Parallel sessions with concurrent commits |
+
+Entire automatically matches checkpoints to sessions across multiple terminals.
+
+#### CLI Commands for Checkpoints
+
+```bash
+# Enable Entire in a repo (installs git hooks)
+entire enable --agent claude
+
+# View checkpoint status
+entire status --detailed
+
+# List checkpoints in current session
+entire rewind --list
+
+# Rewind to specific checkpoint
+entire rewind --to a3b2c4d5e6f7
+
+# Rewind but only restore logs (not files)
+entire rewind --to a3b2c4d5e6f7 --logs-only
+
+# Resume a session from a branch
+entire resume feature/auth
+
+# Get AI explanation of a checkpoint
+entire explain --checkpoint a3b2c4d5e6f7
+
+# Clean up orphaned data
+entire clean --dry-run
+```
+
+#### Integration with AI Agents
+
+Entire **automatically detects** supported agents and begins capturing:
+- ✅ Claude Code (fully supported)
+- ✅ Gemini CLI (fully supported)
+- ✅ OpenCode (supported)
+- 🔜 Cursor (preview)
+- 🔜 GitHub Copilot CLI (preview)
+- 🔜 Factory Droid (preview)
+
+Integration works via **git hooks**, not programmatic APIs:
+1. `entire enable` installs pre-commit and post-commit hooks
+2. Hooks detect active AI agent sessions
+3. Checkpoints created automatically on commit
+4. No code changes required in agents
+
+#### Limitations & Considerations
+
+| Aspect | Details |
+|--------|---------|
+| **No public API** | CLI-only; OpenAPI spec is placeholder |
+| **Git-commit triggered** | Checkpoints only on commits, not arbitrary saves |
+| **Rewind discards changes** | `entire rewind` does `git reset --hard` |
+| **Agent detection** | Works via process detection, not hooks we control |
+| **Local-first** | Shadow branches stay local; only checkpoint branch syncs |
+
+#### Recommendation: Leverage Entire for Checkpointing
+
+**For ACC (Agent Command Center), we should:**
+
+1. **Use Entire as the checkpoint backend** — Don't reinvent the wheel
+   - Install Entire in managed worktrees automatically
+   - Let it handle all checkpoint capture and storage
+   - Surface checkpoint data in our UI via CLI parsing
+
+2. **Build a thin integration layer:**
+   ```typescript
+   class EntireCheckpointAdapter {
+     // Parse `entire status --detailed` output
+     async getCheckpoints(worktreePath: string): Promise<Checkpoint[]>
+
+     // Execute `entire rewind --to <id>`
+     async rewind(worktreePath: string, checkpointId: string): Promise<void>
+
+     // Execute `entire rewind --list`
+     async listRewindPoints(worktreePath: string): Promise<RewindPoint[]>
+
+     // Parse checkpoint metadata from entire/checkpoints/v1 branch
+     async getCheckpointMetadata(checkpointId: string): Promise<CheckpointMeta>
+   }
+   ```
+
+3. **Extend for our needs:**
+   - Add real-time checkpoint notifications (watch git hooks)
+   - Build checkpoint diff viewer in ACC UI
+   - Add checkpoint comparison across agents
+   - Implement "branch from checkpoint" for exploration
+
+4. **Fallback for unsupported agents:**
+   - If agent isn't detected by Entire, use our own auto-commit pattern
+   - Mirror Aider's approach: `git commit -m "checkpoint: <description>"`
+
+#### Benefits of Using Entire
+
+| Benefit | Impact |
+|---------|--------|
+| **Battle-tested** | 3.7k stars, active development, MIT license |
+| **Rich metadata** | Token usage, line attribution, full transcripts |
+| **Clean git history** | No checkpoint commits in your branches |
+| **Team visibility** | Checkpoints sync to GitHub, visible in PRs |
+| **Multi-agent support** | Already handles Claude, Gemini, etc. |
+| **Nested sessions** | Captures sub-agent hierarchies automatically |
 
 ---
 
@@ -401,95 +542,113 @@ docker run -v $(pwd)/../feature-auth:/workspace agent-image
 
 ---
 
-## Merge Conflict Prevention & Resolution
+## Merge Conflicts: Reality Check
 
-### Prevention Strategies
+### Why Worktrees Don't Eliminate Conflicts
 
-#### 1. Task Planning (Most Important)
+Worktrees provide **runtime isolation** (agents can't step on each other's files during work), but they don't prevent **merge-time conflicts** (incompatible changes when combining branches).
 
-```yaml
-# Good: Tasks touch different files
-tasks:
-  - agent: claude-1
-    scope: src/auth/*
+```
+Time 0:  main has config.ts
+         │
+         ├── Agent 1 (worktree A): Adds AUTH_SECRET to config.ts
+         │
+         └── Agent 2 (worktree B): Adds API_KEY to config.ts
 
-  - agent: claude-2
-    scope: src/api/*
+Time 1:  Both agents finish — no problems, they worked in isolation
 
-# Bad: Overlapping scope
-tasks:
-  - agent: claude-1
-    scope: src/*  # Too broad
-
-  - agent: claude-2
-    scope: src/*  # Overlap!
+Time 2:  Merge time → CONFLICT (both modified same lines in config.ts)
 ```
 
-#### 2. File Locking (Explicit)
+### Conflict Scenarios by Likelihood
 
-```bash
-# Simple lock file approach
-echo "claude-1" > src/auth/login.ts.lock
+| Scenario | Likelihood | Auto-Resolvable? | Example |
+|----------|------------|------------------|---------|
+| **Shared config files** | HIGH | Usually yes | Both add to `package.json` dependencies |
+| **Import blocks** | Medium | Yes | Both add imports to same file |
+| **Same file, different sections** | Medium | Yes (git handles) | Agent 1 edits line 10, Agent 2 edits line 100 |
+| **Same file, same lines** | Low* | No | Both modify the same function |
+| **Lock files** | HIGH | Regenerate | `package-lock.json`, `bun.lockb` |
+| **Structural refactoring** | Low | No | Agent 1 renames file Agent 2 depends on |
 
-# Before editing, check lock
-if [ -f "src/auth/login.ts.lock" ]; then
-    echo "File locked by another agent"
-    exit 1
-fi
+*Low if tasks are properly scoped
+
+### When NOT to Worry
+
+**Most parallel agent work won't conflict** if tasks are naturally isolated:
+
+```
+Agent 1: src/features/auth/*      → No overlap
+Agent 2: src/features/billing/*   → No overlap
+Agent 3: src/features/dashboard/* → No overlap
 ```
 
-#### 3. Early Detection with Clash
-
-```bash
-# Install Clash
-npm install -g @clash-sh/cli
-
-# Detect potential conflicts before they happen
-clash detect --worktrees .trees/
-
-# Output:
-# ⚠️  Potential conflict detected:
-#    .trees/feature-auth/src/config.ts (modified)
-#    .trees/feature-api/src/config.ts (modified)
+**New files never conflict:**
+```
+Agent 1: Creates src/auth/login.ts     → Can't conflict
+Agent 2: Creates src/api/users.ts      → Can't conflict
 ```
 
-### Resolution Strategies
+### Realistic Expectations
 
-#### Sequential Merging (Recommended)
+| Outcome | Expected % | Action |
+|---------|------------|--------|
+| Clean merge (no conflicts) | **80%** | Just merge |
+| Auto-resolvable conflicts | **15%** | Keep both additions |
+| Manual intervention needed | **5%** | Human reviews |
 
-```bash
-# 1. Merge first branch
-git checkout main
-git merge feature-auth
+### Our Approach: Simple First
 
-# 2. Rebase remaining branches on updated main
-git checkout feature-api
-git rebase main
+Given the low conflict rate with well-scoped tasks, we'll implement conflict handling **incrementally**:
 
-# 3. Merge next branch
-git checkout main
-git merge feature-api
+#### MVP (Phase 1): Just Merge
+- Sequential merge (one branch at a time)
+- If conflict → surface to user with diff view
+- User resolves manually or discards
 
-# Key: Each merge has full context of previous changes
+#### Later (Phase 2+): Smart Detection
+- Track which files each agent modifies in real-time
+- Warn if two agents touch same file
+- Auto-resolve trivial cases (both added imports, both added deps)
+
+### Simple Merge Flow (What We're Building)
+
+```typescript
+class SimpleMergeFlow {
+  async merge(consolesToMerge: AgentConsole[], targetBranch: string) {
+    // Checkout target
+    await git.checkout(targetBranch);
+
+    // Merge one by one
+    for (const console of consolesToMerge) {
+      try {
+        await git.merge(console.branchName);
+        console.status = 'merged';
+      } catch (error) {
+        if (isConflictError(error)) {
+          // Surface conflict to user — they decide what to do
+          return {
+            status: 'conflict',
+            conflictingBranch: console.branchName,
+            conflictedFiles: await git.getConflictedFiles()
+          };
+        }
+        throw error;
+      }
+    }
+
+    return { status: 'success' };
+  }
+}
 ```
 
-#### AI-Assisted Resolution
+**We're NOT building (yet):**
+- ❌ Clash integration
+- ❌ AI-assisted resolution
+- ❌ File locking
+- ❌ Real-time conflict detection
 
-For simple conflicts (both agents added to same list):
-
-```bash
-# Let AI resolve
-claude -p "Resolve the merge conflict in src/routes.ts.
-Both branches added new routes - combine them appropriately."
-```
-
-#### Tools for AI-Assisted Resolution
-
-| Tool | Capability |
-|------|------------|
-| **GitKraken** | AI suggestions with explanations |
-| **GitHub Copilot Pro+** | Automatic complex conflict resolution |
-| **CodeGPT** | Context-aware resolution suggestions |
+These can come later if conflicts prove to be a real problem in practice.
 
 ### Conflict Resolution Checklist
 
@@ -641,6 +800,627 @@ workflow:
 
 ---
 
+## ACC Agent Console Launch & Merge Flow
+
+> **This section describes the primary user-facing workflow for ACC**: launching agent consoles that work on features in isolated worktrees, and merging their work back together.
+
+### User Journey Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           AGENT COMMAND CENTER                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐      │
+│  │ + New Agent │   │  Agent 1    │   │  Agent 2    │   │  Agent 3    │      │
+│  │   Console   │   │  Auth 🟢    │   │  API 🟡     │   │  UI 🔵      │      │
+│  └─────────────┘   └─────────────┘   └─────────────┘   └─────────────┘      │
+│                           │                │                │                │
+│                           ▼                ▼                ▼                │
+│                    ┌──────────────────────────────────────────────┐         │
+│                    │              Merge Dashboard                 │         │
+│                    │  ┌─────────┐ ┌─────────┐ ┌─────────┐        │         │
+│                    │  │ Auth ✓  │ │ API ... │ │ UI ✓    │        │         │
+│                    │  │ Ready   │ │ Running │ │ Ready   │        │         │
+│                    │  └─────────┘ └─────────┘ └─────────┘        │         │
+│                    │                                              │         │
+│                    │  [Check Conflicts] [Merge to Main] [Create PR]│        │
+│                    └──────────────────────────────────────────────┘         │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Phase A: Launching Agent Consoles
+
+#### A1. User Interface for Launch
+
+```typescript
+interface LaunchAgentOptions {
+  // Task definition
+  task: string;                    // What the agent should do
+  taskTitle?: string;              // Short name for UI (e.g., "Auth Feature")
+
+  // Isolation settings
+  branchName?: string;             // Auto-generated if not provided
+  baseBranch?: string;             // Default: current branch or 'main'
+
+  // Agent configuration
+  agentType?: 'claude' | 'gemini'; // Which AI agent to use
+  maxTurns?: number;               // Cost control
+  autoCommit?: boolean;            // Commit on completion (default: true)
+
+  // Entire.io integration
+  enableCheckpoints?: boolean;     // Default: true
+}
+
+// Example: User clicks "+ New Agent Console" button
+const agentConsole = await acc.launchAgent({
+  task: "Implement user authentication with JWT tokens",
+  taskTitle: "Auth Feature",
+  branchName: "feature/auth",
+  baseBranch: "main",
+  agentType: "claude",
+  enableCheckpoints: true
+});
+```
+
+#### A2. What Happens Behind the Scenes
+
+```typescript
+class AgentConsoleLauncher {
+  async launch(options: LaunchAgentOptions): Promise<AgentConsole> {
+    // 1. Create isolated worktree
+    const branchName = options.branchName || this.generateBranchName(options.taskTitle);
+    const worktreePath = await this.worktreeManager.create(branchName, options.baseBranch);
+
+    // 2. Initialize Entire.io for checkpointing
+    if (options.enableCheckpoints) {
+      const entire = new EntireIntegration(worktreePath);
+      await entire.setup(options.agentType || 'claude');
+    }
+
+    // 3. Create PTY terminal in the worktree
+    const terminal = await this.terminalManager.create({
+      name: options.taskTitle || branchName,
+      cwd: worktreePath,
+      env: {
+        ...process.env,
+        ACC_AGENT_TASK: options.task,
+        ACC_BRANCH: branchName,
+        ACC_WORKTREE: worktreePath
+      }
+    });
+
+    // 4. Launch the AI agent in the terminal
+    const agentCommand = this.buildAgentCommand(options);
+    terminal.sendText(agentCommand);
+
+    // 5. Create and return AgentConsole wrapper
+    const console = new AgentConsole({
+      id: generateId(),
+      terminal,
+      worktreePath,
+      branchName,
+      task: options.task,
+      status: 'running',
+      entire: options.enableCheckpoints ? new EntireIntegration(worktreePath) : null
+    });
+
+    // 6. Register in ACC state
+    this.activeConsoles.set(console.id, console);
+    this.emitEvent('agent:launched', console);
+
+    return console;
+  }
+
+  private buildAgentCommand(options: LaunchAgentOptions): string {
+    const agent = options.agentType || 'claude';
+
+    if (agent === 'claude') {
+      return `claude -p "${options.task}" --output-format stream-json`;
+    } else if (agent === 'gemini') {
+      return `gemini "${options.task}"`;
+    }
+    // ... other agents
+  }
+}
+```
+
+#### A3. Agent Console UI Component
+
+```typescript
+interface AgentConsoleProps {
+  console: AgentConsole;
+  onClose: () => void;
+  onMerge: () => void;
+}
+
+function AgentConsoleWidget({ console }: AgentConsoleProps) {
+  return (
+    <div className="agent-console">
+      {/* Header */}
+      <header className="console-header">
+        <StatusIndicator status={console.status} />
+        <h3>{console.taskTitle}</h3>
+        <span className="branch-name">{console.branchName}</span>
+
+        <div className="actions">
+          <Button onClick={() => console.pause()}>Pause</Button>
+          <Button onClick={() => console.showCheckpoints()}>Checkpoints</Button>
+          <Button onClick={() => console.viewDiff()}>View Changes</Button>
+          <Button onClick={() => openMergeFlow(console)} disabled={console.status !== 'completed'}>
+            Merge
+          </Button>
+        </div>
+      </header>
+
+      {/* Agent output (existing AgentConsole component) */}
+      <AgentOutputView console={console} />
+
+      {/* Real terminal for manual intervention */}
+      <TerminalView terminal={console.terminal} collapsible />
+
+      {/* Footer with stats */}
+      <footer className="console-footer">
+        <span>Tokens: {console.tokenUsage.toLocaleString()}</span>
+        <span>Checkpoints: {console.checkpointCount}</span>
+        <span>Files changed: {console.filesChanged}</span>
+      </footer>
+    </div>
+  );
+}
+```
+
+### Phase B: Monitoring & Managing Running Agents
+
+#### B1. Agent Status States
+
+```typescript
+type AgentStatus =
+  | 'initializing'    // Worktree being created, Entire being set up
+  | 'running'         // Agent actively working
+  | 'waiting_input'   // Agent waiting for user response
+  | 'paused'          // User paused the agent
+  | 'completed'       // Agent finished successfully
+  | 'failed'          // Agent encountered error
+  | 'ready_to_merge'; // Completed and changes committed
+
+interface AgentConsoleState {
+  id: string;
+  status: AgentStatus;
+
+  // Task info
+  task: string;
+  taskTitle: string;
+  startedAt: Date;
+  completedAt?: Date;
+
+  // Git state
+  branchName: string;
+  baseBranch: string;
+  worktreePath: string;
+  commitCount: number;
+  filesChanged: string[];
+
+  // Checkpoint info (from Entire)
+  checkpoints: Checkpoint[];
+  currentCheckpoint?: string;
+
+  // Metrics
+  tokenUsage: TokenMetrics;
+  duration: number;
+
+  // Conflict detection
+  potentialConflicts?: ConflictCheck;
+}
+```
+
+#### B2. Real-time Updates via Events
+
+```typescript
+// WebSocket events from backend
+type AgentEvent =
+  | { type: 'agent:output', consoleId: string, data: string }
+  | { type: 'agent:status_change', consoleId: string, status: AgentStatus }
+  | { type: 'agent:checkpoint', consoleId: string, checkpoint: Checkpoint }
+  | { type: 'agent:file_changed', consoleId: string, file: string }
+  | { type: 'agent:commit', consoleId: string, commit: CommitInfo }
+  | { type: 'agent:conflict_detected', consoleId: string, conflicts: ConflictInfo[] }
+  | { type: 'agent:completed', consoleId: string, summary: AgentSummary }
+  | { type: 'agent:failed', consoleId: string, error: string };
+
+// Frontend subscription
+function useAgentConsole(consoleId: string) {
+  const [state, setState] = useState<AgentConsoleState>();
+
+  useEffect(() => {
+    const unsubscribe = acc.subscribe(`agent:${consoleId}`, (event) => {
+      switch (event.type) {
+        case 'agent:status_change':
+          setState(prev => ({ ...prev, status: event.status }));
+          break;
+        case 'agent:checkpoint':
+          setState(prev => ({
+            ...prev,
+            checkpoints: [...prev.checkpoints, event.checkpoint]
+          }));
+          break;
+        // ... handle other events
+      }
+    });
+
+    return unsubscribe;
+  }, [consoleId]);
+
+  return state;
+}
+```
+
+### Phase C: Merge Flow
+
+#### C1. Pre-Merge Conflict Detection
+
+Before merging, ACC checks for potential conflicts across all active agents:
+
+```typescript
+class MergeFlowManager {
+  async checkConflicts(consoleIds: string[]): Promise<ConflictReport> {
+    const consoles = consoleIds.map(id => this.getConsole(id));
+
+    // 1. Get changed files from each branch
+    const changesByConsole = await Promise.all(
+      consoles.map(async (c) => ({
+        consoleId: c.id,
+        branch: c.branchName,
+        changedFiles: await this.git.getChangedFiles(c.worktreePath)
+      }))
+    );
+
+    // 2. Find overlapping files
+    const fileMap = new Map<string, string[]>();
+    for (const { consoleId, changedFiles } of changesByConsole) {
+      for (const file of changedFiles) {
+        const existing = fileMap.get(file) || [];
+        fileMap.set(file, [...existing, consoleId]);
+      }
+    }
+
+    // 3. Check for actual conflicts (not just same file)
+    const conflicts: ConflictInfo[] = [];
+    for (const [file, consoleIds] of fileMap) {
+      if (consoleIds.length > 1) {
+        // Multiple agents touched this file - check for real conflict
+        const conflictDetails = await this.checkFileConflict(file, consoleIds);
+        if (conflictDetails.hasConflict) {
+          conflicts.push(conflictDetails);
+        }
+      }
+    }
+
+    // 4. Run Clash for deep analysis (if available)
+    if (this.clashAvailable) {
+      const clashReport = await this.runClash(consoles.map(c => c.worktreePath));
+      conflicts.push(...clashReport.conflicts);
+    }
+
+    return {
+      hasConflicts: conflicts.length > 0,
+      conflicts,
+      safeToMerge: conflicts.every(c => c.autoResolvable),
+      recommendation: this.generateRecommendation(conflicts)
+    };
+  }
+}
+```
+
+#### C2. Merge Dashboard UI
+
+```typescript
+function MergeDashboard() {
+  const consoles = useAgentConsoles();
+  const readyToMerge = consoles.filter(c => c.status === 'ready_to_merge');
+  const [conflictReport, setConflictReport] = useState<ConflictReport>();
+  const [mergeOrder, setMergeOrder] = useState<string[]>([]);
+
+  // Check conflicts when selection changes
+  useEffect(() => {
+    if (readyToMerge.length > 1) {
+      checkConflicts(readyToMerge.map(c => c.id)).then(setConflictReport);
+    }
+  }, [readyToMerge]);
+
+  return (
+    <div className="merge-dashboard">
+      <h2>Merge Dashboard</h2>
+
+      {/* Agent cards */}
+      <div className="agent-grid">
+        {consoles.map(console => (
+          <AgentCard
+            key={console.id}
+            console={console}
+            selected={mergeOrder.includes(console.id)}
+            onSelect={() => toggleMergeSelection(console.id)}
+          />
+        ))}
+      </div>
+
+      {/* Conflict warnings */}
+      {conflictReport?.hasConflicts && (
+        <ConflictWarning report={conflictReport} />
+      )}
+
+      {/* Merge order (drag to reorder) */}
+      <MergeOrderList
+        order={mergeOrder}
+        onReorder={setMergeOrder}
+      />
+
+      {/* Actions */}
+      <div className="actions">
+        <Button onClick={() => previewMerge(mergeOrder)}>
+          Preview Merge
+        </Button>
+        <Button
+          variant="primary"
+          onClick={() => executeMerge(mergeOrder)}
+          disabled={conflictReport?.hasConflicts && !conflictReport.safeToMerge}
+        >
+          Merge to {targetBranch}
+        </Button>
+        <Button onClick={() => createPullRequests(mergeOrder)}>
+          Create PRs Instead
+        </Button>
+      </div>
+    </div>
+  );
+}
+```
+
+#### C3. Merge Execution Strategies
+
+```typescript
+type MergeStrategy =
+  | 'sequential'      // Merge one by one, rebasing each on updated base
+  | 'octopus'         // Git octopus merge (all at once, fails on conflict)
+  | 'individual_prs'  // Create separate PRs for each
+  | 'stacked_prs';    // Create stacked/dependent PRs
+
+class MergeExecutor {
+  async executeMerge(
+    consoleIds: string[],
+    strategy: MergeStrategy,
+    targetBranch: string
+  ): Promise<MergeResult> {
+
+    switch (strategy) {
+      case 'sequential':
+        return this.sequentialMerge(consoleIds, targetBranch);
+
+      case 'octopus':
+        return this.octopusMerge(consoleIds, targetBranch);
+
+      case 'individual_prs':
+        return this.createIndividualPRs(consoleIds, targetBranch);
+
+      case 'stacked_prs':
+        return this.createStackedPRs(consoleIds, targetBranch);
+    }
+  }
+
+  private async sequentialMerge(
+    consoleIds: string[],
+    targetBranch: string
+  ): Promise<MergeResult> {
+    const results: BranchMergeResult[] = [];
+
+    // Checkout target branch
+    await this.git.checkout(targetBranch);
+
+    for (const consoleId of consoleIds) {
+      const console = this.getConsole(consoleId);
+
+      try {
+        // Merge this branch
+        await this.git.merge(console.branchName, {
+          message: `Merge ${console.taskTitle} (${console.branchName})`
+        });
+
+        results.push({
+          consoleId,
+          branch: console.branchName,
+          success: true
+        });
+
+        // Clean up worktree
+        await this.worktreeManager.remove(console.branchName);
+
+      } catch (error) {
+        if (this.isConflictError(error)) {
+          // Pause and let user resolve
+          return {
+            status: 'conflict',
+            conflictingBranch: console.branchName,
+            completedMerges: results,
+            pendingMerges: consoleIds.slice(consoleIds.indexOf(consoleId))
+          };
+        }
+        throw error;
+      }
+    }
+
+    return {
+      status: 'success',
+      completedMerges: results,
+      finalCommit: await this.git.getCurrentCommit()
+    };
+  }
+
+  private async createIndividualPRs(
+    consoleIds: string[],
+    targetBranch: string
+  ): Promise<MergeResult> {
+    const prs: PullRequest[] = [];
+
+    for (const consoleId of consoleIds) {
+      const console = this.getConsole(consoleId);
+
+      // Push branch to remote
+      await this.git.push(console.branchName);
+
+      // Create PR using gh CLI or GitHub API
+      const pr = await this.github.createPR({
+        head: console.branchName,
+        base: targetBranch,
+        title: console.taskTitle,
+        body: this.generatePRBody(console)
+      });
+
+      prs.push(pr);
+    }
+
+    return {
+      status: 'prs_created',
+      pullRequests: prs
+    };
+  }
+
+  private generatePRBody(console: AgentConsole): string {
+    return `
+## Summary
+
+${console.task}
+
+## Changes
+
+${console.filesChanged.map(f => `- \`${f}\``).join('\n')}
+
+## Agent Session
+
+- **Agent**: ${console.agentType}
+- **Duration**: ${formatDuration(console.duration)}
+- **Tokens used**: ${console.tokenUsage.total.toLocaleString()}
+- **Checkpoints**: ${console.checkpoints.length}
+
+${console.entire ? `[View full session on Entire.io](https://entire.io/checkpoint/${console.checkpoints[0]?.id})` : ''}
+
+---
+🤖 Generated by Agent Command Center
+    `.trim();
+  }
+}
+```
+
+#### C4. Post-Merge Cleanup
+
+```typescript
+class PostMergeCleanup {
+  async cleanup(consoleIds: string[], options: CleanupOptions): Promise<void> {
+    for (const consoleId of consoleIds) {
+      const console = this.getConsole(consoleId);
+
+      // 1. Remove worktree
+      await this.worktreeManager.remove(console.branchName);
+
+      // 2. Clean up Entire data (optional)
+      if (options.cleanEntireData && console.entire) {
+        await console.entire.cleanup();
+      }
+
+      // 3. Delete local branch (if merged)
+      if (options.deleteLocalBranch) {
+        await this.git.deleteBranch(console.branchName);
+      }
+
+      // 4. Delete remote branch (if PR merged)
+      if (options.deleteRemoteBranch) {
+        await this.git.deleteRemoteBranch(console.branchName);
+      }
+
+      // 5. Archive console state (for history)
+      await this.archiveConsole(console);
+
+      // 6. Remove from active consoles
+      this.activeConsoles.delete(consoleId);
+    }
+
+    this.emitEvent('merge:cleanup_complete', { consoleIds });
+  }
+}
+```
+
+### Implementation Plan: MVP First
+
+We're building incrementally, starting with the core flow and adding complexity only as needed.
+
+#### MVP Scope (What We're Building First)
+
+| Feature | In MVP? | Notes |
+|---------|---------|-------|
+| Create worktree for agent | ✅ Yes | Core isolation |
+| Launch Claude in worktree terminal | ✅ Yes | Core feature |
+| Track agent status | ✅ Yes | Running/completed/failed |
+| View agent output | ✅ Yes | Existing terminal widget |
+| Simple sequential merge | ✅ Yes | One branch at a time |
+| Conflict → show to user | ✅ Yes | User resolves manually |
+| Worktree cleanup | ✅ Yes | Remove after merge |
+| Entire.io checkpoints | ⏳ Phase 2 | Nice to have |
+| Real-time conflict detection | ❌ Later | Only if needed |
+| AI conflict resolution | ❌ Later | Only if needed |
+| Clash integration | ❌ Later | Only if needed |
+
+#### MVP Timeline
+
+| Phase | Duration | What We Build |
+|-------|----------|---------------|
+| **1** | 3-4 days | `WorktreeManager` — create/list/remove worktrees |
+| **2** | 3-4 days | `AgentConsoleLauncher` — spawn agent in worktree terminal |
+| **3** | 2-3 days | Agent status tracking & UI updates |
+| **4** | 2-3 days | Simple merge flow + cleanup |
+
+**Total MVP: ~2 weeks**
+
+#### Post-MVP (If Needed)
+
+| Feature | When to Add |
+|---------|-------------|
+| Entire.io integration | When we want checkpoints/rollback |
+| Conflict detection | If conflicts become common |
+| PR creation flow | When teams want code review |
+| Parallel agent comparison | When running multiple agents on same task |
+
+### Commands to Add
+
+```typescript
+const agentCommands = [
+  // Launch
+  { id: 'launch-agent', label: 'Launch New Agent Console', shortcut: 'Cmd+Shift+A' },
+  { id: 'launch-agent-from-task', label: 'Launch Agent for Task...', shortcut: 'Cmd+Shift+T' },
+
+  // Monitor
+  { id: 'show-all-agents', label: 'Show All Agent Consoles', shortcut: 'Cmd+Shift+G' },
+  { id: 'focus-agent', label: 'Focus Agent Console...', shortcut: 'Cmd+G' },
+  { id: 'pause-agent', label: 'Pause Current Agent', shortcut: 'Cmd+Shift+P' },
+  { id: 'resume-agent', label: 'Resume Paused Agent' },
+
+  // Checkpoints
+  { id: 'show-checkpoints', label: 'Show Agent Checkpoints', shortcut: 'Cmd+Shift+C' },
+  { id: 'rewind-to-checkpoint', label: 'Rewind to Checkpoint...' },
+
+  // Merge
+  { id: 'open-merge-dashboard', label: 'Open Merge Dashboard', shortcut: 'Cmd+Shift+M' },
+  { id: 'check-conflicts', label: 'Check for Conflicts' },
+  { id: 'merge-agent-to-main', label: 'Merge Agent to Main...' },
+  { id: 'create-pr-from-agent', label: 'Create PR from Agent...' },
+
+  // Cleanup
+  { id: 'cleanup-agent', label: 'Cleanup Agent Console...' },
+  { id: 'cleanup-all-merged', label: 'Cleanup All Merged Agents' },
+];
+```
+
+---
+
 ## Headless/CI Mode Patterns
 
 ### Claude Code Headless Execution
@@ -742,93 +1522,295 @@ class WorktreeManager:
         return self._parse_worktree_list(result.stdout)
 ```
 
-### Phase 2: Checkpointing
+### Phase 2: Entire.io Integration (Replaces Custom Checkpointing)
+
+Instead of building custom checkpointing, we integrate Entire.io:
 
 ```python
-class CheckpointManager:
+class EntireIntegration:
+    """Manages Entire.io setup and checkpoint access for worktrees."""
+
     def __init__(self, worktree_path: str):
         self.worktree_path = worktree_path
 
-    def create(self, message: str) -> str:
-        """Create a checkpoint (commit)."""
-        subprocess.run(["git", "add", "-A"], cwd=self.worktree_path)
-        result = subprocess.run(
-            ["git", "commit", "-m", f"checkpoint: {message}"],
-            cwd=self.worktree_path,
-            capture_output=True
-        )
-        return self._get_current_commit()
+    async def setup(self, agent: str = "claude") -> bool:
+        """Initialize Entire in a worktree. Call once after worktree creation."""
+        result = await self._run_entire(["enable", "--agent", agent])
+        return result.returncode == 0
 
-    def rollback(self, commit_id: str = "HEAD^"):
-        """Rollback to a previous checkpoint."""
-        subprocess.run(
-            ["git", "reset", "--hard", commit_id],
-            cwd=self.worktree_path
+    async def get_checkpoints(self) -> List[Checkpoint]:
+        """Get all checkpoints in current session."""
+        result = await self._run_entire(["rewind", "--list"])
+        return self._parse_checkpoint_list(result.stdout)
+
+    async def rewind(self, checkpoint_id: str, logs_only: bool = False) -> bool:
+        """Rewind to a specific checkpoint."""
+        args = ["rewind", "--to", checkpoint_id]
+        if logs_only:
+            args.append("--logs-only")
+        result = await self._run_entire(args)
+        return result.returncode == 0
+
+    async def get_session_metadata(self, checkpoint_id: str) -> SessionMeta:
+        """Get rich metadata from checkpoint (tokens, attribution, transcript)."""
+        # Read directly from entire/checkpoints/v1 branch
+        return await self._read_checkpoint_json(checkpoint_id)
+
+    async def explain(self, checkpoint_id: str) -> str:
+        """Get AI-generated explanation of what happened at checkpoint."""
+        result = await self._run_entire(["explain", "--checkpoint", checkpoint_id])
+        return result.stdout
+
+    async def resume_session(self, branch: str) -> bool:
+        """Resume an agent session from a branch."""
+        result = await self._run_entire(["resume", branch])
+        return result.returncode == 0
+
+    async def cleanup(self) -> None:
+        """Clean up orphaned session data."""
+        await self._run_entire(["clean"])
+
+    async def _run_entire(self, args: List[str]) -> subprocess.CompletedProcess:
+        return await asyncio.create_subprocess_exec(
+            "entire", *args,
+            cwd=self.worktree_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
         )
 
-    def list(self, limit: int = 10) -> List[dict]:
-        """List recent checkpoints."""
-        result = subprocess.run(
-            ["git", "log", f"-{limit}", "--oneline"],
+    async def _read_checkpoint_json(self, checkpoint_id: str) -> SessionMeta:
+        """Read checkpoint metadata directly from git branch."""
+        # Checkpoints stored in sharded format: a3/b2c4d5e6f7.json
+        shard = checkpoint_id[:2]
+        filename = f"{checkpoint_id}.json"
+        result = await asyncio.create_subprocess_exec(
+            "git", "show", f"entire/checkpoints/v1:{shard}/{filename}",
             cwd=self.worktree_path,
-            capture_output=True,
-            text=True
+            stdout=asyncio.subprocess.PIPE
         )
-        return self._parse_log(result.stdout)
+        stdout, _ = await result.communicate()
+        return SessionMeta.parse(json.loads(stdout))
 ```
 
-### Phase 3: Multi-Agent Orchestration
+**What we get for free from Entire:**
+- ✅ Automatic checkpoint creation on commits
+- ✅ Full session transcripts (prompts + responses)
+- ✅ Token usage tracking (input, output, cache)
+- ✅ Line attribution (AI vs human)
+- ✅ Nested sub-agent session capture
+- ✅ Clean git history (no checkpoint commits)
+- ✅ GitHub sync for team visibility
+- ✅ AI-powered checkpoint explanations
+```
+
+### Phase 3: Multi-Agent Orchestration (With Entire Integration)
 
 ```python
 class AgentOrchestrator:
-    def __init__(self, repo_path: str):
-        self.worktree_mgr = WorktreeManager(repo_path)
-        self.agents: Dict[str, Agent] = {}
+    """Orchestrates multiple AI agents with worktree isolation and Entire checkpointing."""
 
-    def spawn_agent(self, task: Task) -> Agent:
-        """Spawn a new agent with isolated worktree."""
-        # Create worktree
+    def __init__(self, repo_path: str):
+        self.repo_path = repo_path
+        self.worktree_mgr = WorktreeManager(repo_path)
+        self.agents: Dict[str, ManagedAgent] = {}
+
+    async def spawn_agent(self, task: Task) -> ManagedAgent:
+        """Spawn a new agent with isolated worktree + Entire checkpointing."""
+        # 1. Create worktree
         worktree_path = self.worktree_mgr.create(task.branch_name)
 
-        # Create agent
-        agent = Agent(
+        # 2. Initialize Entire in the worktree (automatic checkpoint capture)
+        entire = EntireIntegration(worktree_path)
+        await entire.setup(agent="claude")
+
+        # 3. Create managed agent
+        agent = ManagedAgent(
             worktree_path=worktree_path,
             task=task,
-            checkpoint_mgr=CheckpointManager(worktree_path)
+            entire=entire  # Entire handles all checkpointing
         )
 
         self.agents[task.id] = agent
         return agent
 
-    def run_parallel(self, tasks: List[Task]):
-        """Run multiple agents in parallel."""
-        with ThreadPoolExecutor() as executor:
-            futures = {
-                executor.submit(self._run_agent, task): task
-                for task in tasks
-            }
+    async def run_parallel(self, tasks: List[Task]) -> List[AgentResult]:
+        """Run multiple agents in parallel with full checkpoint tracking."""
+        # Spawn all agents
+        agents = await asyncio.gather(*[
+            self.spawn_agent(task) for task in tasks
+        ])
 
-            for future in as_completed(futures):
-                task = futures[future]
-                try:
-                    result = future.result()
-                    self._handle_completion(task, result)
-                except Exception as e:
-                    self._handle_failure(task, e)
+        # Execute in parallel
+        results = await asyncio.gather(*[
+            agent.execute() for agent in agents
+        ], return_exceptions=True)
 
-    def _run_agent(self, task: Task) -> Result:
-        agent = self.spawn_agent(task)
-        return agent.execute()
+        # Collect checkpoint summaries for each agent
+        for agent, result in zip(agents, results):
+            if isinstance(result, Exception):
+                # On failure, we can rewind or inspect checkpoints
+                checkpoints = await agent.entire.get_checkpoints()
+                result = AgentResult(
+                    task_id=agent.task.id,
+                    success=False,
+                    error=str(result),
+                    checkpoints=checkpoints,  # Full history available
+                    can_resume=True  # Can resume from any checkpoint
+                )
+
+        return results
+
+    async def compare_agents(self, task_ids: List[str]) -> ComparisonReport:
+        """Compare checkpoint data across multiple agents (token usage, etc.)."""
+        reports = []
+        for task_id in task_ids:
+            agent = self.agents[task_id]
+            checkpoints = await agent.entire.get_checkpoints()
+            for cp in checkpoints:
+                meta = await agent.entire.get_session_metadata(cp.id)
+                reports.append({
+                    "task_id": task_id,
+                    "checkpoint": cp.id,
+                    "tokens": meta.token_usage,
+                    "ai_lines": meta.ai_line_count,
+                    "human_lines": meta.human_line_count,
+                    "duration": meta.duration_seconds
+                })
+        return ComparisonReport(reports)
+
+    async def cleanup_all(self):
+        """Clean up all worktrees and Entire data."""
+        for agent in self.agents.values():
+            await agent.entire.cleanup()
+            self.worktree_mgr.remove(agent.task.branch_name)
+        self.agents.clear()
 ```
 
-### Starting Small: Recommended Progression
+### Updated Implementation Timeline (Leveraging Entire.io)
 
-1. **Week 1-2**: Implement basic worktree creation/deletion
-2. **Week 3-4**: Add auto-commit checkpointing
-3. **Week 5-6**: Add rollback functionality
-4. **Week 7-8**: Implement parallel agent spawning
-5. **Week 9-10**: Add conflict detection
-6. **Week 11-12**: Build orchestration layer
+| Phase | Duration | Focus | What We Build | What Entire Provides |
+|-------|----------|-------|---------------|---------------------|
+| **1** | Week 1-2 | Worktree basics | `WorktreeManager` | - |
+| **2** | Week 3 | Entire integration | `EntireIntegration` adapter | Checkpoints, transcripts, tokens |
+| **3** | Week 4 | Checkpoint UI | Checkpoint list, diff viewer | Data via CLI/branch parsing |
+| **4** | Week 5-6 | Parallel agents | `AgentOrchestrator` | Per-agent checkpoint isolation |
+| **5** | Week 7-8 | Conflict detection | Clash integration | - |
+| **6** | Week 9-10 | Advanced features | Resume, compare, branch-from-checkpoint | Session resume, explanations |
+
+**Time saved: ~4 weeks** (originally 12 weeks → now 10 weeks, with richer features)
+
+### Additional Features Enabled by Entire.io
+
+Beyond basic checkpointing, Entire.io enables several advanced features we'd otherwise have to build:
+
+#### 1. Cost Tracking & Analytics
+```typescript
+// Entire captures token usage per checkpoint
+interface TokenMetrics {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+  api_calls: number;
+}
+
+// We can aggregate across agents for cost dashboards
+async function getProjectCosts(worktrees: string[]): Promise<CostReport> {
+  const costs = await Promise.all(
+    worktrees.map(async (wt) => {
+      const entire = new EntireIntegration(wt);
+      const checkpoints = await entire.get_checkpoints();
+      return checkpoints.map(cp => cp.token_usage);
+    })
+  );
+  return aggregateCosts(costs.flat());
+}
+```
+
+#### 2. AI Attribution & Code Ownership
+```typescript
+// Entire tracks which lines were written by AI vs human
+interface LineAttribution {
+  ai_lines: number;
+  human_lines: number;
+  ai_percentage: number;
+}
+
+// Surface in UI for code review insights
+async function getAttributionReport(checkpointId: string): Promise<Attribution> {
+  const meta = await entire.get_session_metadata(checkpointId);
+  return {
+    aiWritten: meta.ai_line_count,
+    humanWritten: meta.human_line_count,
+    files: meta.file_attributions  // Per-file breakdown
+  };
+}
+```
+
+#### 3. Session Resume (Critical for Long Tasks)
+```typescript
+// Resume interrupted agent sessions exactly where they left off
+async function resumeAgent(branch: string): Promise<void> {
+  const entire = new EntireIntegration(worktreePath);
+
+  // This restores:
+  // - Conversation context
+  // - Tool state
+  // - Working directory state
+  await entire.resume_session(branch);
+
+  // Agent continues with full context preserved
+}
+```
+
+#### 4. PR Context Links (GitHub Integration)
+```markdown
+<!-- Entire adds checkpoint IDs to commits -->
+<!-- Reviewers can click through to see AI reasoning -->
+
+Commit: "Add user authentication"
+Entire-Checkpoint: a3b2c4d5e6f7
+
+<!-- In PR, reviewer sees: -->
+<!-- 🔗 View AI session context → entire.io/checkpoint/a3b2c4d5e6f7 -->
+```
+
+#### 5. Nested Sub-Agent Tracking
+```typescript
+// When Claude Code spawns sub-agents, Entire captures the hierarchy
+interface SessionHierarchy {
+  parent_session: string;
+  child_sessions: SessionHierarchy[];
+  depth: number;
+}
+
+// Visualize agent spawning patterns in ACC UI
+async function getAgentTree(rootCheckpoint: string): Promise<SessionHierarchy> {
+  const meta = await entire.get_session_metadata(rootCheckpoint);
+  return meta.session_hierarchy;
+}
+```
+
+#### 6. Checkpoint Comparison (A/B Testing Agents)
+```typescript
+// Compare two agent runs on the same task
+async function compareRuns(
+  checkpointA: string,
+  checkpointB: string
+): Promise<Comparison> {
+  const [metaA, metaB] = await Promise.all([
+    entire.get_session_metadata(checkpointA),
+    entire.get_session_metadata(checkpointB)
+  ]);
+
+  return {
+    tokenDiff: metaA.tokens - metaB.tokens,
+    timeDiff: metaA.duration - metaB.duration,
+    lineDiff: metaA.ai_lines - metaB.ai_lines,
+    winner: determineWinner(metaA, metaB)
+  };
+}
+```
 
 ### Key Metrics to Track
 
@@ -843,45 +1825,75 @@ class AgentOrchestrator:
 
 ## API & Code Examples
 
-### Complete Worktree Workflow
+### Complete Worktree Workflow (With Entire.io)
 
 ```bash
 #!/bin/bash
-# parallel-agents.sh - Run multiple agents in parallel
+# parallel-agents.sh - Run multiple agents in parallel with Entire checkpointing
 
 REPO_PATH=$(pwd)
 TREES_DIR="$REPO_PATH/.trees"
 
 # Ensure .trees is gitignored
-echo ".trees/" >> .gitignore
+grep -q "^.trees/$" .gitignore 2>/dev/null || echo ".trees/" >> .gitignore
 
-# Create worktrees for each task
+# Create worktree and initialize Entire
 create_worktree() {
     local branch=$1
     local path="$TREES_DIR/$branch"
 
+    # Create worktree
     git worktree add -b "$branch" "$path" 2>/dev/null || \
     git worktree add "$path" "$branch"
+
+    # Initialize Entire for automatic checkpoint capture
+    (cd "$path" && entire enable --agent claude --quiet)
 
     echo "$path"
 }
 
-# Run agent in worktree
+# Run agent in worktree (Entire captures checkpoints automatically)
 run_agent() {
     local worktree=$1
     local task=$2
 
     cd "$worktree"
 
-    # Run Claude Code (or any agent)
+    # Run Claude Code - Entire hooks capture everything automatically:
+    # - Full conversation transcript
+    # - Token usage metrics
+    # - Line attribution (AI vs human)
+    # - Checkpoint created on commit
     claude -p "$task" \
         --dangerously-skip-permissions \
         --max-turns 20 \
         --output-format json > agent-output.json
 
-    # Auto-commit changes
+    # Commit triggers Entire checkpoint creation
     git add -A
     git commit -m "Agent: $task"
+
+    # Checkpoint ID is now in commit trailer: Entire-Checkpoint: <id>
+}
+
+# View checkpoints for a worktree
+list_checkpoints() {
+    local worktree=$1
+    (cd "$worktree" && entire rewind --list)
+}
+
+# Rewind agent work to a checkpoint
+rewind_to_checkpoint() {
+    local worktree=$1
+    local checkpoint_id=$2
+    (cd "$worktree" && entire rewind --to "$checkpoint_id")
+}
+
+# Get AI explanation of what happened
+explain_checkpoint() {
+    local worktree=$1
+    local checkpoint_id=$2
+    (cd "$worktree" && entire explain --checkpoint "$checkpoint_id")
 }
 
 # Main execution

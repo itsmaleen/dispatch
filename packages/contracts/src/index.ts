@@ -6,3 +6,5 @@ export * from './task';
 export * from './memory';
 export * from './widget';
 export * from './terminal';
+export * from './worktree';
+export * from './agent-console';

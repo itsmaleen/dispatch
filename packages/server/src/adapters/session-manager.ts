@@ -8,14 +8,16 @@
 import { query, type Query, type SDKMessage, type Options } from '@anthropic-ai/claude-agent-sdk';
 import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
-import { 
-  getThreadStore, 
-  type Thread, 
+import {
+  getThreadStore,
+  type Thread,
   type Message,
   type SqliteThreadStore,
 } from '../persistence/sqlite-store';
 import { getExtractor, getPromptSummarizer } from '../extractor';
 import { getTaskStore, type Task } from '../persistence/task-store';
+import { getWorktreeManager } from '../services/worktree-manager';
+import type { WorktreeInfo, WorktreeChanges, MergeResult } from '@acc/contracts';
 
 /** Active session bound to a thread */
 export interface Session {
@@ -672,6 +674,215 @@ export class SessionManager extends EventEmitter {
 
     // Emit event for UI (include completed tasks so UI can update status transitions)
     this.emit('tasks.updated', taskStore.listTasks({ limit: 100, includeCompleted: true }));
+  }
+
+  // ==================== Worktree Operations ====================
+
+  /**
+   * Enable worktree isolation for a thread.
+   * Creates a new branch and worktree, updates the session to use it.
+   */
+  async enableWorktree(
+    threadId: string,
+    options: { branch?: string; baseBranch?: string; cwd?: string; name?: string } = {}
+  ): Promise<{ worktreePath: string; branch: string; baseBranch: string }> {
+    let thread = this.getStore().getThread(threadId);
+
+    // If thread doesn't exist, create it (for enabling worktree before first message)
+    if (!thread) {
+      if (!options.cwd) {
+        throw new Error(`Thread ${threadId} not found and no cwd provided to create it`);
+      }
+      this.getStore().createThread({
+        id: threadId,
+        projectPath: options.cwd,
+        name: options.name,
+      });
+      thread = this.getStore().getThread(threadId)!;
+    }
+
+    if (thread.worktreePath) {
+      throw new Error(`Thread ${threadId} already has a worktree at ${thread.worktreePath}`);
+    }
+
+    const session = this.sessions.get(threadId);
+    const repoPath = options.cwd ?? session?.cwd ?? thread.projectPath;
+
+    // Generate branch name from thread name or ID
+    const baseBranch = options.baseBranch ?? 'main';
+    const branch = options.branch ?? this.generateBranchName(thread.name ?? threadId);
+
+    // Create worktree
+    const worktreeManager = getWorktreeManager(repoPath);
+    const result = await worktreeManager.create({
+      branch,
+      baseBranch,
+    });
+
+    if (!result.success || !result.worktree) {
+      throw new Error(result.error ?? 'Failed to create worktree');
+    }
+
+    const worktreePath = result.worktree.path;
+
+    // Update thread with worktree path and clear sessionId
+    // We clear sessionId because Claude Code sessions are tied to a specific cwd,
+    // so we need a fresh session in the new worktree directory
+    this.getStore().updateThread(threadId, {
+      worktreePath,
+      sessionId: null, // Clear so next message starts fresh session in worktree
+      metadata: {
+        ...thread.metadata,
+        worktreeBranch: branch,
+        worktreeBaseBranch: baseBranch,
+      },
+    });
+
+    // Update session cwd if session exists
+    if (session) {
+      session.cwd = worktreePath;
+    }
+
+    console.log(`[SessionManager] Enabled worktree for thread ${threadId}: ${worktreePath} (branch: ${branch})`);
+
+    return {
+      worktreePath,
+      branch,
+      baseBranch,
+    };
+  }
+
+  /** Generate a branch name from a thread name */
+  private generateBranchName(name: string): string {
+    const sanitized = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40);
+    const suffix = Date.now().toString(36).slice(-4);
+    return `agent/${sanitized}-${suffix}`;
+  }
+
+  /** Get worktree info for a thread */
+  async getWorktreeInfo(threadId: string): Promise<WorktreeInfo | null> {
+    const thread = this.getStore().getThread(threadId);
+    if (!thread?.worktreePath) {
+      return null;
+    }
+
+    const session = this.sessions.get(threadId);
+    const repoPath = session?.cwd ?? thread.projectPath;
+
+    // If session cwd is already the worktree, use project path as repo
+    const actualRepoPath = repoPath === thread.worktreePath ? thread.projectPath : repoPath;
+
+    const worktreeManager = getWorktreeManager(actualRepoPath);
+    const branch = (thread.metadata as any)?.worktreeBranch;
+
+    if (!branch) {
+      return null;
+    }
+
+    return worktreeManager.get(branch);
+  }
+
+  /** Get changes made in the thread's worktree */
+  async getWorktreeChanges(threadId: string): Promise<WorktreeChanges | null> {
+    const thread = this.getStore().getThread(threadId);
+    if (!thread?.worktreePath) {
+      return null;
+    }
+
+    const metadata = thread.metadata as any;
+    const branch = metadata?.worktreeBranch;
+
+    if (!branch) {
+      return null;
+    }
+
+    const worktreeManager = getWorktreeManager(thread.projectPath);
+    return worktreeManager.getChanges(branch);
+  }
+
+  /** Merge the thread's worktree branch into target branch */
+  async mergeWorktree(
+    threadId: string,
+    options: { targetBranch?: string; message?: string; removeAfterMerge?: boolean } = {}
+  ): Promise<MergeResult> {
+    const thread = this.getStore().getThread(threadId);
+    if (!thread?.worktreePath) {
+      throw new Error(`Thread ${threadId} does not have a worktree`);
+    }
+
+    const metadata = thread.metadata as any;
+    const branch = metadata?.worktreeBranch;
+
+    if (!branch) {
+      throw new Error(`Thread ${threadId} worktree has no branch info`);
+    }
+
+    const worktreeManager = getWorktreeManager(thread.projectPath);
+    const result = await worktreeManager.merge(branch, {
+      targetBranch: options.targetBranch,
+      message: options.message,
+    });
+
+    // If merge succeeded and removeAfterMerge, clean up
+    if (result.success && options.removeAfterMerge) {
+      await worktreeManager.remove(branch, true);
+
+      // Close the existing session since its cwd no longer exists
+      // This will force a new session to be created with the correct cwd
+      await this.closeSession(threadId);
+
+      // Update thread: clear worktree info and sessionId so next message creates fresh session
+      this.getStore().updateThread(threadId, {
+        worktreePath: undefined,
+        sessionId: null, // Clear so next message starts fresh session in project path
+        metadata: {
+          ...metadata,
+          worktreeBranch: undefined,
+          worktreeBaseBranch: undefined,
+          worktreeMergedAt: new Date().toISOString(),
+        },
+      });
+
+      console.log(`[SessionManager] Merged and cleaned up worktree for thread ${threadId}`);
+    }
+
+    return result;
+  }
+
+  /** Remove worktree for a thread without merging */
+  async removeWorktree(threadId: string, force = false): Promise<void> {
+    const thread = this.getStore().getThread(threadId);
+    if (!thread?.worktreePath) {
+      return; // Nothing to remove
+    }
+
+    const metadata = thread.metadata as any;
+    const branch = metadata?.worktreeBranch;
+
+    if (branch) {
+      const worktreeManager = getWorktreeManager(thread.projectPath);
+      await worktreeManager.remove(branch, force);
+    }
+
+    // Close the existing session since its cwd no longer exists
+    await this.closeSession(threadId);
+
+    // Update thread: clear worktree info and sessionId so next message creates fresh session
+    this.getStore().updateThread(threadId, {
+      worktreePath: undefined,
+      sessionId: null, // Clear so next message starts fresh session in project path
+      metadata: {
+        ...metadata,
+        worktreeBranch: undefined,
+        worktreeBaseBranch: undefined,
+      },
+    });
+
+    console.log(`[SessionManager] Removed worktree for thread ${threadId}`);
   }
 
   /** Close a session */

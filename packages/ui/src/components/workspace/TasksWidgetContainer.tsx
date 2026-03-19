@@ -166,18 +166,32 @@ export function TasksWidgetContainer({
   const [localActiveSessions, setLocalActiveSessions] = useState<ActiveSession[]>([]);
   const [localRecentlyCompleted, setLocalRecentlyCompleted] = useState<ActiveSession[]>([]);
 
-  // Merge reactive data with local overrides
+  // Merge reactive data with local overrides (deduplicated by id)
   const mergedActiveSessions = useMemo(() => {
     // If we have local sessions (from prompt.started before query updates), merge them
     const reactiveIds = new Set(activeSessions.map(s => s.id));
     const localOnly = localActiveSessions.filter(s => !reactiveIds.has(s.id));
-    return [...activeSessions, ...localOnly];
+    const merged = [...activeSessions, ...localOnly];
+    // Deduplicate by id (keep first occurrence)
+    const seen = new Set<string>();
+    return merged.filter(s => {
+      if (seen.has(s.id)) return false;
+      seen.add(s.id);
+      return true;
+    });
   }, [activeSessions, localActiveSessions]);
 
   const mergedRecentlyCompleted = useMemo(() => {
     const reactiveIds = new Set(recentlyCompleted.map(s => s.id));
     const localOnly = localRecentlyCompleted.filter(s => !reactiveIds.has(s.id));
-    return [...recentlyCompleted, ...localOnly];
+    const merged = [...recentlyCompleted, ...localOnly];
+    // Deduplicate by id (keep first occurrence)
+    const seen = new Set<string>();
+    return merged.filter(s => {
+      if (seen.has(s.id)) return false;
+      seen.add(s.id);
+      return true;
+    });
   }, [recentlyCompleted, localRecentlyCompleted]);
 
   // Handle prompt lifecycle events (for optimistic UI updates)
