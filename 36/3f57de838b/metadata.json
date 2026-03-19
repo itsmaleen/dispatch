@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "363f57de838b",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/research/agent-isolation-research.md",
+    "packages/contracts/src/index.ts",
+    "packages/server/src/adapters/session-manager.ts",
+    "packages/server/src/persistence/sqlite-store.ts",
+    "packages/server/src/server.ts",
+    "packages/ui/src/components/workspace/TasksWidgetContainer.tsx",
+    "packages/ui/src/components/workspace/Workspace.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/36/3f57de838b/0/metadata.json",
+      "transcript": "/36/3f57de838b/0/full.jsonl",
+      "content_hash": "/36/3f57de838b/0/content_hash.txt",
+      "prompt": "/36/3f57de838b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 5482,
+    "cache_read_tokens": 34557,
+    "output_tokens": 7,
+    "api_call_count": 2
+  }
+}

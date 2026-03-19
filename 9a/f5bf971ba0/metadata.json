@@ -1,0 +1,20 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "9af5bf971ba0",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/ui/dist-electron/preload.js",
+    "packages/ui/electron/main.ts",
+    "packages/ui/electron/preload.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9a/f5bf971ba0/0/metadata.json",
+      "transcript": "/9a/f5bf971ba0/0/full.jsonl",
+      "content_hash": "/9a/f5bf971ba0/0/content_hash.txt",
+      "prompt": ""
+    }
+  ]
+}

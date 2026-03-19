@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "14346194b762",
+  "session_id": "unknown",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-17T02:36:04.52021Z",
+  "branch": "main",
+  "checkpoints_count": 14,
+  "files_touched": [
+    ".github/workflows/release-mac.yml",
+    ".gitignore",
+    "README.md",
+    "package.json",
+    "packages/ui/package.json",
+    "scripts/sign-and-notarize-mac.sh",
+    "scripts/sync-env-to-gh-secrets.sh"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "c52411b6a9ac",
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "session_metrics": {
+    "turn_count": 81
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-17T02:36:04.491651Z",
+    "agent_lines": 203,
+    "human_added": 202,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 405,
+    "agent_percentage": 50.123456790123456
+  }
+}

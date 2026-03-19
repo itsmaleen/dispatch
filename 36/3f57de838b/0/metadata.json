@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "363f57de838b",
+  "session_id": "b9aa266a-5393-4556-a666-45698c3e00d6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-19T03:52:37.705669Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/research/agent-isolation-research.md",
+    "packages/contracts/src/index.ts",
+    "packages/server/src/adapters/session-manager.ts",
+    "packages/server/src/persistence/sqlite-store.ts",
+    "packages/server/src/server.ts",
+    "packages/ui/src/components/workspace/TasksWidgetContainer.tsx",
+    "packages/ui/src/components/workspace/Workspace.tsx"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "41f9c68b96a9",
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 5482,
+    "cache_read_tokens": 34557,
+    "output_tokens": 7,
+    "api_call_count": 2
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-19T03:52:37.677034Z",
+    "agent_lines": 0,
+    "human_added": 4735,
+    "human_modified": 196,
+    "human_removed": 0,
+    "total_committed": 4735,
+    "agent_percentage": 0
+  }
+}
