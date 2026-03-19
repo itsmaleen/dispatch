@@ -7,8 +7,10 @@ import {
   GitBranch,
   GitMerge,
   FileText,
-  Plus,
-  Minus,
+  FilePlus,
+  FileMinus,
+  FileEdit,
+  FileQuestion,
   RefreshCw,
   ChevronDown,
   ChevronRight,
@@ -17,9 +19,10 @@ import {
   XCircle,
   ExternalLink,
   Loader2,
+  Trash2,
 } from 'lucide-react';
 import { getServerUrl } from '../../stores/app';
-import type { WorktreeChanges, MergeResult } from '@acc/contracts';
+import type { WorktreeChanges, MergeResult, FileStatus } from '@acc/contracts';
 
 interface WorktreePanelProps {
   threadId: string;
@@ -36,11 +39,52 @@ interface WorktreeInfo {
   isClean: boolean;
 }
 
+/** Get icon and color for file status */
+function getFileStatusDisplay(status: FileStatus): { icon: typeof FileText; color: string; label: string } {
+  switch (status) {
+    case 'added':
+    case 'untracked':
+      return { icon: FilePlus, color: 'text-green-400', label: 'Added' };
+    case 'deleted':
+      return { icon: FileMinus, color: 'text-red-400', label: 'Deleted' };
+    case 'modified':
+      return { icon: FileEdit, color: 'text-yellow-400', label: 'Modified' };
+    case 'renamed':
+      return { icon: FileEdit, color: 'text-blue-400', label: 'Renamed' };
+    case 'copied':
+      return { icon: FilePlus, color: 'text-blue-400', label: 'Copied' };
+    default:
+      return { icon: FileQuestion, color: 'text-zinc-400', label: status };
+  }
+}
+
+/** Format error messages for better UX */
+function formatMergeError(error: string): string {
+  if (error.includes('CONFLICT')) {
+    return 'Merge conflicts detected. Please resolve conflicts manually or discard changes.';
+  }
+  if (error.includes('not a git repository')) {
+    return 'Git repository not found. The worktree may have been deleted.';
+  }
+  if (error.includes('does not point to a valid object')) {
+    return 'Branch reference is invalid. The branch may have been deleted.';
+  }
+  if (error.includes('Permission denied')) {
+    return 'Permission denied. Check file permissions in the worktree directory.';
+  }
+  if (error.includes('checkout')) {
+    return 'Failed to checkout target branch. There may be uncommitted changes in the main repository.';
+  }
+  return error;
+}
+
 export function WorktreePanel({ threadId, isOpen, onClose, onMerged }: WorktreePanelProps) {
   const [worktreeInfo, setWorktreeInfo] = useState<WorktreeInfo | null>(null);
   const [changes, setChanges] = useState<WorktreeChanges | null>(null);
   const [loading, setLoading] = useState(true);
   const [merging, setMerging] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [mergeResult, setMergeResult] = useState<MergeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
@@ -122,12 +166,39 @@ export function WorktreePanel({ threadId, isOpen, onClose, onMerged }: WorktreeP
           await fetchData();
         }
       } else {
-        setError(data.error || 'Merge failed');
+        setError(formatMergeError(data.error || 'Merge failed'));
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Merge failed');
+      setError(formatMergeError(err instanceof Error ? err.message : 'Merge failed'));
     } finally {
       setMerging(false);
+    }
+  };
+
+  const handleDiscard = async () => {
+    if (!worktreeInfo) return;
+
+    setDiscarding(true);
+    setError(null);
+
+    try {
+      const res = await fetch(`${serverUrl}/threads/${threadId}/worktree?force=true`, {
+        method: 'DELETE',
+      });
+
+      const data = await res.json();
+      if (data.ok) {
+        // Notify parent that worktree was removed
+        onMerged?.();
+        onClose();
+      } else {
+        setError(data.error || 'Failed to discard worktree');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to discard worktree');
+    } finally {
+      setDiscarding(false);
+      setConfirmDiscard(false);
     }
   };
 
@@ -226,30 +297,34 @@ export function WorktreePanel({ threadId, isOpen, onClose, onMerged }: WorktreeP
                     </div>
                   ) : (
                     <div className="space-y-1">
-                      {changes.files.map((file) => (
-                        <div
-                          key={file.path}
-                          className="bg-zinc-800/30 rounded-lg overflow-hidden"
-                        >
-                          <button
-                            onClick={() => toggleFile(file.path)}
-                            className="w-full flex items-center gap-2 p-2 hover:bg-zinc-800/50 text-left"
-                            title={file.path}
+                      {changes.files.map((file) => {
+                        const statusDisplay = getFileStatusDisplay(file.status);
+                        const StatusIcon = statusDisplay.icon;
+                        return (
+                          <div
+                            key={file.path}
+                            className="bg-zinc-800/30 rounded-lg overflow-hidden"
                           >
-                            {expandedFiles.has(file.path) ? (
-                              <ChevronDown className="w-3 h-3 text-zinc-500 flex-shrink-0" />
-                            ) : (
-                              <ChevronRight className="w-3 h-3 text-zinc-500 flex-shrink-0" />
-                            )}
-                            <FileText className="w-4 h-4 text-zinc-400 flex-shrink-0" />
-                            <span className="flex-1 min-w-0 text-sm text-zinc-300 truncate">
-                              {file.path}
-                            </span>
-                            <span className="text-xs text-green-400 flex-shrink-0">+{file.additions ?? 0}</span>
-                            <span className="text-xs text-red-400 flex-shrink-0">-{file.deletions ?? 0}</span>
-                          </button>
-                        </div>
-                      ))}
+                            <button
+                              onClick={() => toggleFile(file.path)}
+                              className="w-full flex items-center gap-2 p-2 hover:bg-zinc-800/50 text-left"
+                              title={`${file.path} (${statusDisplay.label})`}
+                            >
+                              {expandedFiles.has(file.path) ? (
+                                <ChevronDown className="w-3 h-3 text-zinc-500 flex-shrink-0" />
+                              ) : (
+                                <ChevronRight className="w-3 h-3 text-zinc-500 flex-shrink-0" />
+                              )}
+                              <StatusIcon className={`w-4 h-4 flex-shrink-0 ${statusDisplay.color}`} />
+                              <span className="flex-1 min-w-0 text-sm text-zinc-300 truncate">
+                                {file.path}
+                              </span>
+                              <span className="text-xs text-green-400 flex-shrink-0">+{file.additions ?? 0}</span>
+                              <span className="text-xs text-red-400 flex-shrink-0">-{file.deletions ?? 0}</span>
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -293,18 +368,65 @@ export function WorktreePanel({ threadId, isOpen, onClose, onMerged }: WorktreeP
           )}
         </div>
 
+        {/* Discard Confirmation */}
+        {confirmDiscard && (
+          <div className="p-4 border-t border-zinc-800 bg-red-900/20">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-red-400">Discard all changes?</p>
+                <p className="text-xs text-red-400/70 mt-1">
+                  This will delete the worktree and all uncommitted changes. This action cannot be undone.
+                </p>
+                <div className="flex items-center gap-2 mt-3">
+                  <button
+                    onClick={() => setConfirmDiscard(false)}
+                    disabled={discarding}
+                    className="px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 rounded"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleDiscard}
+                    disabled={discarding}
+                    className="flex items-center gap-2 px-3 py-1.5 text-sm bg-red-600 hover:bg-red-500 disabled:opacity-50 rounded"
+                  >
+                    {discarding ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-3 h-3" />
+                    )}
+                    Yes, Discard
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Footer Actions */}
-        {worktreeInfo && !loading && (
+        {worktreeInfo && !loading && !confirmDiscard && (
           <div className="p-4 border-t border-zinc-800 bg-zinc-900/50 flex items-center justify-between">
-            <button
-              onClick={() =>
-                window.open(`vscode://file${worktreeInfo.path}`, '_blank')
-              }
-              className="flex items-center gap-2 px-3 py-2 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 rounded-lg"
-            >
-              <ExternalLink className="w-4 h-4" />
-              Open in VS Code
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() =>
+                  window.open(`vscode://file${worktreeInfo.path}`, '_blank')
+                }
+                className="flex items-center gap-2 px-3 py-2 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 rounded-lg"
+              >
+                <ExternalLink className="w-4 h-4" />
+                Open in VS Code
+              </button>
+              <button
+                onClick={() => setConfirmDiscard(true)}
+                disabled={merging || discarding}
+                className="flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded-lg"
+                title="Discard all changes and remove worktree"
+              >
+                <Trash2 className="w-4 h-4" />
+                Discard
+              </button>
+            </div>
 
             <div className="flex items-center gap-2">
               <button
@@ -315,7 +437,7 @@ export function WorktreePanel({ threadId, isOpen, onClose, onMerged }: WorktreeP
               </button>
               <button
                 onClick={() => handleMerge(true)}
-                disabled={merging || !changes || changes.files.length === 0}
+                disabled={merging || discarding || !changes || changes.files.length === 0}
                 className="flex items-center gap-2 px-4 py-2 text-sm bg-violet-600 hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg"
               >
                 {merging ? (

@@ -6,6 +6,74 @@
 
 ---
 
+## Implementation Status
+
+> **Current Phase**: MVP Core Complete ✅ | Polish In Progress 🔄
+
+### Completed Features ✅
+
+| Feature | Component | Notes |
+|---------|-----------|-------|
+| **WorktreeManager service** | `packages/server/src/services/worktree-manager.ts` | Full CRUD operations for worktrees |
+| **Git utilities** | `packages/server/src/services/git.ts` | Branch management, diff stats, merge operations |
+| **Worktree contracts/types** | `packages/contracts/src/worktree.ts` | TypeScript interfaces for all worktree operations |
+| **Agent launch in worktree** | `packages/server/src/services/agent-console-launcher.ts` | Spawns Claude Code in isolated worktree |
+| **Worktree UI panel** | `packages/ui/src/components/workspace/WorktreePanel.tsx` | Shows changes, file diffs, merge/discard buttons |
+| **Enable worktree flow** | UI integration | Branch creation dialog, worktree provisioning |
+| **Merge flow** | `WorktreeManager.merge()` | Sequential merge with auto-commit of uncommitted changes |
+| **Discard flow** | `WorktreePanel` | Discard button with confirmation dialog |
+| **Session lifecycle** | `SessionManager` | Closes session + clears worktreePath on merge/discard |
+| **File status icons** | `WorktreePanel` | Color-coded icons (added/modified/deleted) |
+| **Diff stats** | `git.getDiffStats()` | Line additions/deletions, including untracked files |
+| **Error messages** | `formatMergeError()` | User-friendly merge failure messages |
+
+### In Progress 🔄
+
+| Feature | Status | Priority |
+|---------|--------|----------|
+| **Conflict resolution UI** | Not started | Medium |
+| **Merge progress indicator** | Not started | Low |
+| **Better diff viewer** | Not started | Low |
+
+### Remaining (Post-MVP) 📋
+
+| Feature | Phase | Notes |
+|---------|-------|-------|
+| **Entire.io integration** | Phase 2 | Checkpointing, session transcripts, token tracking |
+| **PR creation flow** | Phase 2 | `gh pr create` with AI-generated body |
+| **Real-time conflict detection** | Phase 3 | Track modified files across worktrees |
+| **AI conflict resolution** | Phase 3 | Use LLM to resolve simple conflicts |
+| **Multi-agent dashboard** | Phase 3 | Side-by-side agent comparison |
+| **Parallel agent orchestration** | Phase 4 | Run multiple agents on different tasks |
+| **Clash integration** | Phase 4 | Pre-merge conflict detection tool |
+
+### Key Files
+
+```
+packages/
+├── contracts/src/
+│   └── worktree.ts              # Worktree types and interfaces
+├── server/src/
+│   ├── services/
+│   │   ├── worktree-manager.ts  # WorktreeManager class
+│   │   ├── git.ts               # Git operations (branch, merge, diff)
+│   │   └── agent-console-launcher.ts  # Agent spawning in worktrees
+│   └── adapters/
+│       └── session-manager.ts   # Session lifecycle with worktree cleanup
+└── ui/src/components/workspace/
+    ├── WorktreePanel.tsx        # Worktree changes panel UI
+    └── Workspace.tsx            # Parent component with worktree callbacks
+```
+
+### Testing
+
+All worktree tests passing (25 tests):
+```bash
+cd packages/server && npm test
+```
+
+---
+
 ## Table of Contents
 
 1. [Executive Summary](#executive-summary)
@@ -1355,30 +1423,32 @@ We're building incrementally, starting with the core flow and adding complexity 
 
 #### MVP Scope (What We're Building First)
 
-| Feature | In MVP? | Notes |
-|---------|---------|-------|
-| Create worktree for agent | ✅ Yes | Core isolation |
-| Launch Claude in worktree terminal | ✅ Yes | Core feature |
-| Track agent status | ✅ Yes | Running/completed/failed |
-| View agent output | ✅ Yes | Existing terminal widget |
-| Simple sequential merge | ✅ Yes | One branch at a time |
-| Conflict → show to user | ✅ Yes | User resolves manually |
-| Worktree cleanup | ✅ Yes | Remove after merge |
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Create worktree for agent | ✅ Done | `WorktreeManager.create()` |
+| Launch Claude in worktree terminal | ✅ Done | `AgentConsoleLauncher` |
+| Track agent status | ✅ Done | Running/completed/failed |
+| View agent output | ✅ Done | Existing terminal widget |
+| Simple sequential merge | ✅ Done | Auto-commits uncommitted changes |
+| Conflict → show to user | ✅ Done | Error message with conflict details |
+| Worktree cleanup | ✅ Done | Remove after merge/discard |
+| File status icons | ✅ Done | Added/modified/deleted indicators |
+| Discard changes flow | ✅ Done | With confirmation dialog |
 | Entire.io checkpoints | ⏳ Phase 2 | Nice to have |
 | Real-time conflict detection | ❌ Later | Only if needed |
 | AI conflict resolution | ❌ Later | Only if needed |
 | Clash integration | ❌ Later | Only if needed |
 
-#### MVP Timeline
+#### MVP Timeline (COMPLETED ✅)
 
-| Phase | Duration | What We Build |
-|-------|----------|---------------|
-| **1** | 3-4 days | `WorktreeManager` — create/list/remove worktrees |
-| **2** | 3-4 days | `AgentConsoleLauncher` — spawn agent in worktree terminal |
-| **3** | 2-3 days | Agent status tracking & UI updates |
-| **4** | 2-3 days | Simple merge flow + cleanup |
+| Phase | Duration | What We Built | Status |
+|-------|----------|---------------|--------|
+| **1** | 3-4 days | `WorktreeManager` — create/list/remove worktrees | ✅ Done |
+| **2** | 3-4 days | `AgentConsoleLauncher` — spawn agent in worktree terminal | ✅ Done |
+| **3** | 2-3 days | Agent status tracking & UI updates | ✅ Done |
+| **4** | 2-3 days | Simple merge flow + cleanup | ✅ Done |
 
-**Total MVP: ~2 weeks**
+**Total MVP: ~2 weeks** ✅ COMPLETED
 
 #### Post-MVP (If Needed)
 
