@@ -697,6 +697,31 @@ export class CommandCenterServer {
       }
     });
 
+    // ============ Project API ============
+
+    // Analyze a project directory for context
+    this.app.post('/project/analyze', async (c) => {
+      try {
+        const body = await c.req.json<{ projectPath: string }>();
+        const { projectPath } = body;
+
+        if (!projectPath) {
+          return c.json({ ok: false, error: 'projectPath is required' }, 400);
+        }
+
+        const { analyzeProject } = await import('./services/project-analyzer');
+        const context = await analyzeProject(projectPath);
+
+        return c.json({ ok: true, context });
+      } catch (error) {
+        console.error('[ProjectAnalyze] Error:', error);
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to analyze project',
+        }, 500);
+      }
+    });
+
     // ============ Extracted Tasks API ============
 
     // List extracted tasks

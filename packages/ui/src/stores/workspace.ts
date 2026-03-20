@@ -643,8 +643,8 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
   focusedWidgetType: null,
   maximizedWidgetId: null,
   widgets: [],
-  showAgentStatus: true, // Show by default
-  tasksVisible: true, // Show by default
+  showAgentStatus: false, // Hidden by default so ProjectStartingPoint shows first
+  tasksVisible: false, // Hidden by default so ProjectStartingPoint shows first
   layoutTree: null,
   navigateToView: null,
   onCreateConsole: null,

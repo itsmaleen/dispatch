@@ -63,7 +63,23 @@ export class TerminalManager extends EventEmitter {
     if (process.platform === 'win32') {
       return process.env.COMSPEC || 'cmd.exe';
     }
-    return process.env.SHELL || '/bin/bash';
+
+    // Try SHELL env var first
+    const shell = process.env.SHELL;
+    if (shell && existsSync(shell)) {
+      return shell;
+    }
+
+    // Fallback to common shells
+    const fallbacks = ['/bin/zsh', '/bin/bash', '/bin/sh'];
+    for (const fallback of fallbacks) {
+      if (existsSync(fallback)) {
+        console.log(`[TerminalManager] Using fallback shell: ${fallback}`);
+        return fallback;
+      }
+    }
+
+    return '/bin/bash';
   }
 
   /**
@@ -79,7 +95,7 @@ export class TerminalManager extends EventEmitter {
   create(options: CreateTerminalOptions = {}): TerminalInstance {
     const id = randomUUID();
     const name = options.name || this.generateName(this.terminals.size);
-    const shell = options.shell || this.defaultShell;
+    let shell = options.shell || this.defaultShell;
     const cwd = options.cwd || this.defaultCwd;
     const cols = options.cols || 80;
     const rows = options.rows || 24;
@@ -110,21 +126,80 @@ export class TerminalManager extends EventEmitter {
       validCwd = HOME;
     }
 
-    console.log(`[TerminalManager] Spawning shell: ${shell}, cwd: ${validCwd}`);
+    // Validate shell exists
+    if (!existsSync(shell)) {
+      console.error(`[TerminalManager] Shell does not exist: ${shell}`);
+      // Try to find an alternative
+      const alternatives = ['/bin/zsh', '/bin/bash', '/bin/sh'];
+      let foundShell: string | null = null;
+      for (const alt of alternatives) {
+        if (existsSync(alt)) {
+          foundShell = alt;
+          break;
+        }
+      }
+      if (!foundShell) {
+        throw new Error(`Shell not found: ${shell} and no alternatives available`);
+      }
+      console.log(`[TerminalManager] Using alternative shell: ${foundShell}`);
+      shell = foundShell;
+    }
+
+    console.log(`[TerminalManager] Spawning shell: ${shell}, cwd: ${validCwd}, platform: ${process.platform}, arch: ${process.arch}`);
 
     // Spawn the PTY process
     let ptyProcess: pty.IPty;
-    try {
-      ptyProcess = pty.spawn(shell, [], {
-        name: 'xterm-256color',
-        cols,
-        rows,
+    let lastError: Error | null = null;
+
+    // Try spawning with different shell options
+    const shellsToTry = [shell];
+    if (shell !== '/bin/zsh' && existsSync('/bin/zsh')) shellsToTry.push('/bin/zsh');
+    if (shell !== '/bin/bash' && existsSync('/bin/bash')) shellsToTry.push('/bin/bash');
+    if (shell !== '/bin/sh' && existsSync('/bin/sh')) shellsToTry.push('/bin/sh');
+
+    for (const tryShell of shellsToTry) {
+      try {
+        console.log(`[TerminalManager] Trying shell: ${tryShell}`);
+        ptyProcess = pty.spawn(tryShell, [], {
+          name: 'xterm-256color',
+          cols,
+          rows,
+          cwd: validCwd,
+          env: env as Record<string, string>,
+        });
+        console.log(`[TerminalManager] Successfully spawned with: ${tryShell}`);
+        shell = tryShell; // Update shell for the instance record
+        break;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        console.error(`[TerminalManager] Failed to spawn PTY with ${tryShell}:`, lastError.message);
+      }
+    }
+
+    // If we couldn't spawn with any shell
+    if (!ptyProcess!) {
+      console.error(`[TerminalManager] All shell attempts failed. Debug info:`, {
+        shellsAttempted: shellsToTry,
         cwd: validCwd,
-        env: env as Record<string, string>,
+        platform: process.platform,
+        arch: process.arch,
+        HOME: env.HOME,
+        PATH: env.PATH?.substring(0, 100) + '...',
+        electronVersion: process.versions.electron,
+        nodeVersion: process.versions.node,
       });
-    } catch (err) {
-      console.error(`[TerminalManager] Failed to spawn PTY:`, err);
-      throw new Error(`Failed to spawn terminal: ${err instanceof Error ? err.message : String(err)}`);
+
+      const errorMsg = lastError?.message || 'Unknown error';
+      if (errorMsg.includes('posix_spawnp')) {
+        throw new Error(
+          `Failed to spawn terminal: ${errorMsg}. ` +
+          `This may indicate a node-pty native module compatibility issue. ` +
+          `The native module may need to be rebuilt for Electron. ` +
+          `Try: npx @electron/rebuild -m node_modules/node-pty`
+        );
+      }
+
+      throw new Error(`Failed to spawn terminal: ${errorMsg}`);
     }
 
     const instance: TerminalInstance = {

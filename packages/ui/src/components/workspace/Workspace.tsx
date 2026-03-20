@@ -52,6 +52,7 @@ import { ChatInput, type UploadedFile } from './ChatInput';
 import { TasksWidgetContainer } from './TasksWidgetContainer';
 import { TerminalWidget as RealTerminalWidget } from '../terminal/TerminalWidget';
 import { WorktreePanel, WorktreeButton, EnableWorktreeDialog } from './WorktreePanel';
+import { ProjectStartingPoint } from './ProjectStartingPoint';
 import type { TerminalInstance } from '@acc/contracts';
 
 // ============================================================================
@@ -2085,29 +2086,68 @@ export function Workspace() {
     const newConsoleIds = consoleIds.filter(id => !layoutConsoleIds.includes(id));
     const newTerminalIds = realTerminals.map(t => t.id).filter(id => !layoutTerminalIds.includes(id));
 
+    // Check for utility widgets (tasks, agent status)
+    const layoutTasksIds = collectWidgetIds(currentLayout, 'tasks');
+    const layoutAgentStatusIds = collectWidgetIds(currentLayout, 'agent-status');
+    const hasTasksInLayout = layoutTasksIds.length > 0;
+    const hasAgentStatusInLayout = layoutAgentStatusIds.length > 0;
+
     console.log('[LayoutSync] Check:', {
       realTerminalIds: realTerminals.map(t => t.id),
       layoutTerminalIds,
       newTerminalIds,
       layoutConsoleIds,
       newConsoleIds,
+      tasksVisible,
+      hasTasksInLayout,
+      showAgentStatus,
+      hasAgentStatusInLayout,
     });
 
-    if (newConsoleIds.length > 0 || newTerminalIds.length > 0) {
-      console.log('[LayoutSync] Adding new widgets:', { newConsoleIds, newTerminalIds });
-      // Add new widgets to the layout
-      let updatedLayout = currentLayout;
+    let updatedLayout = currentLayout;
+    let needsUpdate = false;
 
-      // Add new agent consoles
+    // Add new agent consoles
+    if (newConsoleIds.length > 0) {
+      console.log('[LayoutSync] Adding new consoles:', newConsoleIds);
       for (const newId of newConsoleIds) {
         updatedLayout = addTerminalToLayout(updatedLayout, newId);
       }
+      needsUpdate = true;
+    }
 
-      // Add new real terminals
+    // Add new real terminals
+    if (newTerminalIds.length > 0) {
+      console.log('[LayoutSync] Adding new terminals:', newTerminalIds);
       for (const newId of newTerminalIds) {
         updatedLayout = addRealTerminalToLayout(updatedLayout, newId);
       }
+      needsUpdate = true;
+    }
 
+    // Handle tasks widget visibility
+    if (tasksVisible && !hasTasksInLayout) {
+      console.log('[LayoutSync] Adding tasks widget');
+      updatedLayout = addUtilityWidgetToLayout(updatedLayout, 'tasks', 'tasks-widget');
+      needsUpdate = true;
+    } else if (!tasksVisible && hasTasksInLayout) {
+      console.log('[LayoutSync] Removing tasks widget');
+      updatedLayout = removeWidgetFromLayout(updatedLayout, 'tasks-widget');
+      needsUpdate = true;
+    }
+
+    // Handle agent status widget visibility
+    if (showAgentStatus && !hasAgentStatusInLayout) {
+      console.log('[LayoutSync] Adding agent status widget');
+      updatedLayout = addUtilityWidgetToLayout(updatedLayout, 'agent-status', 'agent-status-widget');
+      needsUpdate = true;
+    } else if (!showAgentStatus && hasAgentStatusInLayout) {
+      console.log('[LayoutSync] Removing agent status widget');
+      updatedLayout = removeWidgetFromLayout(updatedLayout, 'agent-status-widget');
+      needsUpdate = true;
+    }
+
+    if (needsUpdate) {
       useWorkspaceStore.getState().setLayoutTree(updatedLayout);
     }
   }, [terminals, realTerminals, useFlexibleLayout, showAgentStatus, tasksVisible]);
@@ -2221,6 +2261,86 @@ export function Workspace() {
     }
 
     return tree;
+  };
+
+  // Helper to add a utility widget (tasks, agent-status) to the layout
+  const addUtilityWidgetToLayout = (tree: LayoutNode, widgetType: WidgetType, widgetId: string): LayoutNode => {
+    const newLeaf: LayoutLeaf = {
+      type: 'leaf',
+      id: layoutHelpers.generateLayoutId(),
+      widgetType,
+      widgetId,
+    };
+
+    if (tree.type === 'leaf') {
+      // Convert single leaf to horizontal group (utility widgets on the right)
+      return {
+        type: 'group',
+        id: layoutHelpers.generateLayoutId(),
+        direction: 'horizontal',
+        children: [tree, newLeaf],
+        sizes: [70, 30],
+      };
+    }
+
+    // For groups, add as a new panel on the right side
+    if (tree.direction === 'horizontal') {
+      const newSizes = tree.sizes ? [...tree.sizes.map(s => s * 0.7), 30] : tree.children.map(() => 100 / (tree.children.length + 1));
+      return {
+        ...tree,
+        children: [...tree.children, newLeaf],
+        sizes: newSizes,
+      };
+    }
+
+    // For vertical groups, wrap in a horizontal group
+    return {
+      type: 'group',
+      id: layoutHelpers.generateLayoutId(),
+      direction: 'horizontal',
+      children: [tree, newLeaf],
+      sizes: [70, 30],
+    };
+  };
+
+  // Helper to remove a widget from the layout by widgetId
+  const removeWidgetFromLayout = (tree: LayoutNode, widgetId: string): LayoutNode => {
+    if (tree.type === 'leaf') {
+      // If this is the widget to remove, return a placeholder (handled by caller)
+      return tree;
+    }
+
+    // Filter out the widget from children
+    const filteredChildren = tree.children.filter(child => {
+      if (child.type === 'leaf' && child.widgetId === widgetId) {
+        return false;
+      }
+      return true;
+    });
+
+    // Recursively process remaining children
+    const processedChildren = filteredChildren.map(child =>
+      child.type === 'group' ? removeWidgetFromLayout(child, widgetId) : child
+    );
+
+    // If only one child remains, return it directly (unwrap the group)
+    if (processedChildren.length === 1) {
+      return processedChildren[0];
+    }
+
+    // If no children remain, this shouldn't happen but handle gracefully
+    if (processedChildren.length === 0) {
+      return tree;
+    }
+
+    // Redistribute sizes evenly
+    const newSizes = processedChildren.map(() => 100 / processedChildren.length);
+
+    return {
+      ...tree,
+      children: processedChildren,
+      sizes: newSizes,
+    };
   };
 
   // Close add menu on click outside
@@ -2689,16 +2809,30 @@ export function Workspace() {
   }, [handleWsEvent]);
 
   // Terminal handlers
-  const handleNewTerminal = useCallback((agentId?: string) => {
+  const handleNewTerminal = useCallback((agentId?: string, initialMessage?: string) => {
     const agent = agents.find(a => a.id === agentId) || agents[0];
     if (!agent) return;
 
+    const newTerminalId = `terminal-${Date.now()}`;
+
     setTerminals(prev => [...prev, {
-      id: `terminal-${Date.now()}`,
+      id: newTerminalId,
       agent,
       lines: [{ id: `${Date.now()}`, type: 'system', content: `Session started — ${agent.name}`, timestamp: makeTimestamp() }],
       isStreaming: false,
     }]);
+
+    // If an initial message was provided, send it after the terminal is created
+    if (initialMessage) {
+      // Use requestAnimationFrame + setTimeout to ensure state has updated
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          handleTerminalMessageRef.current(newTerminalId, initialMessage);
+        }, 50);
+      });
+    }
+
+    return newTerminalId;
   }, [agents]);
 
   // Update ref for command palette
@@ -3503,49 +3637,20 @@ export function Workspace() {
             <p className="text-sm font-medium text-zinc-300 mb-1">Set a workspace path to get started</p>
             <p className="text-xs text-zinc-500 max-w-sm">Click the path in the header above to choose your project folder. Agents run in this workspace.</p>
           </div>
-        ) : terminals.length === 0 ? (
-          /* Empty state - no consoles yet */
-          <div className="h-full flex flex-col items-center justify-center text-center p-4">
-            <MonitorDot className="w-10 h-10 text-zinc-700 mb-3" />
-            <p className="text-sm text-zinc-500 mb-2">No consoles open</p>
-            {agents.length === 0 ? (
-              <button disabled className="px-3 py-1.5 bg-zinc-800 rounded text-xs flex items-center gap-1.5 opacity-50 cursor-not-allowed">
-                <Plus className="w-3.5 h-3.5" /> New Console
-              </button>
-            ) : agents.length === 1 ? (
-              <button onClick={() => handleNewTerminal(agents[0].id)} className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-xs flex items-center gap-1.5">
-                <Plus className="w-3.5 h-3.5" /> New Console
-              </button>
-            ) : (
-              <div className="relative">
-                <button
-                  onClick={() => setShowEmptyStateAgentMenu(prev => !prev)}
-                  className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-xs flex items-center gap-1.5"
-                >
-                  <Plus className="w-3.5 h-3.5" /> New Console
-                  <ChevronDown className="w-3 h-3 text-zinc-500" />
-                </button>
-                {showEmptyStateAgentMenu && (
-                  <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 py-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 min-w-[160px]">
-                    {agents.map(agent => (
-                      <button
-                        key={agent.id}
-                        onClick={() => {
-                          handleNewTerminal(agent.id);
-                          setShowEmptyStateAgentMenu(false);
-                        }}
-                        className="w-full px-3 py-2 text-left text-xs text-zinc-300 hover:bg-zinc-700 flex items-center gap-2"
-                      >
-                        <span>{agent.icon}</span>
-                        <span>{agent.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-            {agents.length === 0 && <p className="text-xs text-zinc-600 mt-2">No agents connected</p>}
-          </div>
+        ) : terminals.length === 0 && realTerminals.length === 0 && !tasksVisible && !showAgentStatus ? (
+          /* Project Starting Point - empty state with task input and quick actions */
+          <ProjectStartingPoint
+            workspacePath={workspacePath}
+            agents={agents}
+            onSubmit={(task) => {
+              // Use the default agent (Claude Code)
+              const agent = agents.find(a => a.type === 'claude-code') || agents[0];
+              if (!agent) return;
+
+              // Create a new console and send the initial message
+              handleNewTerminal(agent.id, task);
+            }}
+          />
         ) : useFlexibleLayout && layoutTree ? (
           /* Flexible grid layout with LayoutRenderer wrapped in DndContext */
           <DndContext
