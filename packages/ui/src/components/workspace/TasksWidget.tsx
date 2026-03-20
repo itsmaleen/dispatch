@@ -560,7 +560,11 @@ function ActiveSessionCard({
       }
     };
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setContextMenu(null);
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        setContextMenu(null);
+      }
     };
     document.addEventListener('mousedown', handleClick);
     document.addEventListener('keydown', handleEscape);
