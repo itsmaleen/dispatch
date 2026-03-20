@@ -863,6 +863,7 @@ function AgentConsoleWidget({
   return (
     <div
       className={`h-full bg-[#0d1117] border rounded-lg flex flex-col overflow-hidden transition-all duration-150 ${getBorderClass()}`}
+      data-console-id={consoleState.id}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
       onContextMenu={handleContextMenu}
@@ -2031,11 +2032,16 @@ export function Workspace() {
 
   // Sync widgets to workspace store for arrow key navigation
   useEffect(() => {
-    const widgets: Array<{ id: string; type: 'agent-console' | 'tasks' | 'agent-status' }> = [];
+    const widgets: Array<{ id: string; type: 'agent-console' | 'tasks' | 'agent-status' | 'terminal' }> = [];
 
-    // Add terminals
+    // Add agent consoles
     terminals.forEach(t => {
       widgets.push({ id: t.id, type: 'agent-console' });
+    });
+
+    // Add real terminals
+    realTerminals.forEach(t => {
+      widgets.push({ id: t.id, type: 'terminal' });
     });
 
     // Add tasks widget if visible
@@ -2049,7 +2055,7 @@ export function Workspace() {
     }
 
     useWorkspaceStore.getState().setWidgets(widgets);
-  }, [terminals, tasksVisible, showAgentStatus]);
+  }, [terminals, realTerminals, tasksVisible, showAgentStatus]);
 
   // Initialize/update layout tree when terminals change
   useEffect(() => {

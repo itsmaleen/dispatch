@@ -670,16 +670,28 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
   setShowAgentStatus: (show) => set({ showAgentStatus: show }),
   setTasksVisible: (visible) => set({ tasksVisible: visible }),
 
-  // Arrow key navigation
+  // Arrow key / shortcut navigation
   moveFocus: (direction) => {
     const { widgets, focusedWidgetId } = get();
     if (widgets.length === 0) return;
+
+    // Helper to blur any active input and set focus
+    const blurAndSetFocus = (id: string, type: WidgetType) => {
+      // Blur any currently focused DOM element (e.g., text inputs) when navigating
+      if (document.activeElement instanceof HTMLElement) {
+        const tagName = document.activeElement.tagName;
+        if (tagName === 'INPUT' || tagName === 'TEXTAREA' || document.activeElement.isContentEditable) {
+          document.activeElement.blur();
+        }
+      }
+      set({ focusedWidgetId: id, focusedWidgetType: type });
+    };
 
     // If nothing focused, focus the first widget
     if (!focusedWidgetId) {
       const first = widgets[0];
       if (first) {
-        set({ focusedWidgetId: first.id, focusedWidgetType: first.type });
+        blurAndSetFocus(first.id, first.type);
       }
       return;
     }
@@ -688,7 +700,7 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
     if (currentIndex === -1) {
       const first = widgets[0];
       if (first) {
-        set({ focusedWidgetId: first.id, focusedWidgetType: first.type });
+        blurAndSetFocus(first.id, first.type);
       }
       return;
     }
@@ -703,7 +715,7 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
 
     const nextWidget = widgets[nextIndex];
     if (nextWidget) {
-      set({ focusedWidgetId: nextWidget.id, focusedWidgetType: nextWidget.type });
+      blurAndSetFocus(nextWidget.id, nextWidget.type);
     }
   },
 
