@@ -354,6 +354,245 @@ npm run dev
 
 ---
 
+## Scaling Problem: From Groups to Canvas
+
+### The Tile Explosion
+
+Groups solve the immediate problem, but create a new one at scale:
+
+| Scenario | Group Count | Tiles per Group | Total Tiles |
+|----------|-------------|-----------------|-------------|
+| Single feature | 1 | 3-4 | 3-4 |
+| Two features | 2 | 3-4 | 6-8 |
+| Full-stack + tests | 3 | 3-4 | 9-12 |
+| Multi-project | 4+ | 3-4 | 16+ |
+
+**Problem**: Traditional tiled layouts become unmanageable beyond ~8 tiles. You lose spatial awareness and spend more time navigating than working.
+
+### Theo's Observation (The Agentic Code Problem)
+
+From [Theo's tweet](https://x.com/theo/status/2018091358251372601):
+
+> "Our projects are split BETWEEN apps, windows and tabs. There's no natural grouping! If I see some work finish in Claude Code for Project A, I have to go hunt for the right Chrome window/tab to see the results. If I want to check the code, I have to hop between multiple IDE windows trying to find it."
+
+**Core insight**: The problem isn't just grouping — it's **spatial navigation** between groups.
+
+### The Canvas Solution
+
+Instead of tiled windows, treat groups as **nodes on an infinite canvas**:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                     INFINITE CANVAS                              │
+│                                                                  │
+│    ┌─────────────┐                    ┌─────────────┐           │
+│    │ Feature A   │                    │ Feature B   │           │
+│    │ [Agent]     │                    │ [Agent]     │           │
+│    │ [Terminal]  │←───────────────────│ [Terminal]  │           │
+│    │ [Browser]   │    (relationship)  │ [Browser]   │           │
+│    └─────────────┘                    └─────────────┘           │
+│                                                                  │
+│                        ┌─────────────┐                          │
+│                        │ Integration │                          │
+│                        │ [Agent]     │                          │
+│                        │ [Terminal]  │                          │
+│                        └─────────────┘                          │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Reference**: Flora Fauna (florafauna.ai) does this for creative AI work:
+> "Every text, image and video model on one infinite canvas... a node-based creative workspace"
+
+---
+
+## Canvas Navigation Research
+
+### The "Buggy Canvas" Problem
+
+Canvas UIs often feel:
+- **Floaty/imprecise** - hard to land exactly where you want
+- **Disorienting** - lose sense of where you are
+- **Trackpad-dependent** - not keyboard-friendly
+- **Slow** - panning/zooming to find things
+
+### Navigation Patterns from Existing Tools
+
+#### 1. Command Palette / Spotlight Search (Figma, Excalidraw)
+
+**Pattern**: `Cmd+/` or `Cmd+Shift+P` → type name → jump to element
+
+**Figma Spotlight Search plugin**:
+> "Find and jump to any Page, Frame, Component, Layer... Use arrow keys and return to move inside the project without lifting your hands"
+
+**Excalidraw**:
+> "Cmd-/ or Ctrl-/ to open the command palette... quickly execute actions or find things"
+
+**For Dispatch**: Jump to group by name, jump to specific terminal, jump to agent
+
+#### 2. Named Frames / Bookmarks (Figma, Obsidian)
+
+**Pattern**: Groups have names, can be bookmarked for quick access
+
+**Obsidian feature request**:
+> "Right click on a canvas group and select 'Bookmark'. When you click that bookmark, it opens the canvas and zooms to it."
+
+**For Dispatch**: Bookmark active groups, recent groups list, pin important groups
+
+#### 3. Zoom-to-Fit Shortcuts (Excalidraw, Figma)
+
+**Pattern**: One key to zoom to show everything, one key to zoom to selection
+
+**Excalidraw shortcuts**:
+- `Shift+1` - Zoom to fit all elements
+- `Shift+2` - Zoom to selection
+- `Opt/Alt+Arrow` - Move around
+
+**For Dispatch**: `Cmd+0` zoom to all groups, `Cmd+1-9` quick-switch to group N
+
+#### 4. Minimap / Bird's Eye View (VS Code, Figma)
+
+**Pattern**: Small overview in corner showing entire canvas with viewport indicator
+
+**For Dispatch**: Minimap showing all groups as dots/thumbnails, click to jump
+
+#### 5. Breadcrumbs / Context Trail
+
+**Pattern**: Show path of where you've been, click to go back
+
+**For Dispatch**: "Feature A > Terminal 1" breadcrumb, back/forward navigation
+
+#### 6. Keyboard Spatial Navigation
+
+**Pattern**: Arrow keys move between adjacent elements
+
+**From WICG spatial-navigation spec**:
+> "Directional focus navigation with arrow keys"
+
+**For Dispatch**: Arrow keys move focus between groups, `Enter` to zoom into group
+
+### Hybrid Approach: Canvas + Keyboard-First
+
+**Don't force trackpad-only navigation.** Best canvas UIs support:
+
+| Action | Trackpad | Keyboard |
+|--------|----------|----------|
+| Pan | Two-finger drag | Arrow keys / WASD |
+| Zoom | Pinch | `+`/`-` or scroll |
+| Jump to group | Click | `Cmd+K` → search |
+| Switch groups | Click | `Cmd+1-9` or `Tab` |
+| Zoom to fit | Double-tap | `Shift+1` |
+| Back | — | `Cmd+[` |
+
+---
+
+## Expanded Implementation Plan
+
+### Phase 7: Canvas Mode (Beyond Tiles)
+
+**Scope**: Infinite canvas layout for groups
+
+**Tasks**:
+1. [ ] Integrate canvas library (tldraw, react-flow, or custom)
+   - tldraw: mature, good accessibility, MIT license
+   - react-flow: node-graph focused, good for relationships
+   
+2. [ ] Define `CanvasGroup` node type
+   ```typescript
+   interface CanvasGroup {
+     id: string;
+     position: { x: number; y: number };
+     size: { width: number; height: number };
+     group: WorkspaceGroup;
+     collapsed?: boolean;
+   }
+   ```
+
+3. [ ] Implement zoom/pan controls
+   - Trackpad gestures
+   - Keyboard navigation (arrows, +/-, fit commands)
+   
+4. [ ] Group connections/relationships
+   - Visual links between related groups
+   - Dependency indicators
+
+**Deliverable**: Groups can be arranged spatially on infinite canvas
+
+### Phase 8: Canvas Navigation System
+
+**Scope**: Fast, keyboard-friendly navigation
+
+**Tasks**:
+1. [ ] Command palette for groups (`Cmd+K`)
+   - Search groups by name
+   - Search terminals within groups
+   - Recent groups section
+   
+2. [ ] Quick-switch shortcuts
+   - `Cmd+1-9` jump to group N
+   - `Tab` / `Shift+Tab` cycle groups
+   - `Cmd+[` / `Cmd+]` back/forward
+   
+3. [ ] Zoom presets
+   - `Shift+1` zoom to fit all
+   - `Shift+2` zoom to focused group
+   - `Shift+0` zoom 100%
+   
+4. [ ] Minimap component
+   - Bird's eye view of canvas
+   - Click to jump
+   - Viewport indicator
+   
+5. [ ] Breadcrumb navigation
+   - Current location trail
+   - Click to navigate back
+
+**Deliverable**: Canvas navigable without trackpad
+
+### Phase 9: Collapsed Group Views
+
+**Scope**: Summary views when zoomed out
+
+**Tasks**:
+1. [ ] Define collapsed group appearance
+   - Group name
+   - Status indicators (agent busy/idle, errors)
+   - Thumbnail preview
+   
+2. [ ] Auto-collapse at zoom thresholds
+   - Below 50%: show collapsed
+   - Above 75%: show expanded
+   
+3. [ ] Activity indicators on collapsed groups
+   - Pulsing dot when agent active
+   - Red indicator on errors
+   - Green checkmark on success
+
+**Deliverable**: Useful at any zoom level
+
+### Phase 10: Canvas Persistence & Sync
+
+**Scope**: Save and restore canvas state
+
+**Tasks**:
+1. [ ] Persist canvas layout per workspace
+   - Group positions
+   - Zoom level
+   - Viewport position
+   
+2. [ ] Layout presets
+   - Grid layout (auto-arrange)
+   - Flow layout (based on dependencies)
+   - Free-form (user arranged)
+   
+3. [ ] Session restore
+   - Remember last viewed group
+   - Restore zoom/pan state
+
+**Deliverable**: Canvas state persists across sessions
+
+---
+
 ## Success Metrics
 
 1. **Time to Issue Detection**: How quickly do users catch problems vs baseline (agent-only)?
@@ -377,6 +616,17 @@ npm run dev
 
 6. **Mobile/Remote**: How do groups work when accessing Dispatch remotely or on smaller screens?
 
+7. **Canvas Library Choice**: tldraw vs react-flow vs custom? Each has tradeoffs:
+   - tldraw: whiteboard-first, great UX, but may need customization for structured groups
+   - react-flow: node-graph native, good for relationships, less freeform
+   - custom: full control, significant effort
+
+8. **Tiles vs Canvas Default**: Should canvas be opt-in or the default experience? Power users may prefer tiles initially.
+
+9. **Group Relationships**: Should groups explicitly declare dependencies/relationships, or infer from agent context?
+
+10. **Keyboard vs Mouse Balance**: How much navigation should require mouse/trackpad vs pure keyboard?
+
 ---
 
 ## Related Documents
@@ -391,14 +641,38 @@ npm run dev
 
 ## Appendix: Research Sources
 
-### Primary References
+### Workspace Groups References
 - Warp Terminal: https://www.warp.dev/warp-ai
 - TmuxAI: https://github.com/alvinunreal/tmuxai
 - Claude Code + tmux patterns: https://www.blle.co/blog/claude-code-tmux-beautiful-terminal
 - Windsurf Cascade: https://docs.windsurf.com/windsurf/cascade/cascade
 - Coder Dev Containers: https://coder.com/docs/user-guides/devcontainers/
 
+### Canvas / Infinite Canvas References
+- Flora Fauna: https://florafauna.ai - AI creative infinite canvas
+- tldraw: https://tldraw.dev - Infinite canvas SDK for React
+- Excalidraw: https://excalidraw.com - Whiteboard with command palette
+- Figma Spotlight Search: https://www.figma.com/community/plugin/831936468026040598
+- Obsidian Canvas: https://help.obsidian.md/plugins/canvas
+- T3 Code UI Discussion: https://github.com/pingdotgg/t3code/issues/511
+
+### Navigation Pattern References
+- WICG Spatial Navigation: https://wicg.github.io/spatial-navigation/
+- Figma Keyboard Navigation: https://help.figma.com/hc/en-us/articles/360040328653
+
 ### Key Quotes
+
+**On the grouping problem** (Theo):
+> "Our projects are split BETWEEN apps, windows and tabs. There's no natural grouping! If I see some work finish in Claude Code for Project A, I have to go hunt for the right Chrome window/tab to see the results."
+
+**On canvas for AI tools** (Flora Fauna):
+> "Every text, image and video model on one infinite canvas... a node-based creative workspace"
+
+**On agent UI direction** (T3 Code discussion):
+> "What I want most is: understanding what the agent is doing, understanding why it is doing it, seeing progress and decisions across multiple tasks, reviewing results at the right level of abstraction before drilling down into code."
+
+**On command palette navigation** (Figma Spotlight):
+> "Find and jump to any Page, Frame, Component, Layer... Use arrow keys and return to move inside the project without lifting your hands"
 
 **On visibility** (Windsurf):
 > "Visible — You can see what Cascade intends to do"
