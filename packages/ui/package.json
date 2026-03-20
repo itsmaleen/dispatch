@@ -13,7 +13,9 @@
     "build:electron:sign": "electron-builder",
     "start": "electron .",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src/"
+    "lint": "eslint src/",
+    "rebuild": "npx @electron/rebuild",
+    "postinstall": "npx @electron/rebuild -m node_modules/node-pty || true"
   },
   "dependencies": {
     "@acc/contracts": "workspace:*",

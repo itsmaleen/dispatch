@@ -9,7 +9,8 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "watch-output": "node scripts/watch-output.mjs"
+    "watch-output": "node scripts/watch-output.mjs",
+    "rebuild-for-electron": "npx @electron/rebuild -m node_modules/node-pty"
   },
   "dependencies": {
     "@acc/contracts": "workspace:*",
@@ -22,6 +23,7 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.0",
     "tsup": "^8.4.0",
