@@ -117,16 +117,16 @@ export function App() {
       const target = e.target as HTMLElement;
       const isInInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
 
-      // Escape: close palette > restore maximized > clear focus
+      // Escape: close palette > restore maximized (only if not in input) > clear focus
       if (e.key === 'Escape') {
         if (commandPalette.isOpen) {
           e.preventDefault();
           commandPalette.close();
           return;
         }
-        // If a widget is maximized, restore it
+        // If a widget is maximized, restore it (but not if user is typing in an input)
         const maximizedWidgetId = useWorkspaceStore.getState().maximizedWidgetId;
-        if (maximizedWidgetId) {
+        if (maximizedWidgetId && !isInInput) {
           e.preventDefault();
           useWorkspaceStore.getState().setMaximizedWidget(null);
           return;
