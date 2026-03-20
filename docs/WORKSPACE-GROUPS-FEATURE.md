@@ -488,7 +488,39 @@ Canvas UIs often feel:
 
 ## Expanded Implementation Plan
 
-### Phase 7: Canvas Mode (Beyond Tiles)
+### Phase 7: View Mode Tabs (Grid ↔ Canvas)
+
+**Scope**: Tabbed toggle between grid layout and canvas mode
+
+**Tasks**:
+1. [ ] Add view mode toggle UI
+   - Tab bar or segmented control: `[Grid] [Canvas]`
+   - Keyboard shortcut: `Cmd+Shift+V` to toggle
+   - Persist preference per workspace
+   
+2. [ ] Define view mode state
+   ```typescript
+   type ViewMode = 'grid' | 'canvas';
+   
+   interface WorkspaceViewState {
+     mode: ViewMode;
+     gridLayout: GridLayout;      // existing tile arrangement
+     canvasLayout: CanvasLayout;  // positions on infinite canvas
+   }
+   ```
+
+3. [ ] Sync group state between modes
+   - Same groups, different spatial representation
+   - Adding group in grid → appears in canvas (auto-positioned)
+   - Deleting group in canvas → removes from grid
+   
+4. [ ] Smart defaults
+   - Start in grid mode (familiar)
+   - Suggest canvas when >4 groups ("Switch to canvas for better overview?")
+
+**Deliverable**: Users can toggle between grid tiles and infinite canvas
+
+### Phase 8: Canvas Implementation
 
 **Scope**: Infinite canvas layout for groups
 
@@ -518,7 +550,7 @@ Canvas UIs often feel:
 
 **Deliverable**: Groups can be arranged spatially on infinite canvas
 
-### Phase 8: Canvas Navigation System
+### Phase 9: Canvas Navigation System
 
 **Scope**: Fast, keyboard-friendly navigation
 
@@ -549,7 +581,7 @@ Canvas UIs often feel:
 
 **Deliverable**: Canvas navigable without trackpad
 
-### Phase 9: Collapsed Group Views
+### Phase 10: Collapsed Group Views
 
 **Scope**: Summary views when zoomed out
 
@@ -570,7 +602,7 @@ Canvas UIs often feel:
 
 **Deliverable**: Useful at any zoom level
 
-### Phase 10: Canvas Persistence & Sync
+### Phase 11: Canvas Persistence & Sync
 
 **Scope**: Save and restore canvas state
 

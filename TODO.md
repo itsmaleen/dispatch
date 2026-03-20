@@ -45,25 +45,31 @@ Surface the hidden orchestration of AI coding agents. Instead of terminals being
   - [ ] Testing template
   - [ ] Custom template saving
 
-- [ ] **Phase 7: Canvas Mode (Beyond Tiles)**
+- [ ] **Phase 7: View Mode Tabs (Grid ↔ Canvas)**
+  - [ ] Add view mode toggle UI (tab bar or segmented control)
+  - [ ] Keyboard shortcut: Cmd+Shift+V to toggle
+  - [ ] Sync group state between modes
+  - [ ] Smart defaults (start grid, suggest canvas at >4 groups)
+
+- [ ] **Phase 8: Canvas Implementation**
   - [ ] Integrate canvas library (tldraw/react-flow)
   - [ ] Define CanvasGroup node type with position/size
   - [ ] Implement zoom/pan controls (trackpad + keyboard)
   - [ ] Group connections/relationships
 
-- [ ] **Phase 8: Canvas Navigation System**
+- [ ] **Phase 9: Canvas Navigation System**
   - [ ] Command palette for groups (Cmd+K → search → jump)
   - [ ] Quick-switch shortcuts (Cmd+1-9, Tab cycle)
   - [ ] Zoom presets (Shift+1 fit all, Shift+2 fit selection)
   - [ ] Minimap component
   - [ ] Breadcrumb navigation
 
-- [ ] **Phase 9: Collapsed Group Views**
+- [ ] **Phase 10: Collapsed Group Views**
   - [ ] Collapsed group appearance (name, status, thumbnail)
   - [ ] Auto-collapse at zoom thresholds
   - [ ] Activity indicators on collapsed groups
 
-- [ ] **Phase 10: Canvas Persistence & Sync**
+- [ ] **Phase 11: Canvas Persistence & Sync**
   - [ ] Persist canvas layout per workspace
   - [ ] Layout presets (grid, flow, free-form)
   - [ ] Session restore (last viewed, zoom state)
