@@ -2,7 +2,7 @@
  * WorktreePanel - Shows file changes and merge actions for worktree-isolated consoles
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   GitBranch,
   GitMerge,
@@ -20,7 +20,39 @@ import {
   ExternalLink,
   Loader2,
   Trash2,
+  Check,
 } from 'lucide-react';
+
+/** Editor configuration for "Open in" dropdown */
+interface EditorOption {
+  id: string;
+  name: string;
+  urlScheme: string;
+}
+
+const EDITOR_OPTIONS: EditorOption[] = [
+  { id: 'vscode', name: 'VS Code', urlScheme: 'vscode://file' },
+  { id: 'cursor', name: 'Cursor', urlScheme: 'cursor://file' },
+  { id: 'windsurf', name: 'Windsurf', urlScheme: 'windsurf://file' },
+];
+
+const EDITOR_STORAGE_KEY = 'acc-preferred-editor';
+
+/** Get the preferred editor from localStorage */
+function getPreferredEditor(): EditorOption {
+  const stored = localStorage.getItem(EDITOR_STORAGE_KEY);
+  if (stored) {
+    const found = EDITOR_OPTIONS.find((e) => e.id === stored);
+    if (found) return found;
+  }
+  return EDITOR_OPTIONS[0]; // Default to VS Code
+}
+
+/** Save the preferred editor to localStorage */
+function setPreferredEditor(editorId: string): void {
+  localStorage.setItem(EDITOR_STORAGE_KEY, editorId);
+}
+
 import { getServerUrl } from '../../stores/app';
 import type { WorktreeChanges, MergeResult, FileStatus } from '@acc/contracts';
 
@@ -37,6 +69,96 @@ interface WorktreeInfo {
   branch: string;
   baseBranch: string;
   isClean: boolean;
+}
+
+/** EditorDropdownButton - Button with dropdown to open in different editors */
+interface EditorDropdownButtonProps {
+  path: string;
+}
+
+function EditorDropdownButton({ path }: EditorDropdownButtonProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [selectedEditor, setSelectedEditor] = useState<EditorOption>(getPreferredEditor);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleOpenInEditor = (editor: EditorOption, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    // Use a temporary anchor element to trigger the protocol handler
+    // This avoids window.open() which creates a blank window in Electron
+    const link = document.createElement('a');
+    link.href = `${editor.urlScheme}${path}`;
+    link.click();
+    if (editor.id !== selectedEditor.id) {
+      setSelectedEditor(editor);
+      setPreferredEditor(editor.id);
+    }
+    setIsOpen(false);
+  };
+
+  const handleMainButtonClick = () => {
+    handleOpenInEditor(selectedEditor);
+  };
+
+  const handleDropdownToggle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsOpen(!isOpen);
+  };
+
+  return (
+    <div className="relative" ref={dropdownRef}>
+      <div className="flex items-center">
+        {/* Main button - opens in default editor */}
+        <button
+          onClick={handleMainButtonClick}
+          className="flex items-center gap-2 px-3 py-2 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 rounded-l-lg border-r border-zinc-700"
+        >
+          <ExternalLink className="w-4 h-4" />
+          Open in {selectedEditor.name}
+        </button>
+        {/* Dropdown toggle */}
+        <button
+          onClick={handleDropdownToggle}
+          className="flex items-center px-2 py-2 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 rounded-r-lg"
+        >
+          <ChevronDown className={`w-4 h-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        </button>
+      </div>
+
+      {/* Dropdown Menu */}
+      {isOpen && (
+        <div className="absolute bottom-full left-0 mb-1 py-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg min-w-[160px] z-10">
+          <div className="px-3 py-1 text-xs text-zinc-500 uppercase tracking-wider">
+            Open with
+          </div>
+          {EDITOR_OPTIONS.map((editor) => (
+            <button
+              key={editor.id}
+              onClick={(e) => handleOpenInEditor(editor, e)}
+              className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-left hover:bg-zinc-700 ${
+                editor.id === selectedEditor.id ? 'text-violet-300' : 'text-zinc-200'
+              }`}
+            >
+              <span>{editor.name}</span>
+              {editor.id === selectedEditor.id && (
+                <Check className="w-4 h-4 text-violet-400" />
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** Get icon and color for file status */
@@ -408,15 +530,7 @@ export function WorktreePanel({ threadId, isOpen, onClose, onMerged }: WorktreeP
         {worktreeInfo && !loading && !confirmDiscard && (
           <div className="p-4 border-t border-zinc-800 bg-zinc-900/50 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <button
-                onClick={() =>
-                  window.open(`vscode://file${worktreeInfo.path}`, '_blank')
-                }
-                className="flex items-center gap-2 px-3 py-2 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 rounded-lg"
-              >
-                <ExternalLink className="w-4 h-4" />
-                Open in VS Code
-              </button>
+              <EditorDropdownButton path={worktreeInfo.path} />
               <button
                 onClick={() => setConfirmDiscard(true)}
                 disabled={merging || discarding}
