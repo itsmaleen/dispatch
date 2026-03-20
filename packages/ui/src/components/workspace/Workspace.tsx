@@ -160,10 +160,11 @@ interface ConsoleState {
 
 interface MinimizedWidget {
   id: string;
-  type: 'agent-console' | 'tasks';
+  type: 'agent-console' | 'tasks' | 'terminal';
   title: string;
   icon: string;
   data?: ConsoleState;
+  terminalData?: TerminalInstance;
 }
 
 /** Drop position for drag-and-drop operations */
@@ -1571,6 +1572,7 @@ interface LayoutRendererProps {
   // Real PTY terminals
   realTerminals: TerminalInstance[];
   onCloseRealTerminal: (id: string) => void;
+  onMinimizeRealTerminal: (terminal: TerminalInstance) => void;
   onRenameRealTerminal: (id: string, name: string) => void;
   // Focus/hover state
   focusedWidgetId: string | null;
@@ -1633,6 +1635,7 @@ function LayoutRenderer({
   minimizedWidgets,
   realTerminals,
   onCloseRealTerminal,
+  onMinimizeRealTerminal,
   onRenameRealTerminal,
   focusedWidgetId,
   hoveredWidgetId,
@@ -1817,7 +1820,7 @@ function LayoutRenderer({
             <RealTerminalWidget
               terminal={terminalInstance}
               onClose={() => onCloseRealTerminal(terminalInstance.id)}
-              onMinimize={() => {/* TODO: minimize real terminal */}}
+              onMinimize={() => onMinimizeRealTerminal(terminalInstance)}
               onMaximize={() => onMaximizeTerminal(terminalInstance.id)}
               onRename={onRenameRealTerminal}
               isFocused={focusedWidgetId === terminalInstance.id}
@@ -1862,6 +1865,7 @@ function LayoutRenderer({
               minimizedWidgets={minimizedWidgets}
               realTerminals={realTerminals}
               onCloseRealTerminal={onCloseRealTerminal}
+              onMinimizeRealTerminal={onMinimizeRealTerminal}
               onRenameRealTerminal={onRenameRealTerminal}
               focusedWidgetId={focusedWidgetId}
               hoveredWidgetId={hoveredWidgetId}
@@ -3115,6 +3119,43 @@ export function Workspace() {
     }
   };
 
+  const handleMinimizeRealTerminal = (terminal: TerminalInstance) => {
+    setMinimizedWidgets(prev => [...prev, {
+      id: terminal.id,
+      type: 'terminal',
+      title: terminal.name || 'Terminal',
+      icon: '💻',
+      terminalData: terminal
+    }]);
+    setRealTerminals(prev => prev.filter(t => t.id !== terminal.id));
+    // Clear focus if this terminal was focused
+    if (focusedWidgetId === terminal.id) {
+      useWorkspaceStore.getState().setFocusedWidget(null, null);
+    }
+    // Clear maximized if this terminal was maximized
+    if (maximizedWidgetId === terminal.id) {
+      useWorkspaceStore.getState().setMaximizedWidget(null);
+    }
+    // Also remove the panel from the layout tree so the grid collapses
+    const currentLayoutTree = useWorkspaceStore.getState().layoutTree;
+    if (currentLayoutTree) {
+      const findPanelId = (node: LayoutNode): string | null => {
+        if (node.type === 'leaf') {
+          return node.widgetId === terminal.id ? node.id : null;
+        }
+        for (const child of node.children) {
+          const found = findPanelId(child);
+          if (found) return found;
+        }
+        return null;
+      };
+      const panelId = findPanelId(currentLayoutTree);
+      if (panelId) {
+        useWorkspaceStore.getState().closePanelInLayout(panelId);
+      }
+    }
+  };
+
   const handleMaximizeTerminal = (terminalId: string) => {
     const current = useWorkspaceStore.getState().maximizedWidgetId;
     if (current === terminalId) {
@@ -3585,6 +3626,8 @@ export function Workspace() {
     setMinimizedWidgets(prev => prev.filter(w => w.id !== widget.id));
     if (widget.type === 'agent-console' && widget.data) {
       setTerminals(prev => [...prev, widget.data!]);
+    } else if (widget.type === 'terminal' && widget.terminalData) {
+      setRealTerminals(prev => [...prev, widget.terminalData!]);
     }
     // Tasks widget restore: right panel is always tasks; no mode to set
   };
@@ -3840,6 +3883,7 @@ export function Workspace() {
               minimizedWidgets={minimizedWidgets}
               realTerminals={realTerminals}
               onCloseRealTerminal={handleCloseRealTerminal}
+              onMinimizeRealTerminal={handleMinimizeRealTerminal}
               onRenameRealTerminal={handleRenameRealTerminal}
               focusedWidgetId={focusedWidgetId}
               hoveredWidgetId={hoveredWidgetId}
@@ -3986,7 +4030,7 @@ export function Workspace() {
                 <RealTerminalWidget
                   terminal={maximizedRealTerminal}
                   onClose={() => handleCloseRealTerminal(maximizedRealTerminal.id)}
-                  onMinimize={() => {/* TODO: minimize real terminal */}}
+                  onMinimize={() => handleMinimizeRealTerminal(maximizedRealTerminal)}
                   onMaximize={() => handleMaximizeTerminal(maximizedRealTerminal.id)}
                   onRename={handleRenameRealTerminal}
                   isFocused={true}
