@@ -7,7 +7,7 @@
  * - Goals: Organizing containers with progress tracking (Tier 3)
  */
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, useLayoutEffect } from 'react';
 import {
   Sparkles,
   Plus,
@@ -540,6 +540,7 @@ function ActiveSessionCard({
 }) {
   const [elapsed, setElapsed] = useState(0);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [adjustedPosition, setAdjustedPosition] = useState<{ top: number; left: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -567,6 +568,45 @@ function ActiveSessionCard({
       document.removeEventListener('mousedown', handleClick);
       document.removeEventListener('keydown', handleEscape);
     };
+  }, [contextMenu]);
+
+  // Calculate adjusted position to avoid screen edge overflow
+  useLayoutEffect(() => {
+    if (!contextMenu || !menuRef.current) {
+      setAdjustedPosition(null);
+      return;
+    }
+
+    const menu = menuRef.current;
+    const menuRect = menu.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const padding = 8;
+
+    let left = contextMenu.x;
+    let top = contextMenu.y;
+
+    // Check if menu would overflow on the right - open to the left of cursor
+    if (left + menuRect.width + padding > viewportWidth) {
+      left = contextMenu.x - menuRect.width;
+    }
+
+    // Check if menu would overflow on the bottom - open above cursor
+    if (top + menuRect.height + padding > viewportHeight) {
+      top = contextMenu.y - menuRect.height;
+    }
+
+    // Ensure menu doesn't go off-screen on the left
+    if (left < padding) {
+      left = padding;
+    }
+
+    // Ensure menu doesn't go off-screen on the top
+    if (top < padding) {
+      top = padding;
+    }
+
+    setAdjustedPosition({ top, left });
   }, [contextMenu]);
 
   const handleContextMenu = (e: React.MouseEvent) => {
@@ -612,7 +652,10 @@ function ActiveSessionCard({
         <div
           ref={menuRef}
           className="fixed py-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl z-50 min-w-[160px]"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
+          style={{
+            left: adjustedPosition?.left ?? contextMenu.x,
+            top: adjustedPosition?.top ?? contextMenu.y
+          }}
         >
           <button
             onClick={() => { onHighlightConsole(); setContextMenu(null); }}
