@@ -2727,6 +2727,29 @@ export function Workspace() {
           }
         }
       }
+
+      // Handle SDK result message with error (e.g., rate limit, auth errors)
+      if (msg.type === 'result' && msg.is_error) {
+        const errorMessage = msg.result || 'An error occurred';
+        console.error('[WS] Session result error:', errorMessage);
+
+        updateAllTerminals(t => ({
+          ...t,
+          isStreaming: false,
+          currentStepId: undefined,
+          lines: [
+            ...t.lines.map(l => ({ ...l, isStreaming: false })),
+            {
+              id: `error-${Date.now()}`,
+              type: 'error' as const,
+              content: errorMessage,
+              timestamp: makeTimestamp(),
+            },
+          ],
+        }));
+        return;
+      }
+
       return;
     }
 
@@ -2816,13 +2839,26 @@ export function Workspace() {
       const queuedMsg = matchedTerminal?.queuedMessage;
       const terminalIdForQueue = matchedTerminal?.id;
 
+      // Check if turn completed with an error (status: 'failed' from server)
+      const isError = event.payload?.status === 'failed';
+      const errorMessage = event.payload?.reason || event.payload?.result;
+
       updateAllTerminals(t => ({
         ...t,
         isStreaming: false,
         currentStepId: undefined,
-        lines: t.lines.map(l => ({ ...l, isStreaming: false })),
-        // Clear queued message since we'll send it
-        queuedMessage: queuedMsg ? null : t.queuedMessage,
+        lines: [
+          ...t.lines.map(l => ({ ...l, isStreaming: false })),
+          // Add error line if turn completed with failed status
+          ...(isError && errorMessage ? [{
+            id: `error-${Date.now()}`,
+            type: 'error' as const,
+            content: errorMessage,
+            timestamp: makeTimestamp(),
+          }] : []),
+        ],
+        // Clear queued message since we'll send it (only if not an error)
+        queuedMessage: (queuedMsg && !isError) ? null : t.queuedMessage,
       }));
 
       if (stepIdToComplete && usage) {
@@ -2833,8 +2869,8 @@ export function Workspace() {
         ));
       }
 
-      // Auto-send queued message after terminal finishes streaming
-      if (queuedMsg && terminalIdForQueue) {
+      // Auto-send queued message after terminal finishes streaming (but not on error)
+      if (queuedMsg && terminalIdForQueue && !isError) {
         // Use setTimeout to ensure state updates have been applied
         setTimeout(() => {
           handleTerminalMessageRef.current(terminalIdForQueue, queuedMsg.message, queuedMsg.files);
