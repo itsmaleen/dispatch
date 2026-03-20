@@ -21,6 +21,7 @@ import {
   Loader2,
   Trash2,
   Check,
+  Terminal,
 } from 'lucide-react';
 
 /** Editor configuration for "Open in" dropdown */
@@ -62,6 +63,8 @@ interface WorktreePanelProps {
   onClose: () => void;
   /** Called when worktree is successfully merged and removed */
   onMerged?: () => void;
+  /** Called to open a terminal in the worktree directory */
+  onOpenTerminal?: (cwd: string) => void;
 }
 
 interface WorktreeInfo {
@@ -200,7 +203,7 @@ function formatMergeError(error: string): string {
   return error;
 }
 
-export function WorktreePanel({ threadId, isOpen, onClose, onMerged }: WorktreePanelProps) {
+export function WorktreePanel({ threadId, isOpen, onClose, onMerged, onOpenTerminal }: WorktreePanelProps) {
   const [worktreeInfo, setWorktreeInfo] = useState<WorktreeInfo | null>(null);
   const [changes, setChanges] = useState<WorktreeChanges | null>(null);
   const [loading, setLoading] = useState(true);
@@ -530,6 +533,22 @@ export function WorktreePanel({ threadId, isOpen, onClose, onMerged }: WorktreeP
         {worktreeInfo && !loading && !confirmDiscard && (
           <div className="p-4 border-t border-zinc-800 bg-zinc-900/50 flex items-center justify-between">
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  console.log('[WorktreePanel] Open Terminal clicked, path:', worktreeInfo.path, 'callback:', !!onOpenTerminal);
+                  if (onOpenTerminal) {
+                    onOpenTerminal(worktreeInfo.path);
+                  } else {
+                    console.warn('[WorktreePanel] onOpenTerminal callback not provided');
+                  }
+                  onClose();
+                }}
+                className="flex items-center gap-2 px-3 py-2 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 rounded-lg"
+                title="Open a terminal in the worktree directory"
+              >
+                <Terminal className="w-4 h-4" />
+                Open Terminal
+              </button>
               <EditorDropdownButton path={worktreeInfo.path} />
               <button
                 onClick={() => setConfirmDiscard(true)}
@@ -713,7 +732,10 @@ export function EnableWorktreeDialog({
     setError(null);
 
     try {
-      const branchToUse = branchMode === 'existing' ? selectedExistingBranch : newBranchName;
+      // Sanitize branch name - remove any leading '+ ' prefix that might have been
+      // included from display formatting (e.g., "+ Create new branch..." option)
+      const rawBranch = branchMode === 'existing' ? selectedExistingBranch : newBranchName;
+      const branchToUse = rawBranch.replace(/^\+\s*/, '').trim();
 
       const res = await fetch(`${serverUrl}/threads/${threadId}/worktree`, {
         method: 'POST',

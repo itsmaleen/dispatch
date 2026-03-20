@@ -942,21 +942,35 @@ export class SessionManager extends EventEmitter {
     const repoPath = options.cwd ?? session?.cwd ?? thread.projectPath;
 
     // Generate branch name from thread name or ID
-    const baseBranch = options.baseBranch ?? 'main';
-    const branch = options.branch ?? this.generateBranchName(thread.name ?? threadId);
+    // Sanitize branch names - remove any leading '+ ' prefix that might have been
+    // accidentally included from UI display formatting
+    const baseBranch = (options.baseBranch ?? 'main').replace(/^\+\s*/, '').trim();
+    const rawBranch = options.branch ?? this.generateBranchName(thread.name ?? threadId);
+    const branch = rawBranch.replace(/^\+\s*/, '').trim();
 
-    // Create worktree
     const worktreeManager = getWorktreeManager(repoPath);
-    const result = await worktreeManager.create({
-      branch,
-      baseBranch,
-    });
 
-    if (!result.success || !result.worktree) {
-      throw new Error(result.error ?? 'Failed to create worktree');
+    // Check if a worktree already exists for this branch
+    const existingWorktree = await worktreeManager.get(branch);
+    let worktreePath: string;
+
+    if (existingWorktree) {
+      // Use the existing worktree
+      console.log(`[SessionManager] Using existing worktree for branch ${branch}: ${existingWorktree.path}`);
+      worktreePath = existingWorktree.path;
+    } else {
+      // Create a new worktree
+      const result = await worktreeManager.create({
+        branch,
+        baseBranch,
+      });
+
+      if (!result.success || !result.worktree) {
+        throw new Error(result.error ?? 'Failed to create worktree');
+      }
+
+      worktreePath = result.worktree.path;
     }
-
-    const worktreePath = result.worktree.path;
 
     // Update thread with worktree path and clear sessionId
     // We clear sessionId because Claude Code sessions are tied to a specific cwd,

@@ -987,8 +987,10 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
   },
 
   createTerminal: (cwd) => {
+    console.log('[WorkspaceStore] createTerminal called with cwd:', cwd);
     const { onCreateTerminal } = get();
     if (onCreateTerminal) {
+      console.log('[WorkspaceStore] Calling onCreateTerminal callback');
       onCreateTerminal(cwd);
     } else {
       console.warn('[WorkspaceStore] No terminal callback registered');

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
+import { useState, useEffect, useRef, useCallback, Fragment, useLayoutEffect } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelGroupHandle } from 'react-resizable-panels';
 import {
   DndContext,
@@ -523,18 +523,53 @@ function ConsoleContextMenu({
     };
   }, [onClose]);
 
-  // Adjust position if menu would go off screen
-  const menuStyle: React.CSSProperties = {
-    position: 'fixed',
-    top: position.y,
-    left: position.x,
-    zIndex: 100,
-  };
+  // Calculate adjusted position to avoid screen edge overflow
+  const [adjustedPosition, setAdjustedPosition] = useState({ top: position.y, left: position.x });
+
+  useLayoutEffect(() => {
+    if (!menuRef.current) return;
+
+    const menu = menuRef.current;
+    const menuRect = menu.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const padding = 8;
+
+    let left = position.x;
+    let top = position.y;
+
+    // Check if menu would overflow on the right - open to the left of cursor
+    if (left + menuRect.width + padding > viewportWidth) {
+      left = position.x - menuRect.width;
+    }
+
+    // Check if menu would overflow on the bottom - open above cursor
+    if (top + menuRect.height + padding > viewportHeight) {
+      top = position.y - menuRect.height;
+    }
+
+    // Ensure menu doesn't go off-screen on the left
+    if (left < padding) {
+      left = padding;
+    }
+
+    // Ensure menu doesn't go off-screen on the top
+    if (top < padding) {
+      top = padding;
+    }
+
+    setAdjustedPosition({ top, left });
+  }, [position]);
 
   return (
     <div
       ref={menuRef}
-      style={menuStyle}
+      style={{
+        position: 'fixed',
+        top: adjustedPosition.top,
+        left: adjustedPosition.left,
+        zIndex: 100,
+      }}
       className="bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl py-1 min-w-[160px] animate-in fade-in zoom-in-95 duration-100"
     >
       {onMaximize && (
@@ -773,6 +808,7 @@ function AgentConsoleWidget({
   onClearQueue,
   onWorktreeEnabled,
   onWorktreeMerged,
+  onOpenTerminal,
   workspacePath,
   isHighlighted,
   isFocused,
@@ -795,6 +831,7 @@ function AgentConsoleWidget({
   onClearQueue?: (consoleId: string) => void;
   onWorktreeEnabled?: (consoleId: string, worktreePath: string, branch: string) => void;
   onWorktreeMerged?: (consoleId: string) => void;
+  onOpenTerminal?: (cwd: string) => void;
   workspacePath?: string;
   isHighlighted?: boolean;
   isFocused?: boolean;
@@ -986,6 +1023,7 @@ function AgentConsoleWidget({
           isOpen={showWorktreePanel}
           onClose={() => setShowWorktreePanel(false)}
           onMerged={() => onWorktreeMerged?.(consoleState.id)}
+          onOpenTerminal={onOpenTerminal}
         />
       )}
 
@@ -1495,6 +1533,7 @@ interface LayoutRendererProps {
   onClearQueue: (terminalId: string) => void;
   onWorktreeEnabled?: (terminalId: string, worktreePath: string, branch: string) => void;
   onWorktreeMerged?: (terminalId: string) => void;
+  onOpenTerminal?: (cwd: string) => void;
   // Tasks widget props (legacy - kept for old TasksWidget)
   onExecute: () => void;
   isExecuting: boolean;
@@ -1551,6 +1590,7 @@ function LayoutRenderer({
   onClearQueue,
   onWorktreeEnabled,
   onWorktreeMerged,
+  onOpenTerminal,
   onExecute,
   isExecuting,
   onStepAgentChange,
@@ -1603,6 +1643,7 @@ function LayoutRenderer({
               onClearQueue={onClearQueue}
               onWorktreeEnabled={onWorktreeEnabled}
               onWorktreeMerged={onWorktreeMerged}
+              onOpenTerminal={onOpenTerminal}
               workspacePath={workspacePath ?? undefined}
               isHighlighted={highlightedTerminalId === terminal.id}
               isFocused={focusedWidgetId === terminal.id}
@@ -3694,6 +3735,7 @@ export function Workspace() {
               onClearQueue={handleClearQueue}
               onWorktreeEnabled={handleWorktreeEnabled}
               onWorktreeMerged={handleWorktreeMerged}
+              onOpenTerminal={(cwd) => useWorkspaceStore.getState().createTerminal(cwd)}
               onExecute={handleExecute}
               isExecuting={isExecuting}
               onStepAgentChange={handleStepAgentChange}
@@ -3733,6 +3775,7 @@ export function Workspace() {
                           onClearQueue={handleClearQueue}
                           onWorktreeEnabled={handleWorktreeEnabled}
                           onWorktreeMerged={handleWorktreeMerged}
+                          onOpenTerminal={(cwd) => useWorkspaceStore.getState().createTerminal(cwd)}
                           workspacePath={workspacePath ?? undefined}
                           isHighlighted={highlightedTerminalId === terminal.id}
                           isFocused={focusedWidgetId === terminal.id}
@@ -3842,6 +3885,7 @@ export function Workspace() {
                   onClearQueue={handleClearQueue}
                   onWorktreeEnabled={handleWorktreeEnabled}
                   onWorktreeMerged={handleWorktreeMerged}
+                  onOpenTerminal={(cwd) => useWorkspaceStore.getState().createTerminal(cwd)}
                   workspacePath={workspacePath ?? undefined}
                   isFocused={true}
                 />

@@ -142,9 +142,9 @@ export function App() {
           commandPalette.close();
           return;
         }
-        // If a widget is maximized, restore it
+        // If a widget is maximized, restore it (but not if user is typing in an input)
         const maximizedWidgetId = useWorkspaceStore.getState().maximizedWidgetId;
-        if (maximizedWidgetId) {
+        if (maximizedWidgetId && !isInInput) {
           e.preventDefault();
           useWorkspaceStore.getState().setMaximizedWidget(null);
           return;
