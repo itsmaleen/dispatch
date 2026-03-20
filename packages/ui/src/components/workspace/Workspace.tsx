@@ -773,6 +773,7 @@ function AgentConsoleWidget({
   onClearQueue,
   onWorktreeEnabled,
   onWorktreeMerged,
+  onOpenTerminal,
   workspacePath,
   isHighlighted,
   isFocused,
@@ -795,6 +796,7 @@ function AgentConsoleWidget({
   onClearQueue?: (consoleId: string) => void;
   onWorktreeEnabled?: (consoleId: string, worktreePath: string, branch: string) => void;
   onWorktreeMerged?: (consoleId: string) => void;
+  onOpenTerminal?: (cwd: string) => void;
   workspacePath?: string;
   isHighlighted?: boolean;
   isFocused?: boolean;
@@ -985,6 +987,7 @@ function AgentConsoleWidget({
           isOpen={showWorktreePanel}
           onClose={() => setShowWorktreePanel(false)}
           onMerged={() => onWorktreeMerged?.(consoleState.id)}
+          onOpenTerminal={onOpenTerminal}
         />
       )}
 
@@ -1494,6 +1497,7 @@ interface LayoutRendererProps {
   onClearQueue: (terminalId: string) => void;
   onWorktreeEnabled?: (terminalId: string, worktreePath: string, branch: string) => void;
   onWorktreeMerged?: (terminalId: string) => void;
+  onOpenTerminal?: (cwd: string) => void;
   // Tasks widget props (legacy - kept for old TasksWidget)
   onExecute: () => void;
   isExecuting: boolean;
@@ -1550,6 +1554,7 @@ function LayoutRenderer({
   onClearQueue,
   onWorktreeEnabled,
   onWorktreeMerged,
+  onOpenTerminal,
   onExecute,
   isExecuting,
   onStepAgentChange,
@@ -1602,6 +1607,7 @@ function LayoutRenderer({
               onClearQueue={onClearQueue}
               onWorktreeEnabled={onWorktreeEnabled}
               onWorktreeMerged={onWorktreeMerged}
+              onOpenTerminal={onOpenTerminal}
               workspacePath={workspacePath ?? undefined}
               isHighlighted={highlightedTerminalId === terminal.id}
               isFocused={focusedWidgetId === terminal.id}
@@ -3688,6 +3694,7 @@ export function Workspace() {
               onClearQueue={handleClearQueue}
               onWorktreeEnabled={handleWorktreeEnabled}
               onWorktreeMerged={handleWorktreeMerged}
+              onOpenTerminal={(cwd) => useWorkspaceStore.getState().createTerminal(cwd)}
               onExecute={handleExecute}
               isExecuting={isExecuting}
               onStepAgentChange={handleStepAgentChange}
@@ -3727,6 +3734,7 @@ export function Workspace() {
                           onClearQueue={handleClearQueue}
                           onWorktreeEnabled={handleWorktreeEnabled}
                           onWorktreeMerged={handleWorktreeMerged}
+                          onOpenTerminal={(cwd) => useWorkspaceStore.getState().createTerminal(cwd)}
                           workspacePath={workspacePath ?? undefined}
                           isHighlighted={highlightedTerminalId === terminal.id}
                           isFocused={focusedWidgetId === terminal.id}
@@ -3836,6 +3844,7 @@ export function Workspace() {
                   onClearQueue={handleClearQueue}
                   onWorktreeEnabled={handleWorktreeEnabled}
                   onWorktreeMerged={handleWorktreeMerged}
+                  onOpenTerminal={(cwd) => useWorkspaceStore.getState().createTerminal(cwd)}
                   workspacePath={workspacePath ?? undefined}
                   isFocused={true}
                 />

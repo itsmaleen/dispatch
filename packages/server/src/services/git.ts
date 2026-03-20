@@ -219,10 +219,17 @@ export async function listBranches(dir: string): Promise<BranchEntry[]> {
     if (!line.trim()) continue;
 
     const isCurrent = line.startsWith('*');
-    const branchName = line.replace(/^\*?\s+/, '').trim();
+    let branchName = line.replace(/^\*?\s+/, '').trim();
 
     // Skip HEAD pointer entries like "remotes/origin/HEAD -> origin/main"
     if (branchName.includes('->')) continue;
+
+    // Sanitize branch names - remove any leading '+ ' prefix that might exist
+    // from previous bugs or manual creation with invalid names
+    branchName = branchName.replace(/^\+\s*/, '').trim();
+
+    // Skip empty branch names after sanitization
+    if (!branchName) continue;
 
     // Check if it's a remote branch
     const isRemote = branchName.startsWith('remotes/');
