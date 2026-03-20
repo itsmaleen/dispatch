@@ -7,6 +7,46 @@
 
 ## High Priority
 
+### Workspace Groups (Agent + Terminal + Browser)
+> **Plan:** [WORKSPACE-GROUPS-FEATURE.md](./docs/WORKSPACE-GROUPS-FEATURE.md)
+
+Surface the hidden orchestration of AI coding agents. Instead of terminals being managed behind the scenes, expose them in the foreground where developers can watch, steer, and verify agent work in real-time.
+
+- [ ] **Phase 1: Core Group Model**
+  - [ ] Define `WorkspaceGroup` schema (members, layout, goals)
+  - [ ] Add `workspace_groups` table to database
+  - [ ] Create `GroupStore` with CRUD operations
+  - [ ] Add `/groups` REST API endpoints
+
+- [ ] **Phase 2: Group UI Components**
+  - [ ] Create `<WorkspaceGroupView>` component
+  - [ ] Create `<GroupHeader>` with tabs and goal display
+  - [ ] Implement layout presets (side-by-side, stacked, master-detail)
+
+- [ ] **Phase 3: Goal & Intent System**
+  - [ ] Define goal/intent protocol for adapters
+  - [ ] Create `<GoalOverlay>` component
+  - [ ] Implement expected log pattern matching
+  - [ ] Visual indicators for pattern match status
+
+- [ ] **Phase 4: Terminal Stream Integration**
+  - [ ] Create `TerminalStreamService` for pattern matching
+  - [ ] Enable agent to subscribe to terminal output
+  - [ ] Add log annotation UI ("pay attention to this")
+
+- [ ] **Phase 5: Browser Integration**
+  - [ ] Create `<BrowserPanel>` component
+  - [ ] Browser member type in groups
+  - [ ] Optional DevTools console view
+
+- [ ] **Phase 6: Group Templates**
+  - [ ] Full-Stack Web template
+  - [ ] API Dev template
+  - [ ] Testing template
+  - [ ] Custom template saving
+
+---
+
 ### Workspace-Scoped Data System
 > **Plan:** [WORKSPACE-SCOPED-DATA-PLAN.md](./docs/WORKSPACE-SCOPED-DATA-PLAN.md)
 
