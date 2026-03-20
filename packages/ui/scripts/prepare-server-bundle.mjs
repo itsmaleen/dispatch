@@ -21,6 +21,7 @@ const root = join(__dirname, '../../..'); // repo root
 const uiRoot = join(__dirname, '..');
 const serverDir = join(root, 'packages/server');
 const contractsDir = join(root, 'packages/contracts');
+const analyticsDir = join(root, 'packages/analytics');
 const bundleDir = join(uiRoot, 'server-bundle');
 
 async function main() {
@@ -79,7 +80,35 @@ async function main() {
     main: './dist/index.js',
   }, null, 2));
 
-  // 5. Rebuild native modules for Electron
+  // 5. Inline @dispatch/analytics (since it was a workspace: dep)
+  console.log('  → Inlining @dispatch/analytics...');
+  const analyticsTarget = join(bundleDir, 'node_modules/@dispatch/analytics');
+  await rm(analyticsTarget, { recursive: true }).catch(() => {});
+  await mkdir(join(analyticsTarget, 'dist'), { recursive: true });
+  await cp(join(analyticsDir, 'dist'), join(analyticsTarget, 'dist'), { recursive: true });
+
+  const analyticsPkg = JSON.parse(await readFile(join(analyticsDir, 'package.json'), 'utf-8'));
+  const analyticsBundlePkg = {
+    name: analyticsPkg.name,
+    version: analyticsPkg.version,
+    type: 'module',
+    main: './dist/index.js',
+    dependencies: {},
+  };
+  // Include runtime dependencies so npm can install them
+  for (const [name, version] of Object.entries(analyticsPkg.dependencies || {})) {
+    analyticsBundlePkg.dependencies[name] = version;
+  }
+  await writeFile(join(analyticsTarget, 'package.json'), JSON.stringify(analyticsBundlePkg, null, 2));
+
+  // Install @dispatch/analytics runtime dependencies (e.g. posthog-node)
+  console.log('  → Installing @dispatch/analytics dependencies...');
+  execSync('npm install --omit=dev --legacy-peer-deps', {
+    cwd: analyticsTarget,
+    stdio: 'inherit',
+  });
+
+  // 6. Rebuild native modules for Electron
   console.log('  → Rebuilding native modules for Electron...');
   try {
     // Get Electron version from ui package
