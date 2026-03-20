@@ -1,0 +1,1 @@
+export { ShortcutsMenu } from './ShortcutsMenu';

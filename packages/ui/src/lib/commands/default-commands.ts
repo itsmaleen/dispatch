@@ -17,10 +17,12 @@ import {
   Grid2X2,
   RotateCcw,
   Terminal,
+  Keyboard,
 } from 'lucide-react';
 import type { Command } from './types';
 import { useWorkspaceStore, type LayoutWidgetInfo } from '../../stores/workspace';
 import { useAppStore, api, getServerUrl } from '../../stores/app';
+import { useShortcutsStore } from '../../stores/shortcuts';
 
 /**
  * Get the agent icon based on type/name
@@ -483,6 +485,25 @@ export function createDefaultCommands(): Command[] {
               console.error('Failed to close terminal:', err);
             }
           }
+        },
+      },
+    },
+
+    // ========================================
+    // Settings / Help Commands
+    // ========================================
+    {
+      id: 'keyboard-shortcuts',
+      label: 'Keyboard Shortcuts',
+      description: 'View and customize keyboard shortcuts',
+      category: 'navigation',
+      icon: Keyboard,
+      shortcut: '⌘/',
+      keywords: ['shortcuts', 'keys', 'keybindings', 'hotkeys', 'keyboard', 'help'],
+      action: {
+        type: 'execute',
+        handler: () => {
+          useShortcutsStore.getState().setMenuOpen(true);
         },
       },
     },

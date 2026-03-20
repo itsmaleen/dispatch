@@ -4,12 +4,14 @@ import { PlanningView } from "./components/planning/PlanningView";
 import { ExecutionView } from "./components/execution/ExecutionView";
 import { AgentsPanel } from "./components/agents/AgentsPanel";
 import { CommandPalette } from "./components/command-palette";
+import { ShortcutsMenu } from "./components/shortcuts/ShortcutsMenu";
 import { WidgetDemo } from "./components/demo/WidgetDemo";
 import { WorkspaceDemo } from "./components/demo/WorkspaceDemo";
 import { Workspace } from "./components/workspace/Workspace";
 import { useAppStore, api, getServerUrl, discoverServerPort, type Task } from "./stores/app";
 import { useCommandPaletteStore } from "./stores/command-palette";
 import { useWorkspaceStore } from "./stores/workspace";
+import { useShortcutsStore, matchesShortcut } from "./stores/shortcuts";
 import { commandRegistry } from "./lib/commands/registry";
 import { createDefaultCommands } from "./lib/commands/default-commands";
 import { initSemanticSearch } from "./hooks/useSemanticSearch";
@@ -110,15 +112,31 @@ export function App() {
     return () => clearInterval(interval);
   }, [serverReady, refreshAgentStatus, serverOffline]);
 
-  // Global keyboard shortcuts
+  // Global keyboard shortcuts - uses shortcuts store as source of truth
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't capture shortcuts when typing in inputs (except for Escape and some global shortcuts)
       const target = e.target as HTMLElement;
       const isInInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+      const isInTerminal = target.closest('.xterm-container') !== null;
 
-      // Escape: close palette > restore maximized (only if not in input) > clear focus
+      // Get shortcuts from store
+      const shortcutsStore = useShortcutsStore.getState();
+      const getShortcut = shortcutsStore.getShortcut;
+
+      // Escape: blur input > close shortcuts menu > close palette > restore maximized > clear focus
       if (e.key === 'Escape') {
+        // First, blur any focused input
+        if (isInInput && document.activeElement instanceof HTMLElement) {
+          e.preventDefault();
+          document.activeElement.blur();
+          return;
+        }
+        // Close shortcuts menu
+        if (shortcutsStore.isMenuOpen) {
+          e.preventDefault();
+          shortcutsStore.setMenuOpen(false);
+          return;
+        }
         if (commandPalette.isOpen) {
           e.preventDefault();
           commandPalette.close();
@@ -131,34 +149,92 @@ export function App() {
           useWorkspaceStore.getState().setMaximizedWidget(null);
           return;
         }
-        // If a widget is focused and not in an input, clear focus
+        // If a widget is focused, clear focus
         const focusedWidgetId = useWorkspaceStore.getState().focusedWidgetId;
-        if (focusedWidgetId && !isInInput) {
+        if (focusedWidgetId) {
           e.preventDefault();
           useWorkspaceStore.getState().setFocusedWidget(null, null);
           return;
         }
+        return;
       }
 
-      // Cmd/Ctrl + K: Toggle command palette
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      // Command palette shortcuts (work even when in input)
+      const cmdPaletteShortcut = getShortcut('command-palette-toggle');
+      const cmdPaletteAltShortcut = getShortcut('command-palette-toggle-alt');
+
+      if (cmdPaletteShortcut && matchesShortcut(e, cmdPaletteShortcut)) {
         e.preventDefault();
+        if (shortcutsStore.isMenuOpen) {
+          shortcutsStore.setMenuOpen(false);
+        }
         commandPalette.toggle();
         return;
       }
 
-      // Cmd/Ctrl + N: New Terminal (opens palette with subcommand)
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === 'n' && !isInInput) {
+      if (cmdPaletteAltShortcut && matchesShortcut(e, cmdPaletteAltShortcut)) {
+        e.preventDefault();
+        if (shortcutsStore.isMenuOpen) {
+          shortcutsStore.setMenuOpen(false);
+        }
+        commandPalette.toggle();
+        return;
+      }
+
+      // Show keyboard shortcuts menu (works even when in input)
+      const showShortcutsShortcut = getShortcut('show-shortcuts');
+      if (showShortcutsShortcut && matchesShortcut(e, showShortcutsShortcut)) {
+        e.preventDefault();
+        if (commandPalette.isOpen) {
+          commandPalette.close();
+        }
+        shortcutsStore.toggleMenu();
+        return;
+      }
+
+      // Widget navigation shortcuts (CMD+H/J/K/L) - work even when in input
+      const focusLeftShortcut = getShortcut('focus-left');
+      const focusDownShortcut = getShortcut('focus-down');
+      const focusUpShortcut = getShortcut('focus-up');
+      const focusRightShortcut = getShortcut('focus-right');
+
+      if (focusLeftShortcut && matchesShortcut(e, focusLeftShortcut)) {
+        e.preventDefault();
+        useWorkspaceStore.getState().moveFocus('left');
+        return;
+      }
+      if (focusDownShortcut && matchesShortcut(e, focusDownShortcut)) {
+        e.preventDefault();
+        useWorkspaceStore.getState().moveFocus('down');
+        return;
+      }
+      if (focusUpShortcut && matchesShortcut(e, focusUpShortcut)) {
+        e.preventDefault();
+        useWorkspaceStore.getState().moveFocus('up');
+        return;
+      }
+      if (focusRightShortcut && matchesShortcut(e, focusRightShortcut)) {
+        e.preventDefault();
+        useWorkspaceStore.getState().moveFocus('right');
+        return;
+      }
+
+      // The following shortcuts don't work when typing in inputs
+      if (isInInput) return;
+
+      // New Console shortcut
+      const newConsoleShortcut = getShortcut('new-console');
+      if (newConsoleShortcut && matchesShortcut(e, newConsoleShortcut)) {
         e.preventDefault();
         commandPalette.open({ preselectedCommandId: 'new-terminal' });
         return;
       }
 
-      // Cmd/Ctrl + Shift + N: Create Task (opens palette in input mode)
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'N' && !isInInput) {
+      // Create Task shortcut
+      const createTaskShortcut = getShortcut('create-task');
+      if (createTaskShortcut && matchesShortcut(e, createTaskShortcut)) {
         e.preventDefault();
         commandPalette.open();
-        // Find and execute the create-task command to enter input mode
         const createTaskCmd = commandRegistry.getById('create-task');
         if (createTaskCmd && createTaskCmd.action.type === 'input') {
           commandPalette.enterInputMode(
@@ -169,34 +245,58 @@ export function App() {
         return;
       }
 
-      // Cmd/Ctrl + W: Close focused console
-      if ((e.metaKey || e.ctrlKey) && e.key === 'w' && !isInInput) {
+      // Close Widget shortcut
+      const closeWidgetShortcut = getShortcut('close-widget');
+      if (closeWidgetShortcut && matchesShortcut(e, closeWidgetShortcut)) {
         e.preventDefault();
         useWorkspaceStore.getState().closeFocusedConsole();
         return;
       }
 
-      // Cmd/Ctrl + Enter: Toggle maximize focused widget
-      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && !isInInput) {
+      // Maximize Widget shortcut
+      const maximizeWidgetShortcut = getShortcut('maximize-widget');
+      if (maximizeWidgetShortcut && matchesShortcut(e, maximizeWidgetShortcut)) {
         e.preventDefault();
         useWorkspaceStore.getState().toggleMaximizeFocusedWidget();
         return;
       }
 
-      // Cmd/Ctrl + Shift + D: Toggle demo view
+      // Cmd/Ctrl + Shift + D: Toggle demo view (hardcoded, not customizable)
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'D') {
         e.preventDefault();
         setView(view === 'demo' ? 'home' : 'demo');
         return;
       }
 
-      // Arrow key navigation (only when not in input and palette is closed)
-      if (!isInInput && !commandPalette.isOpen) {
+      // Arrow key navigation (only when palette is closed)
+      if (!commandPalette.isOpen && !shortcutsStore.isMenuOpen) {
         if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
           e.preventDefault();
           const direction = e.key.replace('Arrow', '').toLowerCase() as 'up' | 'down' | 'left' | 'right';
           useWorkspaceStore.getState().moveFocus(direction);
           return;
+        }
+      }
+
+      // Auto-focus input when typing without CMD in terminal/console
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && !isInTerminal) {
+        const focusedWidgetId = useWorkspaceStore.getState().focusedWidgetId;
+        const focusedWidgetType = useWorkspaceStore.getState().focusedWidgetType;
+
+        // Only for console widgets (not terminals which use xterm)
+        if (focusedWidgetId && focusedWidgetType === 'agent-console') {
+          // Check if it's a printable character
+          if (e.key.length === 1 && !e.key.match(/^[F]\d+$/)) {
+            // Find the chat input in the focused console and focus it
+            const consoleElement = document.querySelector(`[data-console-id="${focusedWidgetId}"]`);
+            if (consoleElement) {
+              const textarea = consoleElement.querySelector('textarea');
+              if (textarea) {
+                textarea.focus();
+                return;
+              }
+            }
+          }
         }
       }
     };
@@ -300,6 +400,7 @@ export function App() {
         )}
         <Workspace />
         <CommandPalette />
+        <ShortcutsMenu />
       </div>
     );
   }
@@ -453,6 +554,9 @@ export function App() {
 
       {/* Command Palette Modal */}
       <CommandPalette />
+
+      {/* Keyboard Shortcuts Menu */}
+      <ShortcutsMenu />
     </div>
   );
 }
