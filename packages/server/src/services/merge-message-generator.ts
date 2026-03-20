@@ -131,6 +131,7 @@ export class MergeMessageGenerator {
           permissionMode: 'bypassPermissions',
           maxTurns: 1,
           effort: 'low',
+          includePartialMessages: true,
           outputFormat: {
             type: 'json_schema',
             schema: MESSAGE_SCHEMA,
@@ -145,22 +146,94 @@ export class MergeMessageGenerator {
         setTimeout(() => resolve(defaultResult), timeoutMs);
       });
 
+      console.log('[MergeMessageGenerator] Starting SDK query for merge message...');
+      console.log('[MergeMessageGenerator] Thread name:', input.threadName);
+      console.log('[MergeMessageGenerator] Branch:', input.branch, '→', input.targetBranch);
+      console.log('[MergeMessageGenerator] Messages count:', input.messages.length);
+
       const queryPromise = (async () => {
+        let outputBuffer = '';
+
         for await (const event of messageQuery) {
-          // Check for structured output in result events
-          const resultEvent = event as { type: string; structured_output?: { title?: string; body?: string } };
-          if (resultEvent.type === 'result' && resultEvent.structured_output) {
-            const output = resultEvent.structured_output;
-            if (output.title) {
-              const title = this.cleanTitle(output.title);
-              const body = output.body || '';
+          console.log('[MergeMessageGenerator] Event type:', event.type);
+
+          // Capture text from assistant messages
+          if (event.type === 'assistant') {
+            const content = (event as { message?: { content?: Array<{ type?: string; text?: string }> } }).message?.content;
+            if (Array.isArray(content)) {
+              for (const block of content) {
+                if (block?.type === 'text' && typeof block.text === 'string') {
+                  outputBuffer += block.text;
+                }
+              }
+            }
+          }
+
+          // Capture streaming text
+          if (event.type === 'stream_event') {
+            const streamEvent = (event as { event?: { type?: string; delta?: { type?: string; text?: string } } }).event;
+            if (streamEvent?.type === 'content_block_delta' && streamEvent.delta?.type === 'text_delta' && streamEvent.delta.text) {
+              outputBuffer += streamEvent.delta.text;
+            }
+          }
+
+          // Check for structured output in result events (preferred)
+          if (event.type === 'result') {
+            const resultEvent = event as {
+              type: string;
+              subtype?: string;
+              structured_output?: { title?: string; body?: string };
+            };
+
+            console.log('[MergeMessageGenerator] Result event:', {
+              subtype: resultEvent.subtype,
+              hasStructuredOutput: !!resultEvent.structured_output,
+              structuredOutput: resultEvent.structured_output,
+            });
+
+            if (resultEvent.subtype === 'success' && resultEvent.structured_output) {
+              const output = resultEvent.structured_output;
+              if (output.title) {
+                const title = this.cleanTitle(output.title);
+                const body = output.body || '';
+                console.log('[MergeMessageGenerator] Using structured output:', { title, bodyLength: body.length });
+                return {
+                  title,
+                  fullMessage: body ? `${title}\n\n${body}` : title,
+                };
+              }
+            }
+          }
+        }
+
+        // Fallback: try to parse JSON from output buffer
+        if (outputBuffer.trim()) {
+          console.log('[MergeMessageGenerator] Output buffer length:', outputBuffer.length);
+          console.log('[MergeMessageGenerator] Output buffer preview:', outputBuffer.slice(0, 500));
+
+          try {
+            // Clean up potential markdown code blocks
+            let jsonStr = outputBuffer.trim();
+            if (jsonStr.startsWith('```')) {
+              jsonStr = jsonStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+            }
+
+            const parsed = JSON.parse(jsonStr) as { title?: string; body?: string };
+            if (parsed.title) {
+              const title = this.cleanTitle(parsed.title);
+              const body = parsed.body || '';
+              console.log('[MergeMessageGenerator] Parsed from buffer:', { title, bodyLength: body.length });
               return {
                 title,
                 fullMessage: body ? `${title}\n\n${body}` : title,
               };
             }
+          } catch {
+            console.warn('[MergeMessageGenerator] Failed to parse output as JSON:', outputBuffer.slice(0, 200));
           }
         }
+
+        console.log('[MergeMessageGenerator] Using default result (no structured output or parsed JSON)');
         return defaultResult;
       })();
 
