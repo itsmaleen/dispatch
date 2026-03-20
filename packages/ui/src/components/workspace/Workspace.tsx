@@ -512,6 +512,8 @@ function ConsoleContextMenu({
     };
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
         onClose();
       }
     };
@@ -850,6 +852,9 @@ function AgentConsoleWidget({
   const [contextMenu, setContextMenu] = useState<ContextMenuPosition | null>(null);
   const [showWorktreePanel, setShowWorktreePanel] = useState(false);
   const [showEnableWorktreeDialog, setShowEnableWorktreeDialog] = useState(false);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState('');
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   const settings = { ...DEFAULT_CONSOLE_SETTINGS, ...consoleState.settings };
 
@@ -864,8 +869,29 @@ function AgentConsoleWidget({
     }
   }, [consoleState.lines, autoScroll]);
 
+  // Focus name input when editing starts
+  useEffect(() => {
+    if (isEditingName && nameInputRef.current) {
+      nameInputRef.current.focus();
+      nameInputRef.current.select();
+    }
+  }, [isEditingName]);
+
   const handleSend = (message: string, files?: UploadedFile[]) => {
     onSendMessage(consoleState.id, message, files);
+  };
+
+  const handleNameSave = () => {
+    const newLabel = nameInput.trim() || undefined;
+    if (onSettingsChange) {
+      onSettingsChange(consoleState.id, { ...settings, label: newLabel });
+    }
+    setIsEditingName(false);
+  };
+
+  const handleNameCancel = () => {
+    setIsEditingName(false);
+    setNameInput(settings.label || '');
   };
 
   // Filter lines based on settings
@@ -945,7 +971,43 @@ function AgentConsoleWidget({
             </button>
           </div>
           <span className="text-sm">{consoleState.agent.icon}</span>
-          <span className="text-xs font-medium text-zinc-300">{displayName}</span>
+          {/* Inline editable name */}
+          {isEditingName ? (
+            <form
+              onSubmit={(e) => { e.preventDefault(); handleNameSave(); }}
+              className="flex items-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <input
+                ref={nameInputRef}
+                type="text"
+                value={nameInput}
+                onChange={(e) => setNameInput(e.target.value)}
+                onBlur={handleNameSave}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.stopPropagation();
+                    handleNameCancel();
+                  }
+                }}
+                placeholder={consoleState.agent.name}
+                className="w-32 px-1 py-0.5 text-xs bg-zinc-800 border border-zinc-600 rounded text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-violet-500"
+              />
+            </form>
+          ) : (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setNameInput(settings.label || '');
+                setIsEditingName(true);
+              }}
+              className="text-xs font-medium text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800 px-1 py-0.5 rounded transition-colors group flex items-center gap-1"
+              title="Click to rename"
+            >
+              <span>{displayName}</span>
+              <Pencil className="w-2.5 h-2.5 opacity-0 group-hover:opacity-100 transition-opacity text-zinc-500" />
+            </button>
+          )}
           {settings.label && (
             <span className="text-[10px] text-zinc-600">({consoleState.agent.name})</span>
           )}
@@ -1509,6 +1571,7 @@ interface LayoutRendererProps {
   // Real PTY terminals
   realTerminals: TerminalInstance[];
   onCloseRealTerminal: (id: string) => void;
+  onRenameRealTerminal: (id: string, name: string) => void;
   // Focus/hover state
   focusedWidgetId: string | null;
   hoveredWidgetId: string | null;
@@ -1570,6 +1633,7 @@ function LayoutRenderer({
   minimizedWidgets,
   realTerminals,
   onCloseRealTerminal,
+  onRenameRealTerminal,
   focusedWidgetId,
   hoveredWidgetId,
   highlightedTerminalId,
@@ -1755,6 +1819,7 @@ function LayoutRenderer({
               onClose={() => onCloseRealTerminal(terminalInstance.id)}
               onMinimize={() => {/* TODO: minimize real terminal */}}
               onMaximize={() => onMaximizeTerminal(terminalInstance.id)}
+              onRename={onRenameRealTerminal}
               isFocused={focusedWidgetId === terminalInstance.id}
               isHovered={hoveredWidgetId === terminalInstance.id}
               onFocus={() => onFocusWidget(terminalInstance.id, 'terminal' as any)}
@@ -1797,6 +1862,7 @@ function LayoutRenderer({
               minimizedWidgets={minimizedWidgets}
               realTerminals={realTerminals}
               onCloseRealTerminal={onCloseRealTerminal}
+              onRenameRealTerminal={onRenameRealTerminal}
               focusedWidgetId={focusedWidgetId}
               hoveredWidgetId={hoveredWidgetId}
               highlightedTerminalId={highlightedTerminalId}
@@ -1817,6 +1883,7 @@ function LayoutRenderer({
               onClearQueue={onClearQueue}
               onWorktreeEnabled={onWorktreeEnabled}
               onWorktreeMerged={onWorktreeMerged}
+              onOpenTerminal={onOpenTerminal}
               onExecute={onExecute}
               isExecuting={isExecuting}
               onStepAgentChange={onStepAgentChange}
@@ -2922,6 +2989,28 @@ export function Workspace() {
     }
   };
 
+  // Rename a real PTY terminal
+  const handleRenameRealTerminal = useCallback(async (terminalId: string, name: string) => {
+    // Update local state optimistically
+    setRealTerminals(prev => prev.map(t =>
+      t.id === terminalId ? { ...t, name } : t
+    ));
+
+    // Update on server
+    try {
+      const res = await fetch(`${getApiUrl()}/api/terminals/${terminalId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) {
+        console.warn('Failed to rename real terminal:', res.status);
+      }
+    } catch (err) {
+      console.warn('Failed to rename real terminal:', err);
+    }
+  }, [getApiUrl]);
+
   // Close a real PTY terminal
   const handleCloseRealTerminal = useCallback(async (terminalId: string) => {
     // Remove from local state first
@@ -3715,6 +3804,7 @@ export function Workspace() {
               minimizedWidgets={minimizedWidgets}
               realTerminals={realTerminals}
               onCloseRealTerminal={handleCloseRealTerminal}
+              onRenameRealTerminal={handleRenameRealTerminal}
               focusedWidgetId={focusedWidgetId}
               hoveredWidgetId={hoveredWidgetId}
               highlightedTerminalId={highlightedTerminalId}
@@ -3815,23 +3905,32 @@ export function Workspace() {
       {/* Minimized Widgets Tab Bar */}
       {minimizedWidgets.length > 0 && (
         <div className="flex-shrink-0 h-9 bg-zinc-900 border-t border-zinc-800 px-2 flex items-center gap-1">
-          {minimizedWidgets.map(widget => (
-            <div
-              key={widget.id}
-              onClick={() => handleRestoreWidget(widget)}
-              className={`flex items-center gap-1 px-2 py-1 rounded text-xs cursor-pointer group transition-all duration-150 ${
-                widget.type === 'agent-console' && highlightedTerminalId === widget.id
-                  ? 'ring-1 ring-violet-400/50 terminal-tab-highlight-pulse'
-                  : 'bg-zinc-800 hover:bg-zinc-700'
-              }`}
-            >
-              <span>{widget.icon}</span>
-              <span className="text-zinc-300 max-w-[100px] truncate">{widget.title}</span>
-              <button onClick={(e) => { e.stopPropagation(); setMinimizedWidgets(prev => prev.filter(w => w.id !== widget.id)); }} className="text-zinc-500 hover:text-red-400 opacity-0 group-hover:opacity-100">
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          ))}
+          {minimizedWidgets.map(widget => {
+            // Get the current console state to check if it's streaming
+            const consoleState = widget.type === 'agent-console' ? terminals.find(t => t.id === widget.id) : null;
+            const isStreaming = consoleState?.isStreaming || widget.data?.isStreaming;
+
+            return (
+              <div
+                key={widget.id}
+                onClick={() => handleRestoreWidget(widget)}
+                className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer group transition-all duration-150 ${
+                  widget.type === 'agent-console' && highlightedTerminalId === widget.id
+                    ? 'ring-1 ring-violet-400/50 terminal-tab-highlight-pulse'
+                    : 'bg-zinc-800 hover:bg-zinc-700'
+                }`}
+              >
+                <span>{widget.icon}</span>
+                <span className="text-zinc-300 max-w-[100px] truncate">{widget.title}</span>
+                {isStreaming && (
+                  <Loader2 className="w-3 h-3 text-violet-400 animate-spin" />
+                )}
+                <button onClick={(e) => { e.stopPropagation(); setMinimizedWidgets(prev => prev.filter(w => w.id !== widget.id)); }} className="text-zinc-500 hover:text-red-400 opacity-0 group-hover:opacity-100">
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -3853,6 +3952,7 @@ export function Workspace() {
                   onClose={() => handleCloseRealTerminal(maximizedRealTerminal.id)}
                   onMinimize={() => {/* TODO: minimize real terminal */}}
                   onMaximize={() => handleMaximizeTerminal(maximizedRealTerminal.id)}
+                  onRename={handleRenameRealTerminal}
                   isFocused={true}
                 />
               </div>

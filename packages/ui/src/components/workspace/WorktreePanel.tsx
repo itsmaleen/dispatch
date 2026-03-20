@@ -2,7 +2,8 @@
  * WorktreePanel - Shows file changes and merge actions for worktree-isolated consoles
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   GitBranch,
   GitMerge,
@@ -84,16 +85,27 @@ function EditorDropdownButton({ path }: EditorDropdownButtonProps) {
   const [selectedEditor, setSelectedEditor] = useState<EditorOption>(getPreferredEditor);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Close dropdown on outside click
+  // Close dropdown on outside click or ESC
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setIsOpen(false);
       }
     };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsOpen(false);
+      }
+    };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen]);
 
   const handleOpenInEditor = (editor: EditorOption, e?: React.MouseEvent) => {
     e?.stopPropagation();
@@ -258,6 +270,27 @@ export function WorktreePanel({ threadId, isOpen, onClose, onMerged, onOpenTermi
       fetchData();
     }
   }, [isOpen, fetchData]);
+
+  // ESC key to close modal
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        // If discard confirmation is open, close that first
+        if (confirmDiscard) {
+          setConfirmDiscard(false);
+        } else {
+          onClose();
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose, confirmDiscard]);
 
   const handleMerge = async (removeAfterMerge = true) => {
     if (!worktreeInfo) return;
@@ -674,8 +707,44 @@ export function EnableWorktreeDialog({
   const [enabling, setEnabling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [dropdownPosition, setDropdownPosition] = useState<{ top: number; left: number; width: number } | null>(null);
+  const dropdownButtonRef = useRef<HTMLButtonElement>(null);
+  const dropdownMenuRef = useRef<HTMLDivElement>(null);
 
   const serverUrl = getServerUrl();
+
+  // Update dropdown position when it opens
+  useLayoutEffect(() => {
+    if (dropdownOpen && dropdownButtonRef.current) {
+      const rect = dropdownButtonRef.current.getBoundingClientRect();
+      setDropdownPosition({
+        top: rect.bottom + 4, // 4px gap
+        left: rect.left,
+        width: rect.width,
+      });
+    }
+  }, [dropdownOpen]);
+
+  // Click outside to close dropdown (for portal-rendered dropdown)
+  useEffect(() => {
+    if (!dropdownOpen) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      // Check if click is outside both the button and the dropdown menu
+      if (
+        dropdownButtonRef.current &&
+        !dropdownButtonRef.current.contains(target) &&
+        dropdownMenuRef.current &&
+        !dropdownMenuRef.current.contains(target)
+      ) {
+        setDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [dropdownOpen]);
 
   // Fetch branches when dialog opens
   useEffect(() => {
@@ -718,6 +787,27 @@ export function EnableWorktreeDialog({
       setError(null);
     }
   }, [isOpen]);
+
+  // ESC key to close modal
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        // If dropdown is open, close that first
+        if (dropdownOpen) {
+          setDropdownOpen(false);
+        } else {
+          onClose();
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose, dropdownOpen]);
 
   const handleSelectBranch = (branch: string, mode: 'new' | 'existing') => {
     setBranchMode(mode);
@@ -828,6 +918,7 @@ export function EnableWorktreeDialog({
               <label className="block text-xs text-zinc-500 mb-1">Branch</label>
               <div className="relative">
                 <button
+                  ref={dropdownButtonRef}
                   type="button"
                   onClick={() => setDropdownOpen(!dropdownOpen)}
                   className="w-full flex items-center justify-between px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 hover:border-zinc-600 focus:outline-none focus:border-violet-500"
@@ -845,9 +936,18 @@ export function EnableWorktreeDialog({
                   <ChevronDown className={`w-4 h-4 text-zinc-400 transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} />
                 </button>
 
-                {/* Dropdown Menu */}
-                {dropdownOpen && !isLoadingBranches && (
-                  <div className="absolute z-10 w-full mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                {/* Dropdown Menu - rendered via portal to escape modal overflow */}
+                {dropdownOpen && !isLoadingBranches && dropdownPosition && createPortal(
+                  <div
+                    ref={dropdownMenuRef}
+                    className="fixed bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg max-h-60 overflow-y-auto py-1"
+                    style={{
+                      top: dropdownPosition.top,
+                      left: dropdownPosition.left,
+                      width: dropdownPosition.width,
+                      zIndex: 100,
+                    }}
+                  >
                     {/* Create New Branch Option */}
                     <button
                       type="button"
@@ -923,7 +1023,8 @@ export function EnableWorktreeDialog({
                         No existing branches found
                       </div>
                     )}
-                  </div>
+                  </div>,
+                  document.body
                 )}
               </div>
             </div>

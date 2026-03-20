@@ -45,6 +45,22 @@ export function AgentsPanel({ isOpen, onClose, serverUrl }: AgentsPanelProps) {
 
   const { setAgents } = useAppStore();
 
+  // ESC key to close modal
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   // Fetch agents and check Claude Code when panel opens
   useEffect(() => {
     if (!isOpen) return;

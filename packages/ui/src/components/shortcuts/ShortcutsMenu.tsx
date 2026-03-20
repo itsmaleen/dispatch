@@ -195,6 +195,25 @@ export function ShortcutsMenu() {
     setEditingId(null);
   }, [setMenuOpen]);
 
+  // ESC key to close modal (when not editing a shortcut)
+  useEffect(() => {
+    if (!isMenuOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        // If editing a shortcut, don't close the menu - the ShortcutItem handles ESC
+        if (editingId) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+        handleClose();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isMenuOpen, editingId, handleClose]);
+
   const handleOverlayClick = useCallback((e: React.MouseEvent) => {
     if (e.target === e.currentTarget) {
       handleClose();

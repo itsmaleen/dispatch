@@ -23,6 +23,7 @@ import {
   ChevronDown,
   GripVertical,
   Terminal as TerminalIcon,
+  Pencil,
 } from 'lucide-react';
 import { getWsUrl } from '../../stores/app';
 import type { TerminalInstance, TerminalServerMessage } from '@acc/contracts';
@@ -40,6 +41,8 @@ export interface TerminalWidgetProps {
   onMinimize?: () => void;
   /** Callback when terminal should be maximized */
   onMaximize?: () => void;
+  /** Callback when terminal is renamed */
+  onRename?: (id: string, name: string) => void;
   /** Whether this widget is focused */
   isFocused?: boolean;
   /** Whether this widget is hovered */
@@ -95,10 +98,13 @@ function DraggableHandle({ panelId }: { panelId: string }) {
 
 export const TerminalWidget = forwardRef<TerminalWidgetHandle, TerminalWidgetProps>(
   function TerminalWidget(
-    { terminal, onClose, onMinimize, onMaximize, isFocused, isHovered, onFocus, onMouseEnter, onMouseLeave, panelId },
+    { terminal, onClose, onMinimize, onMaximize, onRename, isFocused, isHovered, onFocus, onMouseEnter, onMouseLeave, panelId },
     ref
   ) {
     const containerRef = useRef<HTMLDivElement>(null);
+    const [isEditingName, setIsEditingName] = useState(false);
+    const [nameInput, setNameInput] = useState('');
+    const nameInputRef = useRef<HTMLInputElement>(null);
     const terminalRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
     const searchAddonRef = useRef<SearchAddon | null>(null);
@@ -386,6 +392,29 @@ export const TerminalWidget = forwardRef<TerminalWidgetHandle, TerminalWidgetPro
       onClose?.();
     }, [terminal, onClose]);
 
+    // Focus name input when editing starts
+    useEffect(() => {
+      if (isEditingName && nameInputRef.current) {
+        nameInputRef.current.focus();
+        nameInputRef.current.select();
+      }
+    }, [isEditingName]);
+
+    // Handle name save
+    const handleNameSave = useCallback(() => {
+      const newName = nameInput.trim() || 'Terminal';
+      if (terminal && onRename) {
+        onRename(terminal.id, newName);
+      }
+      setIsEditingName(false);
+    }, [nameInput, terminal, onRename]);
+
+    // Handle name cancel
+    const handleNameCancel = useCallback(() => {
+      setIsEditingName(false);
+      setNameInput(terminal?.name || 'Terminal');
+    }, [terminal?.name]);
+
     // Handle click to focus
     const handleContainerClick = useCallback(() => {
       onFocus?.();
@@ -446,9 +475,43 @@ export const TerminalWidget = forwardRef<TerminalWidgetHandle, TerminalWidgetPro
 
             {/* Terminal icon and name */}
             <TerminalIcon className="w-3.5 h-3.5 text-amber-400" />
-            <span className="text-xs font-medium text-zinc-300">
-              {terminal?.name || 'Terminal'}
-            </span>
+            {/* Inline editable name */}
+            {isEditingName ? (
+              <form
+                onSubmit={(e) => { e.preventDefault(); handleNameSave(); }}
+                className="flex items-center"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <input
+                  ref={nameInputRef}
+                  type="text"
+                  value={nameInput}
+                  onChange={(e) => setNameInput(e.target.value)}
+                  onBlur={handleNameSave}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      e.stopPropagation();
+                      handleNameCancel();
+                    }
+                  }}
+                  placeholder="Terminal"
+                  className="w-24 px-1 py-0.5 text-xs bg-zinc-800 border border-zinc-600 rounded text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-amber-500"
+                />
+              </form>
+            ) : (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setNameInput(terminal?.name || 'Terminal');
+                  setIsEditingName(true);
+                }}
+                className="text-xs font-medium text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800 px-1 py-0.5 rounded transition-colors group flex items-center gap-1"
+                title="Click to rename"
+              >
+                <span>{terminal?.name || 'Terminal'}</span>
+                <Pencil className="w-2.5 h-2.5 opacity-0 group-hover:opacity-100 transition-opacity text-zinc-500" />
+              </button>
+            )}
 
             {/* Connection status */}
             <span
