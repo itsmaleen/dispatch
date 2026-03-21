@@ -6,7 +6,7 @@
 #
 # For signed + notarized builds, set these repository secrets:
 #   APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
-#   CSC_LINK_BASE64 (base64-encoded .p12), CSC_KEY_PASSWORD
+#   CSC_LINK (base64-encoded .p12 certificate), CSC_KEY_PASSWORD
 
 name: Release macOS
 
@@ -37,7 +37,7 @@ jobs:
 
       - name: Verify signing prerequisites
         env:
-          CSC_LINK_BASE64: ${{ secrets.CSC_LINK_BASE64 }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -46,11 +46,12 @@ jobs:
           echo "::group::Verifying signing environment variables"
 
           # Check if all required secrets are set
-          if [ -z "$CSC_LINK_BASE64" ]; then
-            echo "❌ ERROR: CSC_LINK_BASE64 is not set"
+          if [ -z "$CSC_LINK" ]; then
+            echo "❌ ERROR: CSC_LINK is not set"
+            echo "ℹ️  CSC_LINK should contain the base64-encoded .p12 certificate"
             exit 1
           else
-            echo "✅ CSC_LINK_BASE64 is set (length: ${#CSC_LINK_BASE64})"
+            echo "✅ CSC_LINK is set (length: ${#CSC_LINK})"
           fi
 
           if [ -z "$CSC_KEY_PASSWORD" ]; then
@@ -83,32 +84,6 @@ jobs:
 
           echo "::endgroup::"
 
-      - name: Prepare code signing certificate
-        env:
-          CSC_LINK_BASE64: ${{ secrets.CSC_LINK_BASE64 }}
-        run: |
-          echo "::group::Preparing code signing certificate"
-
-          # Decode and save certificate
-          echo "$CSC_LINK_BASE64" | base64 --decode > /tmp/cert.p12
-          echo "CSC_LINK=/tmp/cert.p12" >> $GITHUB_ENV
-
-          # Verify certificate file was created
-          if [ ! -f /tmp/cert.p12 ]; then
-            echo "❌ ERROR: Certificate file was not created"
-            exit 1
-          fi
-
-          # Check certificate file size
-          cert_size=$(wc -c < /tmp/cert.p12)
-          echo "✅ Certificate file created (size: $cert_size bytes)"
-
-          if [ "$cert_size" -lt 100 ]; then
-            echo "⚠️  WARNING: Certificate file seems unusually small"
-          fi
-
-          echo "::endgroup::"
-
       - name: Build all packages
         run: |
           # Build contracts, analytics, and server packages first (needed by prepare-server-bundle)
@@ -123,7 +98,7 @@ jobs:
 
       - name: Package and sign app
         env:
-          CSC_LINK_BASE64: ${{ secrets.CSC_LINK_BASE64 }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -138,14 +113,13 @@ jobs:
 
           # Show signing environment (without exposing secrets)
           echo "🔐 Signing configuration:"
-          echo "  CSC_LINK: ${CSC_LINK}"
-          echo "  CSC_LINK_BASE64: [SET - length: ${#CSC_LINK_BASE64}]"
+          echo "  CSC_LINK: [SET - length: ${#CSC_LINK}]"
           echo "  CSC_KEY_PASSWORD: [SET]"
           echo "  APPLE_ID: ${APPLE_ID}"
           echo "  APPLE_TEAM_ID: ${APPLE_TEAM_ID}"
           echo "  APPLE_APP_SPECIFIC_PASSWORD: [SET]"
 
-          # Package with signing enabled (electron-builder will use CSC_LINK_BASE64 or CSC_LINK)
+          # Package with signing enabled (electron-builder will use CSC_LINK with base64 data)
           echo "🚀 Building and signing electron app..."
           bun run build:electron:sign
 
