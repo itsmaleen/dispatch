@@ -42,20 +42,29 @@ jobs:
           echo "$CSC_LINK_BASE64" | base64 --decode > /tmp/cert.p12
           echo "CSC_LINK=/tmp/cert.p12" >> $GITHUB_ENV
 
-      - name: Build and sign app
+      - name: Build all packages
+        run: |
+          # Build contracts, analytics, and server packages first (needed by prepare-server-bundle)
+          cd packages/contracts && bun run build
+          cd ../analytics && bun run build
+          cd ../server && bun run build
+          # Build UI (vite + electron typescript)
+          cd ../ui
+          bunx vite build
+          bunx tsc -p tsconfig.electron.json
+          bunx tsc -p tsconfig.preload.json
+
+      - name: Package and sign app
         env:
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          # Build everything except electron packaging
           cd packages/ui
-          bunx vite build
-          bunx tsc -p tsconfig.electron.json
-          bunx tsc -p tsconfig.preload.json
+          # Prepare server bundle (copies dist from server, contracts, analytics)
           node scripts/prepare-server-bundle.mjs
-          # Package with signing enabled (build:electron:sign doesn't disable CSC_IDENTITY_AUTO_DISCOVERY)
+          # Package with signing enabled
           bun run build:electron:sign
 
       - name: Set release tag
