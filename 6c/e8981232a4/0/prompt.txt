@@ -1,0 +1,11 @@
+Got this error
+  🔍 Verifying code signature (shallow)...
+  ./mac-arm64/Dispatch.app: code has no resources but signature indicates they must be present
+  ❌ ERROR: Shallow signature verification failed
+  Attempting to show more details...
+maybe because package and sign app is showing this worning
+  • skipped macOS application code signing  reason=cannot find valid "Developer ID Application" identity or custom non-Apple code signing certificate, it could cause some undefined behaviour, e.g. macOS localized description not visible, see https://electron.build/code-signing allIdentities=     0 identities found
+                                                Valid identities only
+     0 valid identities found
+
+Maybe look up electron github action examples to sign correctly
