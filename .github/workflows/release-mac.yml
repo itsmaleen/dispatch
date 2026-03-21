@@ -83,7 +83,7 @@ jobs:
           fi
 
           # Decode certificate to temporary file
-          echo "📝 Decoding certificate to file..."
+          echo "📝 Decoding certificate..."
           CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
           echo -n "$MACOS_CERTIFICATE" | base64 --decode -o $CERTIFICATE_PATH
 
@@ -94,21 +94,41 @@ jobs:
           fi
 
           cert_size=$(wc -c < "$CERTIFICATE_PATH")
-          echo "✅ Certificate file created at $CERTIFICATE_PATH (size: $cert_size bytes)"
+          echo "✅ Certificate decoded (size: $cert_size bytes)"
 
           if [ "$cert_size" -lt 100 ]; then
             echo "⚠️  WARNING: Certificate file seems unusually small"
             exit 1
           fi
 
-          # Export certificate path for electron-builder
-          echo "CSC_LINK=$CERTIFICATE_PATH" >> $GITHUB_ENV
-          echo "CSC_KEY_PASSWORD=$MACOS_CERTIFICATE_PWD" >> $GITHUB_ENV
+          # Create temporary keychain
+          echo "🔑 Creating temporary keychain..."
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # Import certificate to keychain
+          echo "📥 Importing certificate to keychain..."
+          security import $CERTIFICATE_PATH -P "$MACOS_CERTIFICATE_PWD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # Add keychain to search list
+          echo "🔍 Adding keychain to search list..."
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+          # List identities to verify import
+          echo "👤 Available signing identities:"
+          security find-identity -v -p codesigning $KEYCHAIN_PATH
+
+          # Export environment variables for electron-builder
           echo "APPLE_ID=$APPLE_ID" >> $GITHUB_ENV
           echo "APPLE_APP_SPECIFIC_PASSWORD=$APPLE_APP_SPECIFIC_PASSWORD" >> $GITHUB_ENV
           echo "APPLE_TEAM_ID=$APPLE_TEAM_ID" >> $GITHUB_ENV
 
-          echo "🔐 Code signing configured with certificate at: $CERTIFICATE_PATH"
+          echo "✅ Code signing setup complete"
           echo "::endgroup::"
 
       - name: Build all packages
@@ -134,19 +154,15 @@ jobs:
 
           # Show signing environment (without exposing secrets)
           echo "🔐 Signing configuration:"
-          echo "  CSC_LINK: $CSC_LINK"
-          echo "  CSC_KEY_PASSWORD: [SET]"
           echo "  APPLE_ID: $APPLE_ID"
           echo "  APPLE_TEAM_ID: $APPLE_TEAM_ID"
           echo "  APPLE_APP_SPECIFIC_PASSWORD: [SET]"
 
-          # Verify certificate file exists before building
-          if [ ! -f "$CSC_LINK" ]; then
-            echo "❌ ERROR: Certificate file not found at $CSC_LINK"
-            exit 1
-          fi
+          # List available signing identities
+          echo "👤 Available signing identities:"
+          security find-identity -v -p codesigning
 
-          # Package with signing enabled (electron-builder will use CSC_LINK file path)
+          # Package with signing enabled (electron-builder will find certificate from keychain)
           echo "🚀 Building and signing electron app..."
           bun run build:electron:sign
 
