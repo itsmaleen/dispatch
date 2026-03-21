@@ -123,15 +123,17 @@ jobs:
             exit 1
           fi
 
-          # Import certificate to keychain
+          # Import certificate to keychain (remove -t cert to import both cert and key)
           echo "📥 Importing certificate to keychain..."
-          if security import $CERTIFICATE_PATH -P "$MACOS_CERTIFICATE_PWD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH 2>&1; then
-            echo "✅ Certificate imported successfully"
-          else
-            echo "❌ ERROR: Certificate import failed"
-            echo "Trying with -T flag to allow codesign access..."
-            security import $CERTIFICATE_PATH -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign -T /usr/bin/security -k $KEYCHAIN_PATH
-          fi
+          security import $CERTIFICATE_PATH -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign -f pkcs12 -k $KEYCHAIN_PATH
+          echo "✅ Certificate imported"
+
+          # Debug: List what's in the keychain
+          echo "🔍 Keychain contents:"
+          security find-identity -v -p codesigning $KEYCHAIN_PATH
+          echo ""
+          echo "🔑 Keys in keychain:"
+          security dump-keychain $KEYCHAIN_PATH | grep -A 5 "class:" | head -20
 
           # Set key partition list to allow access by codesign
           echo "🔓 Setting key partition list..."
