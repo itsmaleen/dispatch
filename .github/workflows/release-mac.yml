@@ -123,10 +123,16 @@ jobs:
             exit 1
           fi
 
-          # Import certificate to keychain (remove -t cert to import both cert and key)
+          # Import certificate to keychain
           echo "📥 Importing certificate to keychain..."
-          security import $CERTIFICATE_PATH -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign -f pkcs12 -k $KEYCHAIN_PATH
-          echo "✅ Certificate imported"
+          security import $CERTIFICATE_PATH -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign -T /usr/bin/security -f pkcs12 -k $KEYCHAIN_PATH 2>&1 | tee /tmp/import.log
+
+          if grep -q "1 identity imported" /tmp/import.log || grep -q "imported" /tmp/import.log; then
+            echo "✅ Certificate imported"
+          else
+            echo "⚠️  Import output was unexpected:"
+            cat /tmp/import.log
+          fi
 
           # Debug: List what's in the keychain
           echo "🔍 Keychain contents:"
