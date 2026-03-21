@@ -117,6 +117,25 @@ export interface ThreadSummary {
   hasSession: boolean;
 }
 
+// Session Resume types
+export type SessionStatus = 'active' | 'suspended' | 'closed' | 'archived';
+
+export interface SessionInfo {
+  id: string;
+  name?: string;
+  projectPath: string;
+  worktreePath?: string;
+  createdAt: string;
+  lastActiveAt: string;
+  sessionId?: string;  // Claude Code SDK session ID
+  status: SessionStatus;
+  lastPrompt?: string;
+  messageCount: number;
+  layoutPanelId?: string;
+  closedAt?: string;
+  matchSnippet?: string;  // For search results
+}
+
 // API functions
 export const api = {
   // Generic HTTP methods for new endpoints
@@ -286,6 +305,92 @@ export const api = {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error);
     return data.thread;
+  },
+
+  // Session Resume API
+  async listSessions(options: {
+    projectPath?: string;
+    status?: Array<'active' | 'suspended' | 'closed' | 'archived'>;
+    limit?: number;
+  } = {}): Promise<SessionInfo[]> {
+    const params = new URLSearchParams();
+    if (options.projectPath) params.set('projectPath', options.projectPath);
+    if (options.status) params.set('status', options.status.join(','));
+    if (options.limit) params.set('limit', options.limit.toString());
+
+    const res = await fetch(`${getApiUrl()}/sessions?${params.toString()}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    return data.sessions;
+  },
+
+  async getResumableSessions(projectPath: string): Promise<SessionInfo[]> {
+    const res = await fetch(`${getApiUrl()}/sessions/resumable?projectPath=${encodeURIComponent(projectPath)}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    return data.sessions;
+  },
+
+  async searchSessions(query: string, options: { projectPath?: string; limit?: number } = {}): Promise<SessionInfo[]> {
+    const params = new URLSearchParams({ q: query });
+    if (options.projectPath) params.set('projectPath', options.projectPath);
+    if (options.limit) params.set('limit', options.limit.toString());
+
+    const res = await fetch(`${getApiUrl()}/sessions/search?${params.toString()}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    return data.sessions;
+  },
+
+  async quickSearchSessions(query: string, options: { projectPath?: string; limit?: number } = {}): Promise<SessionInfo[]> {
+    const params = new URLSearchParams({ q: query });
+    if (options.projectPath) params.set('projectPath', options.projectPath);
+    if (options.limit) params.set('limit', options.limit.toString());
+
+    const res = await fetch(`${getApiUrl()}/sessions/quick-search?${params.toString()}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    return data.sessions;
+  },
+
+  async closeSessionForResume(sessionId: string): Promise<void> {
+    await fetch(`${getApiUrl()}/sessions/${sessionId}/close`, { method: 'POST' });
+  },
+
+  async activateSession(sessionId: string): Promise<void> {
+    await fetch(`${getApiUrl()}/sessions/${sessionId}/activate`, { method: 'POST' });
+  },
+
+  async archiveSession(sessionId: string): Promise<void> {
+    await fetch(`${getApiUrl()}/sessions/${sessionId}/archive`, { method: 'POST' });
+  },
+
+  async suspendAllSessions(projectPath: string): Promise<{ suspended: number }> {
+    const res = await fetch(`${getApiUrl()}/sessions/suspend-all`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectPath }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    return { suspended: data.suspended };
+  },
+
+  /**
+   * Get valid SDK sessions from Claude Code storage.
+   * These are the actual sessions that can be resumed.
+   */
+  async getSdkSessions(projectPath: string): Promise<Array<{
+    sessionId: string;
+    summary: string;
+    created?: string;
+    modified?: string;
+    messageCount?: number;
+  }>> {
+    const res = await fetch(`${getApiUrl()}/sessions/sdk?projectPath=${encodeURIComponent(projectPath)}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    return data.sessions;
   },
 };
 

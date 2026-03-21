@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo, useCallback } from 'react';
+import { useEffect, useRef, useMemo, useCallback, useState } from 'react';
 import { Search, ChevronRight, ArrowLeft, Loader2 } from 'lucide-react';
 import { useCommandPaletteStore } from '../../stores/command-palette';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -58,17 +58,53 @@ export function CommandPalette() {
   const focusedWidgetType = useWorkspaceStore(state => state.focusedWidgetType);
   const showAgentStatus = useWorkspaceStore(state => state.showAgentStatus);
 
+  // Async subcommand loading state
+  const [asyncCommands, setAsyncCommands] = useState<Command[] | null>(null);
+  const [isAsyncLoading, setIsAsyncLoading] = useState(false);
+
+  // Load async subcommands when entering a subcommand mode with getCommandsAsync
+  useEffect(() => {
+    if (subcommandStack.length > 0) {
+      const parent = subcommandStack[subcommandStack.length - 1].parentCommand;
+      if (parent.action.type === 'subcommand' && parent.action.getCommandsAsync) {
+        setIsAsyncLoading(true);
+        setAsyncCommands(null);
+        parent.action.getCommandsAsync()
+          .then(commands => {
+            setAsyncCommands(commands);
+            setIsAsyncLoading(false);
+          })
+          .catch(err => {
+            console.error('Failed to load async commands:', err);
+            setIsAsyncLoading(false);
+          });
+      } else {
+        // Reset async state when not using async commands
+        setAsyncCommands(null);
+        setIsAsyncLoading(false);
+      }
+    } else {
+      // Reset when leaving subcommand mode
+      setAsyncCommands(null);
+      setIsAsyncLoading(false);
+    }
+  }, [subcommandStack]);
+
   // Get current commands based on subcommand stack
   // Dependencies include visibility-affecting state to ensure proper re-filtering
   const currentCommands = useMemo(() => {
     if (subcommandStack.length > 0) {
       const parent = subcommandStack[subcommandStack.length - 1].parentCommand;
       if (parent.action.type === 'subcommand') {
+        // Use async commands if available, otherwise fall back to sync commands
+        if (asyncCommands !== null) {
+          return asyncCommands;
+        }
         return parent.action.getCommands();
       }
     }
     return commandRegistry.search(query);
-  }, [query, subcommandStack, focusedWidgetType, showAgentStatus]);
+  }, [query, subcommandStack, focusedWidgetType, showAgentStatus, asyncCommands]);
 
   // Filter commands when in subcommand mode
   const filteredCommands = useMemo(() => {
@@ -306,8 +342,8 @@ export function CommandPalette() {
             }
             className="flex-1 bg-transparent text-zinc-100 placeholder:text-zinc-500 outline-none text-sm"
           />
-          {/* Semantic search loading indicator */}
-          {isSemanticLoading && (
+          {/* Loading indicator for semantic search or async subcommands */}
+          {(isSemanticLoading || isAsyncLoading) && (
             <Loader2 className="w-4 h-4 text-violet-400 animate-spin flex-shrink-0" />
           )}
         </div>

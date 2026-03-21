@@ -689,6 +689,163 @@ export class CommandCenterServer {
       }
     });
 
+    // ============ Session Resume API ============
+
+    // List sessions with filtering
+    this.app.get('/sessions', async (c) => {
+      const projectPath = c.req.query('projectPath');
+      const statusParam = c.req.query('status'); // comma-separated: "active,suspended"
+      const limit = parseInt(c.req.query('limit') ?? '50');
+      const offset = parseInt(c.req.query('offset') ?? '0');
+
+      const status = statusParam
+        ? (statusParam.split(',') as Array<'active' | 'suspended' | 'closed' | 'archived'>)
+        : undefined;
+
+      const manager = getSessionManager();
+      const sessions = manager.listSessions({ projectPath, status, limit, offset });
+
+      return c.json({ ok: true, sessions });
+    });
+
+    // Get resumable sessions for a project
+    this.app.get('/sessions/resumable', async (c) => {
+      const projectPath = c.req.query('projectPath');
+      if (!projectPath) {
+        return c.json({ ok: false, error: 'projectPath parameter required' }, 400);
+      }
+
+      const manager = getSessionManager();
+      const sessions = manager.getResumableSessions(projectPath);
+
+      return c.json({ ok: true, sessions });
+    });
+
+    // Search sessions by content (FTS)
+    this.app.get('/sessions/search', async (c) => {
+      const query = c.req.query('q');
+      const projectPath = c.req.query('projectPath');
+      const limit = parseInt(c.req.query('limit') ?? '20');
+
+      if (!query) {
+        return c.json({ ok: false, error: 'q parameter required' }, 400);
+      }
+
+      const manager = getSessionManager();
+
+      try {
+        const sessions = manager.searchSessions(query, { projectPath, limit });
+        return c.json({ ok: true, sessions });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Search failed',
+        }, 500);
+      }
+    });
+
+    // Quick search by name/last prompt (no FTS)
+    this.app.get('/sessions/quick-search', async (c) => {
+      const query = c.req.query('q');
+      const projectPath = c.req.query('projectPath');
+      const limit = parseInt(c.req.query('limit') ?? '20');
+
+      if (!query) {
+        return c.json({ ok: false, error: 'q parameter required' }, 400);
+      }
+
+      const manager = getSessionManager();
+      const sessions = manager.quickSearchSessions(query, { projectPath, limit });
+
+      return c.json({ ok: true, sessions });
+    });
+
+    // Mark session as closed (preserve for resume)
+    this.app.post('/sessions/:id/close', async (c) => {
+      const id = c.req.param('id');
+      const manager = getSessionManager();
+
+      try {
+        // Close the active SDK connection if any
+        await manager.closeSession(id);
+        // Mark as closed in DB (different from deleting)
+        manager.markSessionClosed(id);
+        return c.json({ ok: true });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to close session',
+        }, 500);
+      }
+    });
+
+    // Suspend all sessions for a project (used when switching workspaces)
+    this.app.post('/sessions/suspend-all', async (c) => {
+      const { projectPath } = await c.req.json<{ projectPath: string }>();
+
+      if (!projectPath) {
+        return c.json({ ok: false, error: 'projectPath required' }, 400);
+      }
+
+      const manager = getSessionManager();
+      const count = manager.suspendAllSessions(projectPath);
+
+      return c.json({ ok: true, suspended: count });
+    });
+
+    // Archive a session
+    this.app.post('/sessions/:id/archive', async (c) => {
+      const id = c.req.param('id');
+      const manager = getSessionManager();
+
+      try {
+        manager.archiveSession(id);
+        return c.json({ ok: true });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to archive session',
+        }, 500);
+      }
+    });
+
+    // Reactivate a session
+    this.app.post('/sessions/:id/activate', async (c) => {
+      const id = c.req.param('id');
+      const manager = getSessionManager();
+
+      try {
+        manager.markSessionActive(id);
+        return c.json({ ok: true });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to activate session',
+        }, 500);
+      }
+    });
+
+    // Get valid SDK sessions (actual session files from ~/.claude/projects/)
+    this.app.get('/sessions/sdk', async (c) => {
+      const projectPath = c.req.query('projectPath');
+
+      if (!projectPath) {
+        return c.json({ ok: false, error: 'projectPath parameter required' }, 400);
+      }
+
+      const manager = getSessionManager();
+
+      try {
+        const sdkSessions = await manager.getValidSdkSessions(projectPath);
+        return c.json({ ok: true, sessions: sdkSessions });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to get SDK sessions',
+        }, 500);
+      }
+    });
+
     // ============ Git API ============
 
     // List branches in a repository

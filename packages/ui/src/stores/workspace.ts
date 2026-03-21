@@ -9,6 +9,14 @@ export interface WorkspaceAgent {
   type: 'claude-code' | 'openclaw';
 }
 
+// Options for resuming a previous session when creating a console
+export interface ConsoleResumeOptions {
+  threadId: string;       // Thread ID to resume
+  resume: boolean;        // Whether to resume the session
+  sessionId?: string;     // Claude Code SDK session ID
+  projectPath?: string;   // Original project path (CWD) for the session
+}
+
 // ============================================================================
 // LAYOUT TREE TYPES (tmux-style nested panel layout)
 // ============================================================================
@@ -559,7 +567,7 @@ interface WorkspaceState {
   navigateToView: ((view: string) => void) | null;
 
   // Console creation callback (set by Workspace.tsx)
-  onCreateConsole: ((agentId: string) => void) | null;
+  onCreateConsole: ((agentId: string, options?: ConsoleResumeOptions) => void) | null;
 
   // Terminal creation callback (set by Workspace.tsx)
   onCreateTerminal: ((cwd?: string) => void) | null;
@@ -605,7 +613,7 @@ interface WorkspaceState {
 
   // Register callbacks (called by Workspace.tsx and App.tsx)
   registerNavigateCallback: (callback: (view: string) => void) => void;
-  registerConsoleCallback: (callback: (agentId: string) => void) => void;
+  registerConsoleCallback: (callback: (agentId: string, options?: ConsoleResumeOptions) => void) => void;
   registerTerminalCallback: (callback: (cwd?: string) => void) => void;
   registerTaskCallback: (callback: (text: string, agentId: string | null) => void) => void;
   registerConsoleActionCallbacks: (callbacks: {
@@ -617,7 +625,7 @@ interface WorkspaceState {
   }) => void;
 
   // Command palette calls these
-  createConsole: (agentId: string) => void;
+  createConsole: (agentId: string, options?: ConsoleResumeOptions) => void;
   createTerminal: (cwd?: string) => void;
   createTask: (text: string, agentId: string | null) => void;
   navigateTo: (view: string) => void;
@@ -977,10 +985,10 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
   }),
 
   // Action dispatchers (called by command palette)
-  createConsole: (agentId) => {
+  createConsole: (agentId, options) => {
     const { onCreateConsole } = get();
     if (onCreateConsole) {
-      onCreateConsole(agentId);
+      onCreateConsole(agentId, options);
     } else {
       console.warn('[WorkspaceStore] No console callback registered');
     }

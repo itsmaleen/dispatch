@@ -5,7 +5,7 @@
  * Uses SQLite for thread/message persistence (inspired by T3 Code).
  */
 
-import { query, type Query, type SDKMessage, type Options } from '@anthropic-ai/claude-agent-sdk';
+import { query, listSessions as sdkListSessions, type Query, type SDKMessage, type Options, type SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import {
@@ -13,6 +13,7 @@ import {
   type Thread,
   type Message,
   type SqliteThreadStore,
+  type SessionStatus,
 } from '../persistence/sqlite-store';
 import { getExtractor, getPromptSummarizer } from '../extractor';
 import { getTaskStore, type Task } from '../persistence/task-store';
@@ -35,6 +36,10 @@ export interface Session {
   lastActivityAt?: number;
   /** Timeout handle for activity monitoring */
   activityTimeout?: ReturnType<typeof setTimeout>;
+  /** Claude Code SDK session ID for resume (captured from SDK events) */
+  sdkSessionId?: string;
+  /** Whether this session should resume from a previous SDK session */
+  resumeFromSessionId?: string;
 }
 
 /** Session events */
@@ -69,7 +74,10 @@ export interface CreateSessionOptions {
   cwd: string;
   name?: string;
   worktreePath?: string;
+  /** Whether to resume a previous session */
   resume?: boolean;
+  /** Claude Code SDK session ID to resume (used when resume=true) */
+  sessionId?: string;
 }
 
 /** Options for sending a message */
@@ -192,6 +200,28 @@ export class SessionManager extends EventEmitter {
     }));
   }
 
+  /**
+   * Get valid SDK sessions for a project directory.
+   * These are the actual session files that exist in ~/.claude/projects/
+   */
+  async getValidSdkSessions(projectPath: string): Promise<SDKSessionInfo[]> {
+    try {
+      const sessions = await sdkListSessions({ dir: projectPath });
+      return sessions;
+    } catch (err) {
+      console.error('[SessionManager] Failed to list SDK sessions:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Check if a session ID is valid (exists in SDK storage)
+   */
+  async isSessionIdValid(sessionId: string, projectPath: string): Promise<boolean> {
+    const sessions = await this.getValidSdkSessions(projectPath);
+    return sessions.some(s => s.sessionId === sessionId);
+  }
+
   /** Get thread by ID */
   getThread(threadId: string): Thread | null {
     return this.getStore().getThread(threadId);
@@ -209,7 +239,7 @@ export class SessionManager extends EventEmitter {
 
   /** Create or resume a session for a thread */
   async createSession(options: CreateSessionOptions): Promise<Session> {
-    const { threadId, cwd, name, worktreePath, resume } = options;
+    const { threadId, cwd, name, worktreePath, resume, sessionId } = options;
 
     // Check if session already exists
     const existing = this.sessions.get(threadId);
@@ -228,6 +258,10 @@ export class SessionManager extends EventEmitter {
         worktreePath,
       });
       console.log(`[SessionManager] Created new thread ${threadId}`);
+    } else if (resume) {
+      // Mark the thread as active when resuming
+      this.getStore().activateSession(threadId);
+      console.log(`[SessionManager] Reactivated thread ${threadId} for resume`);
     }
 
     // Create session (query created lazily on first message)
@@ -237,11 +271,13 @@ export class SessionManager extends EventEmitter {
       cwd,
       status: 'idle',
       outputBuffer: '',
+      // Store the SDK session ID if resuming
+      resumeFromSessionId: resume && sessionId ? sessionId : undefined,
     };
 
     this.sessions.set(threadId, session);
     this.emit('session.created', threadId);
-    console.log(`[SessionManager] Created session for thread ${threadId} (cwd: ${cwd})`);
+    console.log(`[SessionManager] Created session for thread ${threadId} (cwd: ${cwd}, resume: ${resume}, sessionId: ${sessionId || 'new'})`);
 
     return session;
   }
@@ -502,10 +538,20 @@ export class SessionManager extends EventEmitter {
     let consoleThread = reactiveStore.getActiveThreadForConsole(threadId, projectPath);
 
     if (consoleThread) {
-      // Thread exists - increment session count
+      // Thread exists and is active - increment session count
       reactiveStore.incrementThreadSessionCount(consoleThread.id);
-      console.log(`[SessionManager] Using existing thread "${consoleThread.name}" (sessions: ${consoleThread.sessionCount + 1})`);
+      console.log(`[SessionManager] Using existing active thread "${consoleThread.name}" (sessions: ${consoleThread.sessionCount + 1})`);
       return consoleThread;
+    }
+
+    // Check if thread exists but is not active (e.g., closed session being resumed)
+    const existingThread = reactiveStore.getConsoleThread(threadId);
+    if (existingThread) {
+      // Reactivate the existing thread
+      reactiveStore.updateThreadStatus(threadId, 'active');
+      reactiveStore.incrementThreadSessionCount(threadId);
+      console.log(`[SessionManager] Reactivated existing thread "${existingThread.name}" for resume (sessions: ${existingThread.sessionCount + 1})`);
+      return { ...existingThread, status: 'active', sessionCount: existingThread.sessionCount + 1 };
     }
 
     // New thread - generate AI name
@@ -582,20 +628,32 @@ export class SessionManager extends EventEmitter {
       return;
     }
 
+    // Track resume attempt for error handling
+    const resumeFromSessionId = session.resumeFromSessionId;
+
     try {
+      const isResuming = !!resumeFromSessionId;
       console.log(`[SessionManager] Creating SDK query... (using Claude Code at ${claudePath})`);
+      if (isResuming) {
+        console.log(`[SessionManager] Attempting to resume session: ${resumeFromSessionId} (cwd: ${sdkOpts.cwd})`);
+      }
       const queryOpts: Options = {
         ...sdkOpts,
         includePartialMessages: true,
         pathToClaudeCodeExecutable: claudePath,
+        // Resume from previous SDK session if available
+        ...(resumeFromSessionId ? { resume: resumeFromSessionId } : {}),
       };
       const queryIter = query({
         prompt: message,
         options: queryOpts,
       });
 
+      // Clear the resume flag after first use (subsequent messages in this session don't need it)
+      session.resumeFromSessionId = undefined;
+
       session.query = queryIter;
-      console.log(`[SessionManager] SDK query created, starting iteration...`);
+      console.log(`[SessionManager] SDK query created, starting iteration... (resume: ${resumeFromSessionId || 'none'})`);
 
       // Start activity timeout monitoring
       this.startActivityTimeout(session, turnId);
@@ -606,7 +664,11 @@ export class SessionManager extends EventEmitter {
 
         console.log(`[SessionManager] SDK event: ${event.type}`);
         const result = this.handleSDKMessage(session, event, turnId);
-        if (result.sessionId) capturedSessionId = result.sessionId;
+        if (result.sessionId) {
+          capturedSessionId = result.sessionId;
+          // Also store in session object for future use
+          session.sdkSessionId = result.sessionId;
+        }
         if (result.usage) usage = result.usage;
       }
 
@@ -622,9 +684,32 @@ export class SessionManager extends EventEmitter {
         usage,
       });
 
-      // Update thread with session ID for resume
-      if (capturedSessionId && capturedSessionId !== thread.sessionId) {
-        this.getStore().updateThread(thread.id, { sessionId: capturedSessionId });
+      // Update thread with CORRECT session ID for resume
+      // NOTE: The session_id from SDK events is NOT the resumable session ID!
+      // We must use listSessions() to get the actual session ID (filename-based)
+      try {
+        const sdkSessions = await sdkListSessions({ dir: session.cwd });
+        // Find the most recent session (should be the one we just created/used)
+        if (sdkSessions.length > 0) {
+          // Sort by modified date descending to get most recent
+          const sortedSessions = [...sdkSessions].sort((a, b) => {
+            const aTime = a.modified ? new Date(a.modified).getTime() : 0;
+            const bTime = b.modified ? new Date(b.modified).getTime() : 0;
+            return bTime - aTime;
+          });
+          const actualSessionId = sortedSessions[0].sessionId;
+          if (actualSessionId !== thread.sessionId) {
+            console.log(`[SessionManager] Updating thread with actual SDK session ID: ${actualSessionId}`);
+            this.getStore().updateThread(thread.id, { sessionId: actualSessionId });
+            session.sdkSessionId = actualSessionId;
+          }
+        }
+      } catch (err) {
+        console.error('[SessionManager] Failed to get actual session ID from SDK:', err);
+        // Fall back to captured ID (though it may not work for resume)
+        if (capturedSessionId && capturedSessionId !== thread.sessionId) {
+          this.getStore().updateThread(thread.id, { sessionId: capturedSessionId });
+        }
       }
 
       session.status = 'idle';
@@ -666,7 +751,15 @@ export class SessionManager extends EventEmitter {
       const errMsg = error instanceof Error ? error.message : String(error);
       console.error(`[SessionManager] processQuery error:`, error);
       const exitCode1 = /exited with code 1/i.test(errMsg);
-      if (exitCode1) {
+
+      // Check if this was a resume attempt that failed
+      if (resumeFromSessionId && exitCode1) {
+        console.error(
+          `[SessionManager] Resume attempt failed for session ${resumeFromSessionId}. ` +
+          'The session file may no longer exist or the CWD may have changed. ' +
+          'Starting a new session instead.'
+        );
+      } else if (exitCode1) {
         console.error(
           '[SessionManager] Hint: Claude Code subprocess exited with code 1. ' +
           'Ensure you are logged in with your Claude account: run "claude auth status" to check, or "claude auth login" to sign in.'
@@ -1203,6 +1296,70 @@ export class SessionManager extends EventEmitter {
     return forked;
   }
 
+  // ==================== Session Resume Operations ====================
+
+  /** List sessions with filtering (for session resume feature) */
+  listSessions(options: {
+    projectPath?: string;
+    status?: SessionStatus[];
+    limit?: number;
+    offset?: number;
+  } = {}): Thread[] {
+    return this.getStore().listSessions(options);
+  }
+
+  /** Get sessions that can be resumed (active or suspended) */
+  getResumableSessions(projectPath: string): Thread[] {
+    return this.getStore().getResumableSessions(projectPath);
+  }
+
+  /** Mark session as closed (preserves data for future resume) */
+  markSessionClosed(threadId: string): void {
+    this.getStore().closeSession(threadId);
+    console.log(`[SessionManager] Marked session ${threadId} as closed`);
+  }
+
+  /** Mark session as suspended (for app shutdown) */
+  markSessionSuspended(threadId: string): void {
+    this.getStore().suspendSession(threadId);
+    console.log(`[SessionManager] Marked session ${threadId} as suspended`);
+  }
+
+  /** Reactivate a session */
+  markSessionActive(threadId: string): void {
+    this.getStore().activateSession(threadId);
+    console.log(`[SessionManager] Marked session ${threadId} as active`);
+  }
+
+  /** Archive a session */
+  archiveSession(threadId: string): void {
+    this.getStore().archiveSession(threadId);
+    console.log(`[SessionManager] Archived session ${threadId}`);
+  }
+
+  /** Suspend all active sessions for a project */
+  suspendAllSessions(projectPath: string): number {
+    const count = this.getStore().suspendAllSessions(projectPath);
+    console.log(`[SessionManager] Suspended ${count} sessions for ${projectPath}`);
+    return count;
+  }
+
+  /** Search sessions by message content (FTS) */
+  searchSessions(query: string, options: {
+    projectPath?: string;
+    limit?: number;
+  } = {}): Array<Thread & { matchSnippet?: string }> {
+    return this.getStore().searchSessions(query, options);
+  }
+
+  /** Quick search by thread name or last prompt */
+  quickSearchSessions(query: string, options: {
+    projectPath?: string;
+    limit?: number;
+  } = {}): Thread[] {
+    return this.getStore().quickSearchSessions(query, options);
+  }
+
   /** Shutdown - close all sessions */
   async shutdown(): Promise<void> {
     for (const threadId of this.sessions.keys()) {
@@ -1226,4 +1383,4 @@ export function getSessionManager(): SessionManager {
 }
 
 // Re-export types for convenience
-export type { Thread, Message } from '../persistence/sqlite-store';
+export type { Thread, Message, SessionStatus } from '../persistence/sqlite-store';
