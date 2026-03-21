@@ -40,6 +40,8 @@ export interface Session {
   sdkSessionId?: string;
   /** Whether this session should resume from a previous SDK session */
   resumeFromSessionId?: string;
+  /** Flag to signal the query loop should stop immediately */
+  interruptRequested?: boolean;
 }
 
 /** Session events */
@@ -653,12 +655,19 @@ export class SessionManager extends EventEmitter {
       session.resumeFromSessionId = undefined;
 
       session.query = queryIter;
+      session.interruptRequested = false; // Reset interrupt flag for new query
       console.log(`[SessionManager] SDK query created, starting iteration... (resume: ${resumeFromSessionId || 'none'})`);
 
       // Start activity timeout monitoring
       this.startActivityTimeout(session, turnId);
 
       for await (const event of queryIter) {
+        // Check for interrupt FIRST - before processing any event
+        if (session.interruptRequested) {
+          console.log(`[SessionManager] Interrupt detected in query loop for ${session.threadId}`);
+          break; // Exit the loop immediately
+        }
+
         // Reset timeout on each event (session is still active)
         this.resetActivityTimeout(session, turnId);
 
@@ -670,6 +679,58 @@ export class SessionManager extends EventEmitter {
           session.sdkSessionId = result.sessionId;
         }
         if (result.usage) usage = result.usage;
+
+        // Check for interrupt again after processing (for long-running tool calls)
+        if (session.interruptRequested) {
+          console.log(`[SessionManager] Interrupt detected after event processing for ${session.threadId}`);
+          break;
+        }
+      }
+
+      // Check if we exited due to interrupt
+      const wasInterrupted = session.interruptRequested;
+      if (wasInterrupted) {
+        console.log(`[SessionManager] Query loop exited due to interrupt for ${session.threadId}`);
+        session.interruptRequested = false; // Reset for next query
+        this.clearActivityTimeout(session);
+
+        // IMPORTANT: Still save the session ID so conversation can be resumed!
+        // Without this, the next message would start a fresh conversation
+        try {
+          const sdkSessions = await sdkListSessions({ dir: session.cwd });
+          if (sdkSessions.length > 0) {
+            const sortedSessions = [...sdkSessions].sort((a, b) => {
+              const aTime = a.modified ? new Date(a.modified).getTime() : 0;
+              const bTime = b.modified ? new Date(b.modified).getTime() : 0;
+              return bTime - aTime;
+            });
+            const actualSessionId = sortedSessions[0].sessionId;
+            if (actualSessionId !== thread.sessionId) {
+              console.log(`[SessionManager] Saving session ID on interrupt for resume: ${actualSessionId}`);
+              this.getStore().updateThread(thread.id, { sessionId: actualSessionId });
+              session.sdkSessionId = actualSessionId;
+            }
+          }
+        } catch (err) {
+          console.error('[SessionManager] Failed to save session ID on interrupt:', err);
+          // Fall back to captured ID
+          if (capturedSessionId && capturedSessionId !== thread.sessionId) {
+            this.getStore().updateThread(thread.id, { sessionId: capturedSessionId });
+          }
+        }
+
+        // Store partial assistant output if any
+        if (session.outputBuffer.trim()) {
+          this.getStore().appendMessage({
+            threadId: thread.id,
+            turnId,
+            role: 'assistant',
+            content: session.outputBuffer + '\n\n[Interrupted by user]',
+          });
+        }
+
+        // Don't proceed with normal completion - the interruptSession method handles status
+        return;
       }
 
       // Clear timeout since query completed successfully
@@ -1257,10 +1318,68 @@ export class SessionManager extends EventEmitter {
     console.log(`[SessionManager] Removed worktree for thread ${threadId}`);
   }
 
+  /** Interrupt a running session (graceful stop - keeps session alive for continued chat) */
+  async interruptSession(threadId: string): Promise<{ interrupted: boolean; wasRunning: boolean }> {
+    const session = this.sessions.get(threadId);
+    if (!session) {
+      return { interrupted: false, wasRunning: false };
+    }
+
+    const wasRunning = session.status === 'running';
+
+    if (wasRunning) {
+      console.log(`[SessionManager] Interrupting session ${threadId}...`);
+
+      // Set interrupt flag FIRST - this will be checked in the query loop
+      session.interruptRequested = true;
+
+      // Clear the activity timeout
+      this.clearActivityTimeout(session);
+
+      // Try to interrupt the SDK query immediately
+      if (session.query) {
+        try {
+          // Use the SDK's interrupt() method if available (more immediate than return())
+          if ('interrupt' in session.query && typeof (session.query as any).interrupt === 'function') {
+            await (session.query as any).interrupt();
+            console.log(`[SessionManager] SDK interrupt() called for ${threadId}`);
+          } else {
+            // Fallback to return() - this signals the async iterator to stop
+            await session.query.return(undefined);
+            console.log(`[SessionManager] Query return() called for ${threadId}`);
+          }
+        } catch (err) {
+          // Interrupt errors are expected, just log them
+          console.log(`[SessionManager] Interrupt signal sent (error expected): ${err}`);
+        }
+      }
+
+      // Update session status back to idle (NOT completed - user can continue chatting)
+      session.status = 'idle';
+      session.currentTurnId = undefined;
+      session.query = null; // Clear the query so a new one can be created
+
+      // Emit turn.interrupted event so UI knows the turn was stopped
+      // but DON'T complete the session - it stays active for continued chat
+      this.emit('turn.interrupted', {
+        sessionId: threadId,
+        message: 'Turn interrupted by user',
+      });
+
+      console.log(`[SessionManager] Interrupted turn in session ${threadId} (session still active)`);
+      return { interrupted: true, wasRunning: true };
+    }
+
+    return { interrupted: false, wasRunning };
+  }
+
   /** Close a session */
   async closeSession(threadId: string): Promise<void> {
     const session = this.sessions.get(threadId);
     if (!session) return;
+
+    // Clear any activity timeout
+    this.clearActivityTimeout(session);
 
     if (session.query) {
       try {

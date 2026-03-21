@@ -1104,6 +1104,93 @@ export class CommandCenterServer {
       return c.json({ ok: true });
     });
 
+    // Stop the current turn in a session (graceful interrupt, keeps session alive for continued chat)
+    // This is the preferred way to stop - use CTRL+C or Stop button
+    this.app.post('/sessions/:id/stop', async (c) => {
+      const id = c.req.param('id');
+      const sessionManager = getSessionManager();
+
+      try {
+        // Try graceful interrupt - this stops the current turn but keeps session alive
+        const result = await sessionManager.interruptSession(id);
+
+        if (result.wasRunning) {
+          if (result.interrupted) {
+            return c.json({
+              ok: true,
+              status: 'interrupted',
+              message: 'Turn interrupted - session still active, you can continue chatting'
+            });
+          } else {
+            // Interrupt failed but don't close the session - just report the failure
+            return c.json({
+              ok: false,
+              status: 'interrupt_failed',
+              message: 'Failed to interrupt turn gracefully'
+            });
+          }
+        } else {
+          // Session wasn't running
+          return c.json({
+            ok: true,
+            status: 'not_running',
+            message: 'No active turn to stop'
+          });
+        }
+      } catch (err) {
+        return c.json({
+          ok: false,
+          error: err instanceof Error ? err.message : 'Failed to stop turn'
+        }, 500);
+      }
+    });
+
+    // Force stop the current turn (more aggressive, but still keeps session alive)
+    // Use double CTRL+C to trigger this
+    this.app.post('/sessions/:id/force-stop', async (c) => {
+      const id = c.req.param('id');
+      const sessionManager = getSessionManager();
+
+      try {
+        // First try graceful interrupt
+        const result = await sessionManager.interruptSession(id);
+
+        if (result.interrupted) {
+          return c.json({
+            ok: true,
+            status: 'interrupted',
+            message: 'Turn force stopped - session still active'
+          });
+        }
+
+        // If graceful didn't work, we need to be more aggressive
+        // But we still want to keep the session for continued chat
+        // So we recreate the session state after stopping
+        const session = sessionManager.getSession(id);
+        if (session && session.query) {
+          try {
+            await session.query.return(undefined);
+          } catch {
+            // Force terminate - ignore errors
+          }
+          // Reset session to idle state (don't delete it)
+          session.status = 'idle';
+          session.currentTurnId = undefined;
+        }
+
+        return c.json({
+          ok: true,
+          status: 'force_stopped',
+          message: 'Turn force stopped - session still active, you can continue chatting'
+        });
+      } catch (err) {
+        return c.json({
+          ok: false,
+          error: err instanceof Error ? err.message : 'Failed to force stop turn'
+        }, 500);
+      }
+    });
+
     // Delete/stop an active session
     this.app.delete('/sessions/:id', async (c) => {
       const id = c.req.param('id');

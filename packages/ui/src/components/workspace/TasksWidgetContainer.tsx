@@ -336,6 +336,25 @@ export function TasksWidgetContainer({
     }
   }, []);
 
+  const handleStopSession = useCallback(async (sessionId: string) => {
+    try {
+      // Use the stop endpoint for graceful interrupt
+      // This stops the current turn but keeps the session active for continued chat
+      const response = await api.post(`/sessions/${sessionId}/stop`);
+      const data = await response.json();
+
+      if (data.ok) {
+        console.log(`[TasksWidgetContainer] Session ${sessionId} interrupted:`, data.message);
+        // Session stays in active list - user can continue chatting
+        // The isStreaming state will update automatically via WebSocket events
+      } else {
+        console.warn(`[TasksWidgetContainer] Failed to stop session:`, data.error || data.message);
+      }
+    } catch (err) {
+      console.error('[TasksWidgetContainer] Failed to stop session:', err);
+    }
+  }, []);
+
   const handleDeleteSession = useCallback(async (sessionId: string) => {
     try {
       await api.delete(`/sessions/${sessionId}`);
@@ -460,6 +479,7 @@ export function TasksWidgetContainer({
       recentlyCompleted={mergedRecentlyCompleted}
       threads={threads}
       onDismissSession={handleDismissSession}
+      onStopSession={handleStopSession}
       onDeleteSession={handleDeleteSession}
       onHighlightConsole={handleHighlightConsole}
       workItems={workItems}

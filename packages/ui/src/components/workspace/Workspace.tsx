@@ -2171,6 +2171,124 @@ export function Workspace() {
     useWorkspaceStore.getState().setWidgets(widgets);
   }, [terminals, realTerminals, tasksVisible, showAgentStatus]);
 
+  // ============================================================================
+  // CTRL+C DOUBLE-PRESS TO STOP AGENT (Claude Code style)
+  // ============================================================================
+  const lastCtrlCTimeRef = useRef<number>(0);
+  const ctrlCCountRef = useRef<number>(0);
+  const DOUBLE_PRESS_THRESHOLD = 1500; // 1.5 seconds
+
+  // Stop all running sessions for the focused console or all consoles
+  const stopActiveSessions = useCallback(async (forceStop = false) => {
+    // Find running sessions - check which terminals are streaming
+    const runningSessions = terminals.filter(t => t.isStreaming);
+
+    if (runningSessions.length === 0) {
+      console.log('[Workspace] No running sessions to stop');
+      return;
+    }
+
+    // Stop each running session
+    for (const terminal of runningSessions) {
+      const sessionId = terminal.threadId || terminal.id;
+      try {
+        const endpoint = forceStop
+          ? `/sessions/${sessionId}/force-stop`
+          : `/sessions/${sessionId}/stop`;
+
+        await api.post(endpoint);
+        console.log(`[Workspace] ${forceStop ? 'Force stopped' : 'Stopped'} session ${sessionId}`);
+
+        // Update local terminal state - session stays active, just stop streaming
+        setTerminals(prev => prev.map(t =>
+          t.id === terminal.id
+            ? {
+                ...t,
+                isStreaming: false,
+                lines: [
+                  ...t.lines,
+                  {
+                    id: crypto.randomUUID(),
+                    type: 'system' as ConsoleLineType,
+                    content: forceStop
+                      ? '⚠️ Agent interrupted. You can continue the conversation.'
+                      : '⚠️ Agent stopped. You can continue the conversation.',
+                    timestamp: makeTimestamp(),
+                  }
+                ]
+              }
+            : t
+        ));
+      } catch (err) {
+        console.error(`[Workspace] Failed to stop session ${sessionId}:`, err);
+      }
+    }
+  }, [terminals]);
+
+  // Global CTRL+C handler for stopping agents
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Check for CTRL+C (or CMD+C on Mac when not in an input)
+      if (e.key === 'c' && (e.ctrlKey || e.metaKey)) {
+        // Don't intercept if user is in an input field (they might be copying)
+        const activeElement = document.activeElement;
+        const isInInput = activeElement instanceof HTMLInputElement ||
+                         activeElement instanceof HTMLTextAreaElement ||
+                         activeElement?.getAttribute('contenteditable') === 'true';
+
+        // Check if there's a text selection (user is copying text)
+        const selection = window.getSelection();
+        const hasTextSelection = selection && selection.toString().length > 0;
+
+        // Only intercept if not in input and no text selected
+        if (!isInInput && !hasTextSelection) {
+          // Check if any sessions are running
+          const hasRunningSessions = terminals.some(t => t.isStreaming);
+
+          if (hasRunningSessions) {
+            const now = Date.now();
+
+            if (now - lastCtrlCTimeRef.current < DOUBLE_PRESS_THRESHOLD) {
+              // Second press within threshold - force stop!
+              e.preventDefault();
+              ctrlCCountRef.current = 0;
+              stopActiveSessions(true);
+              console.log('[Workspace] Double CTRL+C detected - force stopping agent');
+            } else {
+              // First press - show warning and prepare for double-press
+              e.preventDefault();
+              ctrlCCountRef.current = 1;
+              lastCtrlCTimeRef.current = now;
+
+              // Add a visual hint to the running terminals
+              setTerminals(prev => prev.map(t =>
+                t.isStreaming
+                  ? {
+                      ...t,
+                      lines: [
+                        ...t.lines,
+                        {
+                          id: crypto.randomUUID(),
+                          type: 'info' as ConsoleLineType,
+                          content: '⏸️ Press CTRL+C again to stop the agent',
+                          timestamp: makeTimestamp(),
+                        }
+                      ]
+                    }
+                  : t
+              ));
+
+              console.log('[Workspace] First CTRL+C - press again to stop agent');
+            }
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [terminals, stopActiveSessions]);
+
   // Initialize/update layout tree when terminals change
   useEffect(() => {
     if (!useFlexibleLayout) return;
