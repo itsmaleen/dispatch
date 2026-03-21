@@ -70,6 +70,7 @@ export interface TasksWidgetProps {
   recentlyCompleted: ActiveSession[];
   threads: ConsoleThread[];
   onDismissSession: (sessionId: string) => void;
+  onStopSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
   onHighlightConsole: (sessionId: string) => void;
 
@@ -125,6 +126,7 @@ export function TasksWidget({
   recentlyCompleted,
   threads,
   onDismissSession,
+  onStopSession,
   onDeleteSession,
   onHighlightConsole,
   workItems,
@@ -295,6 +297,7 @@ export function TasksWidget({
             recentlyCompleted={recentlyCompleted}
             threads={threads}
             onDismissSession={onDismissSession}
+            onStopSession={onStopSession}
             onDeleteSession={onDeleteSession}
             onHighlightConsole={onHighlightConsole}
           />
@@ -376,6 +379,7 @@ function ActiveSessionsTab({
   recentlyCompleted,
   threads,
   onDismissSession,
+  onStopSession,
   onDeleteSession,
   onHighlightConsole,
 }: {
@@ -383,6 +387,7 @@ function ActiveSessionsTab({
   recentlyCompleted: ActiveSession[];
   threads: ConsoleThread[];
   onDismissSession: (id: string) => void;
+  onStopSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   onHighlightConsole: (id: string) => void;
 }) {
@@ -449,6 +454,7 @@ function ActiveSessionsTab({
           key={group.thread?.id || `orphan-${idx}`}
           thread={group.thread}
           sessions={group.sessions}
+          onStopSession={onStopSession}
           onDeleteSession={onDeleteSession}
           onHighlightConsole={onHighlightConsole}
         />
@@ -479,11 +485,13 @@ function ActiveSessionsTab({
 function ThreadSessionGroup({
   thread,
   sessions,
+  onStopSession,
   onDeleteSession,
   onHighlightConsole,
 }: {
   thread: ConsoleThread | null;
   sessions: ActiveSession[];
+  onStopSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   onHighlightConsole: (id: string) => void;
 }) {
@@ -496,6 +504,7 @@ function ThreadSessionGroup({
           <ActiveSessionCard
             key={session.id}
             session={session}
+            onStop={() => onStopSession(session.id)}
             onDelete={() => onDeleteSession(session.id)}
             onHighlightConsole={() => onHighlightConsole(session.id)}
           />
@@ -519,6 +528,7 @@ function ThreadSessionGroup({
           key={session.id}
           session={session}
           threadName={thread.name}
+          onStop={() => onStopSession(session.id)}
           onDelete={() => onDeleteSession(session.id)}
           onHighlightConsole={() => onHighlightConsole(session.id)}
         />
@@ -530,18 +540,31 @@ function ThreadSessionGroup({
 function ActiveSessionCard({
   session,
   threadName,
+  onStop,
   onDelete,
   onHighlightConsole,
 }: {
   session: ActiveSession;
   threadName?: string;
+  onStop: () => void;
   onDelete: () => void;
   onHighlightConsole: () => void;
 }) {
   const [elapsed, setElapsed] = useState(0);
+  const [isStopping, setIsStopping] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [adjustedPosition, setAdjustedPosition] = useState<{ top: number; left: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  const handleStopClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsStopping(true);
+    try {
+      await onStop();
+    } finally {
+      setIsStopping(false);
+    }
+  };
 
   useEffect(() => {
     const start = session.startedAt.getTime();
@@ -631,7 +654,7 @@ function ActiveSessionCard({
   return (
     <>
       <div
-        className="p-3 rounded-lg bg-violet-500/10 border border-violet-500/30 cursor-pointer hover:bg-violet-500/15 transition-colors"
+        className="p-3 rounded-lg bg-violet-500/10 border border-violet-500/30 cursor-pointer hover:bg-violet-500/15 transition-colors group/card"
         onContextMenu={handleContextMenu}
         onClick={onHighlightConsole}
         title="Click to highlight console, right-click for options"
@@ -641,7 +664,22 @@ function ActiveSessionCard({
             <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
             <span className="text-xs text-zinc-400 truncate">{session.agentName}</span>
           </div>
-          <span className="text-xs text-zinc-500 flex-shrink-0">{formatDuration(elapsed)}</span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-zinc-500 flex-shrink-0">{formatDuration(elapsed)}</span>
+            {/* Stop Button - visible on hover */}
+            <button
+              onClick={handleStopClick}
+              disabled={isStopping}
+              className="opacity-0 group-hover/card:opacity-100 p-1 rounded bg-red-500/20 hover:bg-red-500/40 text-red-400 hover:text-red-300 transition-all disabled:opacity-50"
+              title="Stop agent (Ctrl+C)"
+            >
+              {isStopping ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <StopCircle className="w-3.5 h-3.5" />
+              )}
+            </button>
+          </div>
         </div>
         <p className="text-sm text-zinc-200 mt-1.5 line-clamp-2" title={session.promptText}>
           {session.summary}
