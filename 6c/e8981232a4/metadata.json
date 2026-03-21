@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "6ce8981232a4",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/release-mac.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6c/e8981232a4/0/metadata.json",
+      "transcript": "/6c/e8981232a4/0/full.jsonl",
+      "content_hash": "/6c/e8981232a4/0/content_hash.txt",
+      "prompt": "/6c/e8981232a4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 125,
+    "cache_creation_tokens": 84502,
+    "cache_read_tokens": 355648,
+    "output_tokens": 4967,
+    "api_call_count": 11
+  }
+}

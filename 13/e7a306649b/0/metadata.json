@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "13e7a306649b",
+  "session_id": "e9438cd5-d5a5-415a-8501-a517c969fc23",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-21T04:42:30.879631Z",
+  "branch": "main",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/release-mac.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "2a1b3b9358e8",
+  "checkpoint_transcript_start": 191,
+  "transcript_lines_at_start": 191,
+  "token_usage": {
+    "input_tokens": 49,
+    "cache_creation_tokens": 56756,
+    "cache_read_tokens": 209852,
+    "output_tokens": 1905,
+    "api_call_count": 4
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-21T04:42:30.700203Z",
+    "agent_lines": 3,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 3,
+    "agent_percentage": 100
+  }
+}

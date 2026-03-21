@@ -1,0 +1,25 @@
+failing at verify signed app
+  ls: ./mac-arm64/Dispatch.app/Contents/_CodeSignature/: No such file or directory
+  📄 CodeResources file:
+  _CodeSignature directory missing
+  🔍 Verifying code signature (shallow)...
+  ./mac-arm64/Dispatch.app: code has no resources but signature indicates they must be present
+  ❌ ERROR: Shallow signature verification failed
+  Attempting to show more details...
+  Executable=/Users/runner/work/dispatch/dispatch/packages/ui/release/mac-arm64/Dispatch.app/Contents/MacOS/Dispatch
+  Identifier=Electron
+  Format=app bundle with Mach-O thin (arm64)
+  CodeDirectory v=20400 size=392 flags=0x20002(adhoc,linker-signed) hashes=9+0 location=embedded
+  Hash type=sha256 size=32
+  CandidateCDHash sha256=98f1848815b813e3a8712de784d42f1cbd2aca0c
+  CandidateCDHashFull sha256=98f1848815b813e3a8712de784d42f1cbd2aca0c4e264b8ed83308c06c504598
+  Hash choices=sha256
+  CMSDigest=98f1848815b813e3a8712de784d42f1cbd2aca0c4e264b8ed83308c06c504598
+  CMSDigestType=2
+  CDHash=98f1848815b813e3a8712de784d42f1cbd2aca0c
+  Signature=adhoc
+  Info.plist=not bound
+  TeamIdentifier=not set
+  Sealed Resources=none
+  Internal requirements=none
+  Error: Process completed with exit code 1.

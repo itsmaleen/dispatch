@@ -1,0 +1,19 @@
+is there any updates needed on env variables?
+
+---
+
+failed at code signing step
+0s
+Run echo "::group::Setting up code signing"
+Setting up code signing
+  ✅ Certificate secret is set (length: 1952)
+  ✅ CSC_KEY_PASSWORD is set
+  ✅ APPLE_ID is set: ***
+  ✅ APPLE_APP_SPECIFIC_PASSWORD is set
+  ✅ APPLE_TEAM_ID is set: ***
+  📝 Decoding certificate...
+  ✅ Certificate decoded (size:     1464 bytes)
+  🔑 Creating temporary keychain...
+  📥 Importing certificate to keychain...
+  security: SecItemCopyMatching: The specified item could not be found in the keychain.
+  Error: Process completed with exit code 1.

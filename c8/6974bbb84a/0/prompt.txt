@@ -1,0 +1,5 @@
+can you investigate the updates we did to github action to build and sign mac app - getting an error that the app was corrupted which would indicate that it wasn't signed correctly. can we add some kind of logs during github action running to make sure that it's setup correctly? Maybe like a separate or a pre step confiming that the right env variables are available
+
+---
+
+double check that the same env variables are used / needed for github action as the bun run sign:mac command because that command works

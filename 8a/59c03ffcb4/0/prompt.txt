@@ -1,0 +1,23 @@
+got errors in package and sign app
+  To ensure your native dependencies are always matched electron version, simply add script `"postinstall": "electron-builder install-app-deps" to your `package.json`
+    • executing @electron/rebuild  electronVersion=40.8.1 arch=arm64 buildFromSource=false appDir=./
+    • installing native dependencies  arch=arm64
+    • preparing       moduleName=node-pty arch=arm64
+    • finished        moduleName=node-pty arch=arm64
+    • completed installing native dependencies
+    • packaging       platform=darwin arch=arm64 electron=40.8.1 appOutDir=release/mac-arm64
+    • downloading     url=https://github.com/electron/electron/releases/download/v40.8.1/electron-v40.8.1-darwin-arm64.zip size=114 MB parts=6
+    • downloaded      url=https://github.com/electron/electron/releases/download/v40.8.1/electron-v40.8.1-darwin-arm64.zip duration=915ms
+    • default Electron icon is used  reason=application icon is not set
+    ⨯ ENAMETOOLONG: name too long, stat '/Users/runner/work/dispatch/dispatch/packages/ui/***'  failedTask=build stackTrace=Error: ENAMETOOLONG: name too long, stat '/Users/runner/work/dispatch/dispatch/packages/ui/***'
+      at stat (node:internal/fs/promises:1029:18)
+      at importCertificate (/Users/runner/work/dispatch/dispatch/node_modules/.bun/app-builder-lib@25.1.8+9de7f21bf22fa85d/node_modules/app-builder-lib/src/codeSign/codesign.ts:35:16)
+  From previous event:
+      at processImmediate (node:internal/timers:485:21)
+  From previous event:
+      at createKeychain (/Users/runner/work/dispatch/dispatch/node_modules/.bun/app-builder-lib@25.1.8+9de7f21bf22fa85d/node_modules/app-builder-lib/src/codeSign/macCodeSign.ts:197:21)
+      at processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at MacPackager.sign (/Users/runner/work/dispatch/dispatch/node_modules/.bun/app-builder-lib@25.1.8+9de7f21bf22fa85d/node_modules/app-builder-lib/src/macPackager.ts:238:27)
+      at /Users/runner/work/dispatch/dispatch/node_modules/.bun/app-builder-lib@25.1.8+9de7f21bf22fa85d/node_modules/app-builder-lib/src/macPackager.ts:498:11
+  error: script "build:electron:sign" exited with code 1
+  Error: Process completed with exit code 1.

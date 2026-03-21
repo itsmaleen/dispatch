@@ -1,0 +1,9 @@
+Github action is geting an error on Verify signed app step
+0s
+Run echo "::group::Verifying signed application"
+Verifying signed application
+  📱 Found app: ./mac-arm64/Dispatch.app
+  🔍 Verifying code signature...
+  ./mac-arm64/Dispatch.app: code has no resources but signature indicates they must be present
+  ❌ ERROR: Code signature verification failed
+  Error: Process completed with exit code 1.
