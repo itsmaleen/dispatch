@@ -2,7 +2,7 @@
 /**
  * Prepares the server for the packaged Electron app.
  * 
- * Strategy (T3 Code pattern):
+ * Strategy:
  * 1. Copy pre-built server dist to staging
  * 2. Generate package.json with resolved dependencies
  * 3. Run bun install --production (compiles native modules fresh)
@@ -25,7 +25,7 @@ const analyticsDir = join(root, 'packages/analytics');
 const bundleDir = join(uiRoot, 'server-bundle');
 
 async function main() {
-  console.log('📦 Preparing server bundle for packaged app (T3 pattern)...');
+  console.log('📦 Preparing server bundle for packaged app...');
 
   // Clean and create bundle directory
   await rm(bundleDir, { recursive: true }).catch(() => {});
