@@ -35,12 +35,79 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Verify signing prerequisites
+        env:
+          CSC_LINK_BASE64: ${{ secrets.CSC_LINK_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          echo "::group::Verifying signing environment variables"
+
+          # Check if all required secrets are set
+          if [ -z "$CSC_LINK_BASE64" ]; then
+            echo "❌ ERROR: CSC_LINK_BASE64 is not set"
+            exit 1
+          else
+            echo "✅ CSC_LINK_BASE64 is set (length: ${#CSC_LINK_BASE64})"
+          fi
+
+          if [ -z "$CSC_KEY_PASSWORD" ]; then
+            echo "❌ ERROR: CSC_KEY_PASSWORD is not set"
+            exit 1
+          else
+            echo "✅ CSC_KEY_PASSWORD is set"
+          fi
+
+          if [ -z "$APPLE_ID" ]; then
+            echo "❌ ERROR: APPLE_ID is not set"
+            exit 1
+          else
+            echo "✅ APPLE_ID is set: $APPLE_ID"
+          fi
+
+          if [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ]; then
+            echo "❌ ERROR: APPLE_APP_SPECIFIC_PASSWORD is not set"
+            exit 1
+          else
+            echo "✅ APPLE_APP_SPECIFIC_PASSWORD is set"
+          fi
+
+          if [ -z "$APPLE_TEAM_ID" ]; then
+            echo "❌ ERROR: APPLE_TEAM_ID is not set"
+            exit 1
+          else
+            echo "✅ APPLE_TEAM_ID is set: $APPLE_TEAM_ID"
+          fi
+
+          echo "::endgroup::"
+
       - name: Prepare code signing certificate
         env:
           CSC_LINK_BASE64: ${{ secrets.CSC_LINK_BASE64 }}
         run: |
+          echo "::group::Preparing code signing certificate"
+
+          # Decode and save certificate
           echo "$CSC_LINK_BASE64" | base64 --decode > /tmp/cert.p12
           echo "CSC_LINK=/tmp/cert.p12" >> $GITHUB_ENV
+
+          # Verify certificate file was created
+          if [ ! -f /tmp/cert.p12 ]; then
+            echo "❌ ERROR: Certificate file was not created"
+            exit 1
+          fi
+
+          # Check certificate file size
+          cert_size=$(wc -c < /tmp/cert.p12)
+          echo "✅ Certificate file created (size: $cert_size bytes)"
+
+          if [ "$cert_size" -lt 100 ]; then
+            echo "⚠️  WARNING: Certificate file seems unusually small"
+          fi
+
+          echo "::endgroup::"
 
       - name: Build all packages
         run: |
@@ -56,16 +123,101 @@ jobs:
 
       - name: Package and sign app
         env:
+          CSC_LINK_BASE64: ${{ secrets.CSC_LINK_BASE64 }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          echo "::group::Packaging and signing"
           cd packages/ui
+
           # Prepare server bundle (copies dist from server, contracts, analytics)
+          echo "📦 Preparing server bundle..."
           node scripts/prepare-server-bundle.mjs
-          # Package with signing enabled
+
+          # Show signing environment (without exposing secrets)
+          echo "🔐 Signing configuration:"
+          echo "  CSC_LINK: ${CSC_LINK}"
+          echo "  CSC_LINK_BASE64: [SET - length: ${#CSC_LINK_BASE64}]"
+          echo "  CSC_KEY_PASSWORD: [SET]"
+          echo "  APPLE_ID: ${APPLE_ID}"
+          echo "  APPLE_TEAM_ID: ${APPLE_TEAM_ID}"
+          echo "  APPLE_APP_SPECIFIC_PASSWORD: [SET]"
+
+          # Package with signing enabled (electron-builder will use CSC_LINK_BASE64 or CSC_LINK)
+          echo "🚀 Building and signing electron app..."
           bun run build:electron:sign
+
+          echo "::endgroup::"
+
+      - name: Verify signed app
+        run: |
+          echo "::group::Verifying signed application"
+          cd packages/ui/release
+
+          # Find the .app bundle
+          app_path=$(find . -name "*.app" -type d | head -n 1)
+
+          if [ -z "$app_path" ]; then
+            echo "❌ ERROR: Could not find .app bundle"
+            exit 1
+          fi
+
+          echo "📱 Found app: $app_path"
+
+          # Verify code signature
+          echo "🔍 Verifying code signature..."
+          codesign -vvv --deep --strict "$app_path" 2>&1 || {
+            echo "❌ ERROR: Code signature verification failed"
+            exit 1
+          }
+
+          # Display signature info
+          echo "📋 Signature information:"
+          codesign -dvvv "$app_path" 2>&1 | grep -E "(Authority|TeamIdentifier|Identifier|Signature)"
+
+          # Check for hardened runtime
+          echo "🛡️  Checking hardened runtime..."
+          codesign -dvvv "$app_path" 2>&1 | grep -i "runtime" || echo "⚠️  Hardened runtime info not found"
+
+          # Verify Gatekeeper will accept it
+          echo "🚪 Verifying Gatekeeper acceptance..."
+          spctl -a -vvv -t execute "$app_path" 2>&1 || {
+            echo "⚠️  WARNING: Gatekeeper assessment failed (may need notarization to complete)"
+          }
+
+          echo "::endgroup::"
+
+      - name: List build artifacts
+        run: |
+          echo "::group::Build artifacts"
+          cd packages/ui/release
+
+          echo "📦 Generated files:"
+          ls -lh
+
+          # Check for DMG
+          if ls *.dmg 1> /dev/null 2>&1; then
+            for dmg in *.dmg; do
+              size=$(du -h "$dmg" | cut -f1)
+              echo "  ✅ DMG: $dmg ($size)"
+            done
+          else
+            echo "  ❌ No DMG file found"
+          fi
+
+          # Check for ZIP
+          if ls *.zip 1> /dev/null 2>&1; then
+            for zip in *.zip; do
+              size=$(du -h "$zip" | cut -f1)
+              echo "  ✅ ZIP: $zip ($size)"
+            done
+          else
+            echo "  ⚠️  No ZIP file found"
+          fi
+
+          echo "::endgroup::"
 
       - name: Set release tag
         id: release_tag
