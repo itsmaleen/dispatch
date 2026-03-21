@@ -47,7 +47,7 @@ import {
 } from 'lucide-react';
 import { AgentsPanel } from '../agents/AgentsPanel';
 import { api, getServerUrl, getWsUrl } from '../../stores/app';
-import { useWorkspaceStore, type LayoutNode, type LayoutLeaf, type LayoutGroup, type WidgetType, layoutHelpers } from '../../stores/workspace';
+import { useWorkspaceStore, type LayoutNode, type LayoutLeaf, type LayoutGroup, type WidgetType, type ConsoleResumeOptions, layoutHelpers } from '../../stores/workspace';
 import { ChatInput, type UploadedFile } from './ChatInput';
 import { TasksWidgetContainer } from './TasksWidgetContainer';
 import { TerminalWidget as RealTerminalWidget } from '../terminal/TerminalWidget';
@@ -149,6 +149,8 @@ interface ConsoleState {
   // Thread integration (Phase 2/3)
   threadId?: string;
   sessionActive?: boolean;
+  // Session resume - Claude Code SDK session ID for resume
+  resumeSessionId?: string;
   // Settings
   settings?: ConsoleSettings;
   // Message queue - allows typing while console is busy
@@ -2052,7 +2054,7 @@ export function Workspace() {
   }, []);
 
   // Refs for callback registration (to avoid dependency issues)
-  const handleNewTerminalRef = useRef<(agentId: string) => void>(() => {});
+  const handleNewTerminalRef = useRef<(agentId: string, options?: ConsoleResumeOptions) => void>(() => {});
   const handleAddStepRef = useRef<(text: string, agentId: string | null) => void>(() => {});
   const handleTerminalMessageRef = useRef<(terminalId: string, message: string, files?: UploadedFile[]) => void>(() => {});
 
@@ -2092,8 +2094,8 @@ export function Workspace() {
 
   // Register console creation callback for command palette (once on mount)
   useEffect(() => {
-    useWorkspaceStore.getState().registerConsoleCallback((agentId: string) => {
-      handleNewTerminalRef.current(agentId);
+    useWorkspaceStore.getState().registerConsoleCallback((agentId: string, options?: ConsoleResumeOptions) => {
+      handleNewTerminalRef.current(agentId, options);
     });
   }, []);
 
@@ -2963,26 +2965,54 @@ export function Workspace() {
   }, [handleWsEvent]);
 
   // Terminal handlers
-  const handleNewTerminal = useCallback((agentId?: string, initialMessage?: string) => {
+  const handleNewTerminal = useCallback((agentId?: string, initialMessageOrOptions?: string | ConsoleResumeOptions) => {
     const agent = agents.find(a => a.id === agentId) || agents[0];
     if (!agent) return;
 
-    const newTerminalId = `terminal-${Date.now()}`;
+    // Determine if we're resuming a session or creating a new one
+    const isResumeOptions = typeof initialMessageOrOptions === 'object' && initialMessageOrOptions !== null;
+    const resumeOptions = isResumeOptions ? initialMessageOrOptions : undefined;
+    const initialMessage = typeof initialMessageOrOptions === 'string' ? initialMessageOrOptions : undefined;
+
+    // For resumed sessions, use the existing threadId as the terminal ID for consistency
+    const newTerminalId = resumeOptions?.threadId || `terminal-${Date.now()}`;
+
+    const systemMessage = resumeOptions?.resume
+      ? `Session resumed — ${agent.name}`
+      : `Session started — ${agent.name}`;
 
     setTerminals(prev => [...prev, {
       id: newTerminalId,
       agent,
-      lines: [{ id: `${Date.now()}`, type: 'system', content: `Session started — ${agent.name}`, timestamp: makeTimestamp() }],
+      lines: [{ id: `${Date.now()}`, type: 'system', content: systemMessage, timestamp: makeTimestamp() }],
       isStreaming: false,
+      // If resuming, pre-populate the threadId so the session API uses it
+      threadId: resumeOptions?.threadId,
+      // Store the Claude Code SDK session ID for resume
+      resumeSessionId: resumeOptions?.sessionId,
+      // Use the original project path for resumed sessions (critical for SDK to find session files)
+      path: resumeOptions?.projectPath,
     }]);
 
-    // If an initial message was provided, send it after the terminal is created
+    // If an initial message was provided (non-resume case), send it after the terminal is created
     if (initialMessage) {
       // Use requestAnimationFrame + setTimeout to ensure state has updated
       requestAnimationFrame(() => {
         setTimeout(() => {
           handleTerminalMessageRef.current(newTerminalId, initialMessage);
         }, 50);
+      });
+    }
+
+    // If resuming a session, automatically send a summary prompt to show the user context
+    if (resumeOptions?.resume) {
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          handleTerminalMessageRef.current(
+            newTerminalId,
+            'Please provide a brief summary of what we were working on in the previous session, including any pending tasks or next steps.'
+          );
+        }, 100);
       });
     }
 
@@ -3403,10 +3433,14 @@ export function Workspace() {
       } else {
         // Claude Code: Use thread/session API for persistent sessions
         let threadId = terminal.threadId;
+        const resumeSessionId = terminal.resumeSessionId;
 
-        // Create thread/session if needed (Phase 2/3)
-        if (!threadId) {
-          threadId = `thread-${terminalId}`;
+        // Create thread/session if needed (Phase 2/3) or resume existing
+        if (!threadId || !terminal.sessionActive) {
+          // If threadId already exists (resume case), use it; otherwise generate new
+          if (!threadId) {
+            threadId = `thread-${terminalId}`;
+          }
 
           // Register mapping immediately (before async state update)
           threadToTerminalRef.current[threadId] = terminalId;
@@ -3417,6 +3451,9 @@ export function Workspace() {
             body: JSON.stringify({
               cwd,
               name: `${terminal.agent.name} - ${new Date().toLocaleString()}`,
+              // Pass resume flag and session ID if resuming a previous session
+              resume: !!resumeSessionId,
+              sessionId: resumeSessionId,
             }),
           });
           const sessionData = await sessionRes.json();
@@ -3425,7 +3462,7 @@ export function Workspace() {
             throw new Error(sessionData.error || 'Failed to create session');
           }
           setTerminals(prev => prev.map(t =>
-            t.id === terminalId ? { ...t, threadId, sessionActive: true, currentStepId: extractedStepId } : t
+            t.id === terminalId ? { ...t, threadId, sessionActive: true, currentStepId: extractedStepId, resumeSessionId: undefined } : t
           ));
         } else {
           // Ensure mapping exists for existing threadId

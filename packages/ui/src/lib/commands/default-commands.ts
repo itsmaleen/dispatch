@@ -18,11 +18,32 @@ import {
   RotateCcw,
   Terminal,
   Keyboard,
+  Search,
+  History,
 } from 'lucide-react';
 import type { Command } from './types';
 import { useWorkspaceStore, type LayoutWidgetInfo } from '../../stores/workspace';
 import { useAppStore, api, getServerUrl } from '../../stores/app';
 import { useShortcutsStore } from '../../stores/shortcuts';
+
+/**
+ * Format a date as a relative time string (e.g., "5 min ago", "2 hours ago")
+ */
+function getTimeAgo(dateString: string): string {
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMins / 60);
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins} min ago`;
+  if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return `${diffDays} days ago`;
+  return date.toLocaleDateString();
+}
 
 /**
  * Get the agent icon based on type/name
@@ -137,6 +158,134 @@ export function createDefaultCommands(): Command[] {
           }
 
           return subcommands;
+        },
+      },
+    },
+
+    // Search/Resume Sessions
+    {
+      id: 'search-sessions',
+      label: 'Search Agent Console',
+      description: 'Find and resume a previous session',
+      category: 'console',
+      icon: Search,
+      shortcut: '⌘⇧F',
+      keywords: ['search', 'find', 'session', 'resume', 'history', 'previous', 'load', 'open'],
+      action: {
+        type: 'subcommand',
+        getCommands: (): Command[] => {
+          const { workspacePath } = useWorkspaceStore.getState();
+          if (!workspacePath) {
+            return [{
+              id: 'no-workspace',
+              label: 'No workspace open',
+              description: 'Open a project to search sessions',
+              category: 'console',
+              action: { type: 'execute', handler: () => {} },
+            }];
+          }
+
+          // Return a placeholder that will be replaced when sessions load
+          // The actual session list is fetched dynamically
+          return [{
+            id: 'sessions-loading',
+            label: 'Loading sessions...',
+            description: 'Fetching previous sessions',
+            category: 'console',
+            action: { type: 'execute', handler: () => {} },
+          }];
+        },
+        // Dynamic loading of sessions
+        getCommandsAsync: async (): Promise<Command[]> => {
+          const { workspacePath } = useWorkspaceStore.getState();
+          if (!workspacePath) return [];
+
+          try {
+            // Fetch all sessions (not just resumable) for searching
+            const [sessions, sdkSessions] = await Promise.all([
+              api.listSessions({
+                projectPath: workspacePath,
+                status: ['active', 'suspended', 'closed'],
+                limit: 50,
+              }),
+              api.getSdkSessions(workspacePath).catch(() => []),
+            ]);
+
+            // Create a set of valid SDK session IDs for cross-reference
+            const validSdkSessionIds = new Set(sdkSessions.map(s => s.sessionId));
+
+            if (sessions.length === 0) {
+              return [{
+                id: 'no-sessions',
+                label: 'No previous sessions',
+                description: 'Start a new console to create a session',
+                category: 'console',
+                icon: History,
+                action: { type: 'execute', handler: () => {} },
+              }];
+            }
+
+            // Filter to only show sessions with valid SDK sessions (can actually be resumed)
+            const resumableSessions = sessions.filter(session =>
+              session.sessionId && validSdkSessionIds.has(session.sessionId)
+            );
+
+            if (resumableSessions.length === 0) {
+              return [{
+                id: 'no-resumable-sessions',
+                label: 'No resumable sessions',
+                description: 'Previous sessions have no valid SDK context',
+                category: 'console',
+                icon: History,
+                action: { type: 'execute', handler: () => {} },
+              }];
+            }
+
+            return resumableSessions.map(session => {
+              const statusLabel = session.status === 'active' ? '● Active' :
+                                  session.status === 'suspended' ? '◐ Suspended' :
+                                  '○ Closed';
+              const timeAgo = getTimeAgo(session.lastActiveAt);
+
+              return {
+                id: `session-${session.id}`,
+                label: session.name || session.lastPrompt?.slice(0, 50) || `Session ${session.id.slice(0, 8)}`,
+                description: `${statusLabel} • ${timeAgo} • ${session.messageCount} messages`,
+                category: 'console',
+                icon: History,
+                keywords: [
+                  session.name?.toLowerCase() || '',
+                  session.lastPrompt?.toLowerCase() || '',
+                  session.status,
+                ].filter(Boolean),
+                action: {
+                  type: 'execute',
+                  handler: async () => {
+                    // Resume the session directly
+                    const store = useWorkspaceStore.getState();
+                    await api.activateSession(session.id);
+                    if (store.onCreateConsole) {
+                      store.createConsole('claude-code-local', {
+                        threadId: session.id,
+                        resume: true,
+                        sessionId: session.sessionId,
+                        projectPath: session.projectPath,
+                      });
+                    }
+                  },
+                },
+              };
+            });
+          } catch (err) {
+            console.error('Failed to fetch sessions:', err);
+            return [{
+              id: 'sessions-error',
+              label: 'Failed to load sessions',
+              description: err instanceof Error ? err.message : 'Unknown error',
+              category: 'console',
+              action: { type: 'execute', handler: () => {} },
+            }];
+          }
         },
       },
     },

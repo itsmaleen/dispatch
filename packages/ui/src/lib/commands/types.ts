@@ -4,7 +4,7 @@ export type CommandCategory = 'navigation' | 'console' | 'adapter' | 'task' | 'l
 
 export type CommandAction =
   | { type: 'execute'; handler: () => void | Promise<void> }
-  | { type: 'subcommand'; getCommands: () => Command[] }
+  | { type: 'subcommand'; getCommands: () => Command[]; getCommandsAsync?: () => Promise<Command[]> }
   | { type: 'input'; placeholder: string; onSubmit: (value: string) => void };
 
 export interface Command {
