@@ -3,3 +3,7 @@ how can we update this electron app to allow for multiple windows so that I can 
 ---
 
 yes go ahead
+
+---
+
+create a commit with a proper message of all changes done
