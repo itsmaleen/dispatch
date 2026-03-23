@@ -2905,7 +2905,6 @@ export function Workspace() {
     // Skip layout sync if we're in the middle of restoring state
     // The restored layout will be applied after all consoles are created
     if (isRestoringStateRef.current) {
-      console.log('[LayoutSync] Skipping - state restoration in progress');
       return;
     }
 
@@ -2946,64 +2945,64 @@ export function Workspace() {
     const hasTasksInLayout = layoutTasksIds.length > 0;
     const hasAgentStatusInLayout = layoutAgentStatusIds.length > 0;
 
-    console.log('[LayoutSync] Check:', {
-      realTerminalIds: realTerminals.map(t => t.id),
-      layoutTerminalIds,
-      newTerminalIds,
-      layoutConsoleIds,
-      newConsoleIds,
-      tasksVisible,
-      hasTasksInLayout,
-      showAgentStatus,
-      hasAgentStatusInLayout,
+    // Determine what changes are needed
+    const needsNewConsoles = newConsoleIds.length > 0;
+    const needsNewTerminals = newTerminalIds.length > 0;
+    const needsAddTasks = tasksVisible && !hasTasksInLayout;
+    const needsRemoveTasks = !tasksVisible && hasTasksInLayout;
+    const needsAddAgentStatus = showAgentStatus && !hasAgentStatusInLayout;
+    const needsRemoveAgentStatus = !showAgentStatus && hasAgentStatusInLayout;
+
+    const needsUpdate = needsNewConsoles || needsNewTerminals ||
+                        needsAddTasks || needsRemoveTasks ||
+                        needsAddAgentStatus || needsRemoveAgentStatus;
+
+    // Early exit if no changes needed - avoid unnecessary work and logging
+    if (!needsUpdate) {
+      return;
+    }
+
+    // Only log when we're actually making changes
+    console.log('[LayoutSync] Updating layout:', {
+      newConsoleIds: needsNewConsoles ? newConsoleIds : undefined,
+      newTerminalIds: needsNewTerminals ? newTerminalIds : undefined,
+      addTasks: needsAddTasks || undefined,
+      removeTasks: needsRemoveTasks || undefined,
+      addAgentStatus: needsAddAgentStatus || undefined,
+      removeAgentStatus: needsRemoveAgentStatus || undefined,
     });
 
     let updatedLayout = currentLayout;
-    let needsUpdate = false;
 
     // Add new agent consoles
-    if (newConsoleIds.length > 0) {
-      console.log('[LayoutSync] Adding new consoles:', newConsoleIds);
+    if (needsNewConsoles) {
       for (const newId of newConsoleIds) {
         updatedLayout = addTerminalToLayout(updatedLayout, newId);
       }
-      needsUpdate = true;
     }
 
     // Add new real terminals
-    if (newTerminalIds.length > 0) {
-      console.log('[LayoutSync] Adding new terminals:', newTerminalIds);
+    if (needsNewTerminals) {
       for (const newId of newTerminalIds) {
         updatedLayout = addRealTerminalToLayout(updatedLayout, newId);
       }
-      needsUpdate = true;
     }
 
     // Handle tasks widget visibility
-    if (tasksVisible && !hasTasksInLayout) {
-      console.log('[LayoutSync] Adding tasks widget');
+    if (needsAddTasks) {
       updatedLayout = addUtilityWidgetToLayout(updatedLayout, 'tasks', 'tasks-widget');
-      needsUpdate = true;
-    } else if (!tasksVisible && hasTasksInLayout) {
-      console.log('[LayoutSync] Removing tasks widget');
+    } else if (needsRemoveTasks) {
       updatedLayout = removeWidgetFromLayout(updatedLayout, 'tasks-widget');
-      needsUpdate = true;
     }
 
     // Handle agent status widget visibility
-    if (showAgentStatus && !hasAgentStatusInLayout) {
-      console.log('[LayoutSync] Adding agent status widget');
+    if (needsAddAgentStatus) {
       updatedLayout = addUtilityWidgetToLayout(updatedLayout, 'agent-status', 'agent-status-widget');
-      needsUpdate = true;
-    } else if (!showAgentStatus && hasAgentStatusInLayout) {
-      console.log('[LayoutSync] Removing agent status widget');
+    } else if (needsRemoveAgentStatus) {
       updatedLayout = removeWidgetFromLayout(updatedLayout, 'agent-status-widget');
-      needsUpdate = true;
     }
 
-    if (needsUpdate) {
-      useWorkspaceStore.getState().setLayoutTree(updatedLayout);
-    }
+    useWorkspaceStore.getState().setLayoutTree(updatedLayout);
   }, [terminals, realTerminals, useFlexibleLayout, showAgentStatus, tasksVisible]);
 
   // Auto-save layout when it changes
