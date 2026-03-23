@@ -30,6 +30,14 @@ interface ChatInputProps {
   onQueue?: (message: string, files?: UploadedFile[]) => void;
   /** Called when the queued message is cleared */
   onClearQueue?: () => void;
+  /** Controlled value for input text (persists across drag operations) */
+  value?: string;
+  /** Called when input text changes (for controlled mode) */
+  onValueChange?: (value: string) => void;
+  /** Controlled value for attached files (persists across drag operations) */
+  filesValue?: UploadedFile[];
+  /** Called when files change (for controlled mode) */
+  onFilesChange?: (files: UploadedFile[]) => void;
 }
 
 function formatFileSize(bytes: number): string {
@@ -55,9 +63,38 @@ export function ChatInput({
   queuedMessage,
   onQueue,
   onClearQueue,
+  value,
+  onValueChange,
+  filesValue,
+  onFilesChange,
 }: ChatInputProps) {
-  const [input, setInput] = useState('');
-  const [files, setFiles] = useState<UploadedFile[]>([]);
+  // Support both controlled and uncontrolled modes
+  const [internalInput, setInternalInput] = useState('');
+  const [internalFiles, setInternalFiles] = useState<UploadedFile[]>([]);
+
+  // Use controlled values if provided, otherwise use internal state
+  const input = value !== undefined ? value : internalInput;
+  const files = filesValue !== undefined ? filesValue : internalFiles;
+
+  const setInput = (newValue: string) => {
+    if (onValueChange) {
+      onValueChange(newValue);
+    } else {
+      setInternalInput(newValue);
+    }
+  };
+
+  const setFiles = (newFiles: UploadedFile[] | ((prev: UploadedFile[]) => UploadedFile[])) => {
+    if (onFilesChange) {
+      if (typeof newFiles === 'function') {
+        onFilesChange(newFiles(files));
+      } else {
+        onFilesChange(newFiles);
+      }
+    } else {
+      setInternalFiles(newFiles);
+    }
+  };
   const [isDragging, setIsDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);

@@ -155,6 +155,9 @@ interface ConsoleState {
   settings?: ConsoleSettings;
   // Message queue - allows typing while console is busy
   queuedMessage?: QueuedMessage | null;
+  // Draft input - persists across drag operations
+  draftInput?: string;
+  draftFiles?: UploadedFile[];
   // Worktree isolation
   worktreePath?: string;
   worktreeBranch?: string;
@@ -798,6 +801,152 @@ function EdgeAwareDroppable({
 }
 
 // ============================================================================
+// WORKSPACE EDGE DROP ZONES
+// ============================================================================
+
+/**
+ * Wrapper component that provides drop zones on the outer edges of the workspace.
+ * Dropping a widget on these edges creates a full new row or column at the root level.
+ */
+function WorkspaceEdgeDropZones({
+  children,
+  isDragging,
+  activeDragId,
+  onWorkspaceEdgeDrop,
+}: {
+  children: React.ReactNode;
+  isDragging: boolean;
+  activeDragId: string | null;
+  onWorkspaceEdgeDrop: (panelId: string, edge: 'left' | 'right' | 'top' | 'bottom') => void;
+}) {
+  const [activeEdge, setActiveEdge] = useState<'left' | 'right' | 'top' | 'bottom' | null>(null);
+  const EDGE_WIDTH = 32; // pixels for edge detection zones
+
+  // Create droppables for each edge
+  const { setNodeRef: setLeftRef, isOver: isOverLeft } = useDroppable({ id: 'workspace-edge-left' });
+  const { setNodeRef: setRightRef, isOver: isOverRight } = useDroppable({ id: 'workspace-edge-right' });
+  const { setNodeRef: setTopRef, isOver: isOverTop } = useDroppable({ id: 'workspace-edge-top' });
+  const { setNodeRef: setBottomRef, isOver: isOverBottom } = useDroppable({ id: 'workspace-edge-bottom' });
+
+  // Track active edge
+  useEffect(() => {
+    if (isOverLeft) setActiveEdge('left');
+    else if (isOverRight) setActiveEdge('right');
+    else if (isOverTop) setActiveEdge('top');
+    else if (isOverBottom) setActiveEdge('bottom');
+    else setActiveEdge(null);
+  }, [isOverLeft, isOverRight, isOverTop, isOverBottom]);
+
+  return (
+    <div className="relative h-full w-full">
+      {/* Edge drop zones - only visible when dragging */}
+      {isDragging && (
+        <>
+          {/* Left edge */}
+          <div
+            ref={setLeftRef}
+            className="absolute left-0 top-0 bottom-0 z-50 transition-all duration-150"
+            style={{ width: EDGE_WIDTH }}
+          >
+            <div
+              className={`h-full w-full flex items-center justify-center transition-all duration-150 ${
+                activeEdge === 'left'
+                  ? 'bg-blue-500/30 border-r-2 border-blue-500'
+                  : 'bg-transparent hover:bg-blue-500/10'
+              }`}
+            >
+              {activeEdge === 'left' && (
+                <span
+                  className="text-blue-400 text-xs font-medium whitespace-nowrap"
+                  style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+                >
+                  New Column
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Right edge */}
+          <div
+            ref={setRightRef}
+            className="absolute right-0 top-0 bottom-0 z-50 transition-all duration-150"
+            style={{ width: EDGE_WIDTH }}
+          >
+            <div
+              className={`h-full w-full flex items-center justify-center transition-all duration-150 ${
+                activeEdge === 'right'
+                  ? 'bg-blue-500/30 border-l-2 border-blue-500'
+                  : 'bg-transparent hover:bg-blue-500/10'
+              }`}
+            >
+              {activeEdge === 'right' && (
+                <span
+                  className="text-blue-400 text-xs font-medium whitespace-nowrap"
+                  style={{ writingMode: 'vertical-rl' }}
+                >
+                  New Column
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Top edge */}
+          <div
+            ref={setTopRef}
+            className="absolute top-0 left-0 right-0 z-50 transition-all duration-150"
+            style={{ height: EDGE_WIDTH }}
+          >
+            <div
+              className={`h-full w-full flex items-center justify-center transition-all duration-150 ${
+                activeEdge === 'top'
+                  ? 'bg-blue-500/30 border-b-2 border-blue-500'
+                  : 'bg-transparent hover:bg-blue-500/10'
+              }`}
+            >
+              {activeEdge === 'top' && (
+                <span className="text-blue-400 text-xs font-medium">New Row</span>
+              )}
+            </div>
+          </div>
+
+          {/* Bottom edge */}
+          <div
+            ref={setBottomRef}
+            className="absolute bottom-0 left-0 right-0 z-50 transition-all duration-150"
+            style={{ height: EDGE_WIDTH }}
+          >
+            <div
+              className={`h-full w-full flex items-center justify-center transition-all duration-150 ${
+                activeEdge === 'bottom'
+                  ? 'bg-blue-500/30 border-t-2 border-blue-500'
+                  : 'bg-transparent hover:bg-blue-500/10'
+              }`}
+            >
+              {activeEdge === 'bottom' && (
+                <span className="text-blue-400 text-xs font-medium">New Row</span>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Main content - add padding when dragging to make room for edge zones */}
+      <div
+        className="h-full w-full transition-all duration-150"
+        style={{
+          paddingLeft: isDragging ? EDGE_WIDTH : 0,
+          paddingRight: isDragging ? EDGE_WIDTH : 0,
+          paddingTop: isDragging ? EDGE_WIDTH : 0,
+          paddingBottom: isDragging ? EDGE_WIDTH : 0,
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
 // AGENT CONSOLE WIDGET
 // ============================================================================
 
@@ -811,6 +960,8 @@ function AgentConsoleWidget({
   onSettingsChange,
   onQueueMessage,
   onClearQueue,
+  onDraftInputChange,
+  onDraftFilesChange,
   onWorktreeEnabled,
   onWorktreeMerged,
   onOpenTerminal,
@@ -834,6 +985,8 @@ function AgentConsoleWidget({
   onSettingsChange?: (consoleId: string, settings: ConsoleSettings) => void;
   onQueueMessage?: (consoleId: string, message: string, files?: UploadedFile[]) => void;
   onClearQueue?: (consoleId: string) => void;
+  onDraftInputChange?: (consoleId: string, value: string) => void;
+  onDraftFilesChange?: (consoleId: string, files: UploadedFile[]) => void;
   onWorktreeEnabled?: (consoleId: string, worktreePath: string, branch: string) => void;
   onWorktreeMerged?: (consoleId: string) => void;
   onOpenTerminal?: (cwd: string) => void;
@@ -1078,6 +1231,10 @@ function AgentConsoleWidget({
           queuedMessage={consoleState.queuedMessage}
           onQueue={onQueueMessage ? (message, files) => onQueueMessage(consoleState.id, message, files) : undefined}
           onClearQueue={onClearQueue ? () => onClearQueue(consoleState.id) : undefined}
+          value={consoleState.draftInput}
+          onValueChange={onDraftInputChange ? (value) => onDraftInputChange(consoleState.id, value) : undefined}
+          filesValue={consoleState.draftFiles}
+          onFilesChange={onDraftFilesChange ? (files) => onDraftFilesChange(consoleState.id, files) : undefined}
         />
       </div>
 
@@ -1598,6 +1755,8 @@ interface LayoutRendererProps {
   onSettingsChange: (terminalId: string, settings: TerminalSettings) => void;
   onQueueMessage: (terminalId: string, message: string, files?: UploadedFile[]) => void;
   onClearQueue: (terminalId: string) => void;
+  onDraftInputChange: (terminalId: string, value: string) => void;
+  onDraftFilesChange: (terminalId: string, files: UploadedFile[]) => void;
   onWorktreeEnabled?: (terminalId: string, worktreePath: string, branch: string) => void;
   onWorktreeMerged?: (terminalId: string) => void;
   onOpenTerminal?: (cwd: string) => void;
@@ -1657,6 +1816,8 @@ function LayoutRenderer({
   onSettingsChange,
   onQueueMessage,
   onClearQueue,
+  onDraftInputChange,
+  onDraftFilesChange,
   onWorktreeEnabled,
   onWorktreeMerged,
   onOpenTerminal,
@@ -1710,6 +1871,8 @@ function LayoutRenderer({
               onSettingsChange={onSettingsChange}
               onQueueMessage={onQueueMessage}
               onClearQueue={onClearQueue}
+              onDraftInputChange={onDraftInputChange}
+              onDraftFilesChange={onDraftFilesChange}
               onWorktreeEnabled={onWorktreeEnabled}
               onWorktreeMerged={onWorktreeMerged}
               onOpenTerminal={onOpenTerminal}
@@ -1887,6 +2050,8 @@ function LayoutRenderer({
               onSettingsChange={onSettingsChange}
               onQueueMessage={onQueueMessage}
               onClearQueue={onClearQueue}
+              onDraftInputChange={onDraftInputChange}
+              onDraftFilesChange={onDraftFilesChange}
               onWorktreeEnabled={onWorktreeEnabled}
               onWorktreeMerged={onWorktreeMerged}
               onOpenTerminal={onOpenTerminal}
@@ -3551,9 +3716,18 @@ export function Workspace() {
 
     if (!over || active.id === over.id) return;
 
-    // Extract panel IDs (over.id is prefixed with "drop-")
     const sourcePanelId = active.id as string;
-    const targetPanelId = (over.id as string).replace('drop-', '');
+    const targetId = over.id as string;
+
+    // Check if dropped on workspace edge (for creating full rows/columns)
+    if (targetId.startsWith('workspace-edge-')) {
+      const edge = targetId.replace('workspace-edge-', '') as 'left' | 'right' | 'top' | 'bottom';
+      useWorkspaceStore.getState().insertAtRootEdge(sourcePanelId, edge);
+      return;
+    }
+
+    // Extract panel IDs (over.id is prefixed with "drop-")
+    const targetPanelId = targetId.replace('drop-', '');
 
     if (sourcePanelId !== targetPanelId) {
       // Use the detected drop position, default to 'center' for swap behavior
@@ -3587,6 +3761,20 @@ export function Workspace() {
   const handleClearQueue = (terminalId: string) => {
     setTerminals(prev => prev.map(t =>
       t.id === terminalId ? { ...t, queuedMessage: null } : t
+    ));
+  };
+
+  // Handle draft input changes - persists input across drag operations
+  const handleDraftInputChange = (terminalId: string, value: string) => {
+    setTerminals(prev => prev.map(t =>
+      t.id === terminalId ? { ...t, draftInput: value } : t
+    ));
+  };
+
+  // Handle draft files changes - persists files across drag operations
+  const handleDraftFilesChange = (terminalId: string, files: UploadedFile[]) => {
+    setTerminals(prev => prev.map(t =>
+      t.id === terminalId ? { ...t, draftFiles: files } : t
     ));
   };
 
@@ -4190,54 +4378,64 @@ export function Workspace() {
             onDragEnd={handleDragEnd}
             onDragCancel={handleDragCancel}
           >
-            <LayoutRenderer
-              node={layoutTree}
-              consoles={terminals}
-              agents={agents}
-              planSteps={planSteps}
-              minimizedWidgets={minimizedWidgets}
-              realTerminals={realTerminals}
-              onCloseRealTerminal={handleCloseRealTerminal}
-              onMinimizeRealTerminal={handleMinimizeRealTerminal}
-              onRenameRealTerminal={handleRenameRealTerminal}
-              focusedWidgetId={focusedWidgetId}
-              hoveredWidgetId={hoveredWidgetId}
-              highlightedTerminalId={highlightedTerminalId}
-              maximizedWidgetId={maximizedWidgetId}
+            <WorkspaceEdgeDropZones
+              isDragging={!!activeDragId}
               activeDragId={activeDragId}
-              overDropId={overDropId}
-              dropZone={dropZone}
-              onDropZoneChange={setDropZone}
-              onFocusWidget={handleFocusWidget}
-              onHoverWidget={setHoveredWidgetId}
-              onCloseTerminal={handleCloseTerminal}
-              onMinimizeTerminal={handleMinimizeTerminal}
-              onMaximizeTerminal={handleMaximizeTerminal}
-              onClearTerminal={handleClearTerminal}
-              onSendMessage={handleTerminalMessage}
-              onSettingsChange={handleTerminalSettingsChange}
-              onQueueMessage={handleQueueMessage}
-              onClearQueue={handleClearQueue}
-              onWorktreeEnabled={handleWorktreeEnabled}
-              onWorktreeMerged={handleWorktreeMerged}
-              onOpenTerminal={(cwd) => useWorkspaceStore.getState().createTerminal(cwd)}
-              onExecute={handleExecute}
-              isExecuting={isExecuting}
-              onStepAgentChange={handleStepAgentChange}
-              onSendStepToTerminal={handleSendStepToTerminal}
-              onTerminalOptionHover={setHighlightedTerminalId}
-              onAddStep={handleAddStep}
-              tasksVisible={tasksVisible}
-              showAgentStatus={showAgentStatus}
-              onCloseAgentStatus={() => useWorkspaceStore.getState().setShowAgentStatus(false)}
-              onSplitPanel={handleSplitPanel}
-              onUpdateSizes={handleUpdatePanelSizes}
-              onClosePanel={handleClosePanel}
-              ws={wsRef.current}
-              onSendTaskToConsole={handleSendTaskToTerminal}
-              onHighlightConsole={handleHighlightTerminal}
-              workspacePath={workspacePath}
-            />
+              onWorkspaceEdgeDrop={(panelId, edge) => {
+                useWorkspaceStore.getState().insertAtRootEdge(panelId, edge);
+              }}
+            >
+              <LayoutRenderer
+                node={layoutTree}
+                consoles={terminals}
+                agents={agents}
+                planSteps={planSteps}
+                minimizedWidgets={minimizedWidgets}
+                realTerminals={realTerminals}
+                onCloseRealTerminal={handleCloseRealTerminal}
+                onMinimizeRealTerminal={handleMinimizeRealTerminal}
+                onRenameRealTerminal={handleRenameRealTerminal}
+                focusedWidgetId={focusedWidgetId}
+                hoveredWidgetId={hoveredWidgetId}
+                highlightedTerminalId={highlightedTerminalId}
+                maximizedWidgetId={maximizedWidgetId}
+                activeDragId={activeDragId}
+                overDropId={overDropId}
+                dropZone={dropZone}
+                onDropZoneChange={setDropZone}
+                onFocusWidget={handleFocusWidget}
+                onHoverWidget={setHoveredWidgetId}
+                onCloseTerminal={handleCloseTerminal}
+                onMinimizeTerminal={handleMinimizeTerminal}
+                onMaximizeTerminal={handleMaximizeTerminal}
+                onClearTerminal={handleClearTerminal}
+                onSendMessage={handleTerminalMessage}
+                onSettingsChange={handleTerminalSettingsChange}
+                onQueueMessage={handleQueueMessage}
+                onClearQueue={handleClearQueue}
+                onDraftInputChange={handleDraftInputChange}
+                onDraftFilesChange={handleDraftFilesChange}
+                onWorktreeEnabled={handleWorktreeEnabled}
+                onWorktreeMerged={handleWorktreeMerged}
+                onOpenTerminal={(cwd) => useWorkspaceStore.getState().createTerminal(cwd)}
+                onExecute={handleExecute}
+                isExecuting={isExecuting}
+                onStepAgentChange={handleStepAgentChange}
+                onSendStepToTerminal={handleSendStepToTerminal}
+                onTerminalOptionHover={setHighlightedTerminalId}
+                onAddStep={handleAddStep}
+                tasksVisible={tasksVisible}
+                showAgentStatus={showAgentStatus}
+                onCloseAgentStatus={() => useWorkspaceStore.getState().setShowAgentStatus(false)}
+                onSplitPanel={handleSplitPanel}
+                onUpdateSizes={handleUpdatePanelSizes}
+                onClosePanel={handleClosePanel}
+                ws={wsRef.current}
+                onSendTaskToConsole={handleSendTaskToTerminal}
+                onHighlightConsole={handleHighlightTerminal}
+                workspacePath={workspacePath}
+              />
+            </WorkspaceEdgeDropZones>
           </DndContext>
         ) : (
           /* Fallback: Simple vertical stack layout */
@@ -4258,6 +4456,8 @@ export function Workspace() {
                           onSettingsChange={handleTerminalSettingsChange}
                           onQueueMessage={handleQueueMessage}
                           onClearQueue={handleClearQueue}
+                          onDraftInputChange={handleDraftInputChange}
+                          onDraftFilesChange={handleDraftFilesChange}
                           onWorktreeEnabled={handleWorktreeEnabled}
                           onWorktreeMerged={handleWorktreeMerged}
                           onOpenTerminal={(cwd) => useWorkspaceStore.getState().createTerminal(cwd)}

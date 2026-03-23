@@ -611,6 +611,7 @@ interface WorkspaceState {
   closePanelInLayout: (panelId: string) => void;
   swapPanels: (panelId1: string, panelId2: string) => void;
   movePanel: (sourcePanelId: string, targetPanelId: string, position: 'left' | 'right' | 'top' | 'bottom' | 'center') => void;
+  insertAtRootEdge: (sourcePanelId: string, edge: 'left' | 'right' | 'top' | 'bottom') => void;
   updatePanelSizes: (groupId: string, sizes: number[]) => void;
   applyLayoutPreset: (preset: LayoutPreset, widgets: LayoutWidgetInfo[]) => void;
   saveLayout: () => void;
@@ -950,6 +951,61 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
     if (newTree) {
       set({ layoutTree: newTree });
     }
+  },
+
+  insertAtRootEdge: (sourcePanelId, edge) => {
+    const { layoutTree } = get();
+    if (!layoutTree) return;
+
+    // Find the source node
+    const sourceNode = findNode(layoutTree, sourcePanelId);
+    if (!sourceNode || sourceNode.type !== 'leaf') {
+      console.warn('[WorkspaceStore] Cannot insert at root edge: source panel not found or not a leaf');
+      return;
+    }
+
+    // Remove the source from current location
+    let treeWithoutSource = removeNode(layoutTree, sourcePanelId);
+    if (!treeWithoutSource) {
+      // Source was the only node, nothing to move
+      console.warn('[WorkspaceStore] Cannot insert at root edge: source is the only panel');
+      return;
+    }
+
+    // Create new leaf with new ID for the moved widget
+    const newLeaf: LayoutLeaf = {
+      type: 'leaf',
+      id: generateLayoutId(),
+      widgetType: sourceNode.widgetType,
+      widgetId: sourceNode.widgetId,
+    };
+
+    // Determine direction based on edge
+    const direction: 'horizontal' | 'vertical' =
+      edge === 'left' || edge === 'right' ? 'horizontal' : 'vertical';
+
+    // Order children based on edge (left/top = new panel first, right/bottom = new panel last)
+    const children: LayoutNode[] = edge === 'left' || edge === 'top'
+      ? [newLeaf, treeWithoutSource]
+      : [treeWithoutSource, newLeaf];
+
+    // Calculate sizes - new panel gets 25%, existing layout gets 75%
+    const newPanelSize = 25;
+    const existingSize = 75;
+    const sizes = edge === 'left' || edge === 'top'
+      ? [newPanelSize, existingSize]
+      : [existingSize, newPanelSize];
+
+    // Create new root group
+    const newRoot: LayoutGroup = {
+      type: 'group',
+      id: 'root',
+      direction,
+      children,
+      sizes,
+    };
+
+    set({ layoutTree: newRoot });
   },
 
   updatePanelSizes: (groupId, sizes) => {
