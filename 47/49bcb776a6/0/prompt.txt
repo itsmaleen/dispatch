@@ -1,0 +1,21 @@
+how can we update this electron app to allow for multiple windows so that I can work on different folders at the same time
+
+---
+
+yes go ahead
+
+---
+
+create a commit with a proper message of all changes done
+
+---
+
+the markdown files weren't included?
+
+---
+
+commit separately as documentation
+
+---
+
+you don't need to go outside of this foler
