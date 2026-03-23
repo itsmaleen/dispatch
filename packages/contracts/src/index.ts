@@ -8,3 +8,4 @@ export * from './widget';
 export * from './terminal';
 export * from './worktree';
 export * from './agent-console';
+export * from './project-state';

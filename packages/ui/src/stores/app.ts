@@ -417,6 +417,45 @@ export const api = {
     if (!data.ok) throw new Error(data.error);
     return data.sessions;
   },
+
+  // Project State API
+  async getProjectState(projectPath: string): Promise<import('@acc/contracts').ProjectState | null> {
+    const res = await fetch(`${getApiUrl()}/api/project-state?projectPath=${encodeURIComponent(projectPath)}`);
+    const data = await res.json();
+    if (!data.ok) return null;
+    return data.state;
+  },
+
+  async saveProjectState(projectPath: string, state: import('@acc/contracts').ProjectState): Promise<void> {
+    await fetch(`${getApiUrl()}/api/project-state`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectPath, state }),
+    });
+  },
+
+  async deleteProjectState(projectPath: string): Promise<void> {
+    await fetch(`${getApiUrl()}/api/project-state?projectPath=${encodeURIComponent(projectPath)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  async checkProjectStateExists(projectPath: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${getApiUrl()}/api/project-state/exists?projectPath=${encodeURIComponent(projectPath)}`);
+      const data = await res.json();
+      return data.ok && data.exists;
+    } catch {
+      return false;
+    }
+  },
+
+  async listProjectStates(): Promise<Array<{ projectPath: string; savedAt: string }>> {
+    const res = await fetch(`${getApiUrl()}/api/project-states`);
+    const data = await res.json();
+    if (!data.ok) return [];
+    return data.projects;
+  },
 };
 
 interface AppState {

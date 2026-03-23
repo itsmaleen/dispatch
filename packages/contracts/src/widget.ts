@@ -201,7 +201,32 @@ export type WidgetData =
   | { kind: 'video'; data: VideoWidgetData }
   | { kind: 'plan'; data: PlanWidgetData };
 
-// ============ Layout types ============
+// ============ TMux-style Layout Tree Types ============
+
+/** Widget type for layout tree leaves */
+export type LayoutWidgetType = 'agent-console' | 'tasks' | 'agent-status' | 'terminal';
+
+/** A leaf node represents a single widget in the layout */
+export interface LayoutLeaf {
+  type: 'leaf';
+  id: string;
+  widgetType: LayoutWidgetType;
+  widgetId: string; // ID of the agent console, 'tasks-widget', or 'agent-status-widget'
+}
+
+/** A group node represents a split container with children */
+export interface LayoutGroup {
+  type: 'group';
+  id: string;
+  direction: 'horizontal' | 'vertical';
+  children: LayoutNode[];
+  sizes: number[]; // Percentage sizes for each child
+}
+
+/** Layout tree node - either a leaf (single widget) or group (container) */
+export type LayoutNode = LayoutLeaf | LayoutGroup;
+
+// ============ Legacy Layout types ============
 
 export interface WidgetLayout {
   /** Layout ID */

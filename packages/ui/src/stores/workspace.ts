@@ -1,4 +1,9 @@
 import { create } from 'zustand';
+import type {
+  ProjectState,
+  SavedTerminalState,
+  SavedConsoleState,
+} from '@acc/contracts';
 
 // Agent type matching Workspace.tsx
 export interface WorkspaceAgent {
@@ -638,6 +643,47 @@ interface WorkspaceState {
   clearConsole: (consoleId: string) => void;
   closeFocusedConsole: () => void;
   toggleMaximizeFocusedWidget: () => void;
+
+  // Project State Persistence
+  // Full console data getter (set by Workspace.tsx for state capture)
+  getFullConsoleData: (() => FullConsoleData[]) | null;
+  // Full terminal data getter (set by Workspace.tsx for state capture)
+  getFullTerminalData: (() => FullTerminalData[]) | null;
+  // Register data getters (called by Workspace.tsx)
+  registerDataGetters: (getters: {
+    getConsoles: () => FullConsoleData[];
+    getTerminals: () => FullTerminalData[];
+  }) => void;
+  // Capture current workspace state for saving
+  captureProjectState: () => ProjectState | null;
+  // Apply restored state callback (set by Workspace.tsx)
+  onApplyProjectState: ((state: ProjectState) => Promise<void>) | null;
+  // Register apply callback
+  registerApplyStateCallback: (callback: (state: ProjectState) => Promise<void>) => void;
+  // Apply a restored project state
+  applyProjectState: (state: ProjectState) => Promise<void>;
+}
+
+// Full console data for state capture (includes thread/session info)
+export interface FullConsoleData {
+  id: string;
+  agentId: string;
+  threadId?: string;
+  sessionId?: string;
+  label?: string;
+  accentColor?: string;
+  cwd?: string;
+  worktreePath?: string;
+  worktreeBranch?: string;
+}
+
+// Full terminal data for state capture
+export interface FullTerminalData {
+  id: string;
+  name: string;
+  cwd: string;
+  createdBy?: 'user' | 'agent';
+  labels?: Record<string, string>;
 }
 
 export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
@@ -663,6 +709,9 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
   onMaximizeConsole: null,
   onRestoreConsole: null,
   onClearConsole: null,
+  getFullConsoleData: null,
+  getFullTerminalData: null,
+  onApplyProjectState: null,
 
   // Setters (called by Workspace.tsx to sync state)
   setWorkspacePath: (path) => set({ workspacePath: path }),
@@ -1083,5 +1132,100 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
       }
       set({ maximizedWidgetId: focusedWidgetId });
     }
+  },
+
+  // Project State Persistence
+  registerDataGetters: (getters) => set({
+    getFullConsoleData: getters.getConsoles,
+    getFullTerminalData: getters.getTerminals,
+  }),
+
+  registerApplyStateCallback: (callback) => set({ onApplyProjectState: callback }),
+
+  captureProjectState: () => {
+    const {
+      workspacePath,
+      getFullConsoleData,
+      getFullTerminalData,
+      layoutTree,
+      focusedWidgetId,
+      tasksVisible,
+      showAgentStatus,
+    } = get();
+
+    if (!workspacePath) {
+      console.warn('[WorkspaceStore] Cannot capture state: no workspace path');
+      return null;
+    }
+
+    // Get full console data from Workspace.tsx
+    const consoles: SavedConsoleState[] = getFullConsoleData
+      ? getFullConsoleData().map((c) => ({
+          id: c.id,
+          threadId: c.threadId,
+          sessionId: c.sessionId,
+          label: c.label,
+          accentColor: c.accentColor,
+          cwd: c.cwd,
+          worktreePath: c.worktreePath,
+          worktreeBranch: c.worktreeBranch,
+        }))
+      : [];
+
+    // Get full terminal data from Workspace.tsx
+    const terminals: SavedTerminalState[] = getFullTerminalData
+      ? getFullTerminalData().map((t) => ({
+          id: t.id,
+          name: t.name,
+          cwd: t.cwd,
+          createdBy: t.createdBy,
+          labels: t.labels,
+        }))
+      : [];
+
+    const state: ProjectState = {
+      version: 1,
+      projectPath: workspacePath,
+      savedAt: new Date().toISOString(),
+      terminals,
+      consoles,
+      layoutTree: layoutTree as ProjectState['layoutTree'],
+      focusedWidgetId,
+      tasksVisible,
+      showAgentStatus,
+    };
+
+    console.log('[WorkspaceStore] Captured project state:', {
+      terminals: terminals.length,
+      consoles: consoles.length,
+      hasLayout: !!layoutTree,
+    });
+
+    return state;
+  },
+
+  applyProjectState: async (state) => {
+    const { onApplyProjectState } = get();
+
+    if (!onApplyProjectState) {
+      console.warn('[WorkspaceStore] Cannot apply state: no callback registered');
+      return;
+    }
+
+    console.log('[WorkspaceStore] Applying project state:', {
+      terminals: state.terminals.length,
+      consoles: state.consoles.length,
+      hasLayout: !!state.layoutTree,
+    });
+
+    // Delegate to Workspace.tsx for actual restoration
+    await onApplyProjectState(state);
+
+    // Apply UI state after terminals/consoles are restored
+    set({
+      tasksVisible: state.tasksVisible,
+      showAgentStatus: state.showAgentStatus,
+      focusedWidgetId: state.focusedWidgetId,
+    });
   },
 }));

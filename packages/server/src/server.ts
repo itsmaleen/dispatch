@@ -1954,6 +1954,72 @@ Format your response as plain text only:
         }, 500);
       }
     });
+
+    // =========================================================================
+    // PROJECT STATE ENDPOINTS
+    // =========================================================================
+
+    // Get project state
+    this.app.get('/api/project-state', async (c) => {
+      const projectPath = c.req.query('projectPath');
+      if (!projectPath) {
+        return c.json({ ok: false, error: 'projectPath query parameter required' }, 400);
+      }
+
+      const { getProjectStateService } = await import('./services/project-state');
+      const service = getProjectStateService();
+      const state = await service.load(projectPath);
+      return c.json({ ok: true, state });
+    });
+
+    // Check if project state exists
+    this.app.get('/api/project-state/exists', async (c) => {
+      const projectPath = c.req.query('projectPath');
+      if (!projectPath) {
+        return c.json({ ok: false, error: 'projectPath query parameter required' }, 400);
+      }
+
+      const { getProjectStateService } = await import('./services/project-state');
+      const service = getProjectStateService();
+      const exists = await service.exists(projectPath);
+      return c.json({ ok: true, exists });
+    });
+
+    // Save project state
+    this.app.put('/api/project-state', async (c) => {
+      const body = await c.req.json();
+      const { projectPath, state } = body;
+
+      if (!projectPath || !state) {
+        return c.json({ ok: false, error: 'projectPath and state required' }, 400);
+      }
+
+      const { getProjectStateService } = await import('./services/project-state');
+      const service = getProjectStateService();
+      await service.save(projectPath, state);
+      return c.json({ ok: true });
+    });
+
+    // Delete project state
+    this.app.delete('/api/project-state', async (c) => {
+      const projectPath = c.req.query('projectPath');
+      if (!projectPath) {
+        return c.json({ ok: false, error: 'projectPath query parameter required' }, 400);
+      }
+
+      const { getProjectStateService } = await import('./services/project-state');
+      const service = getProjectStateService();
+      await service.delete(projectPath);
+      return c.json({ ok: true });
+    });
+
+    // List all project states
+    this.app.get('/api/project-states', async (c) => {
+      const { getProjectStateService } = await import('./services/project-state');
+      const service = getProjectStateService();
+      const projects = await service.list();
+      return c.json({ ok: true, projects });
+    });
   }
 
   private async createAdapter(config: AdapterConfig): Promise<AdapterImplementation> {

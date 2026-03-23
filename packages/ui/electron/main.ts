@@ -102,6 +102,47 @@ class WindowManager {
       });
     });
 
+    // Handle window close - allow renderer to save state first
+    let isClosing = false;
+    let closeTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    // Handler for close-ready acknowledgment from renderer
+    const closeReadyHandler = (event: Electron.IpcMainEvent) => {
+      // Only respond to events from this window
+      if (event.sender.id !== win.webContents.id) return;
+
+      if (closeTimeout) {
+        clearTimeout(closeTimeout);
+        closeTimeout = null;
+      }
+      log(`Window ${windowId} ready to close - save complete`);
+      ipcMain.removeListener("window:close-ready", closeReadyHandler);
+      win.destroy();
+    };
+
+    win.on("close", (event) => {
+      if (isClosing) return; // Already in closing flow
+
+      // Prevent immediate close
+      event.preventDefault();
+      isClosing = true;
+
+      log(`Window ${windowId} closing - notifying renderer to save state`);
+
+      // Listen for renderer acknowledgment
+      ipcMain.on("window:close-ready", closeReadyHandler);
+
+      // Notify renderer to save state
+      win.webContents.send("window:closing");
+
+      // Set a timeout in case renderer doesn't respond
+      closeTimeout = setTimeout(() => {
+        log(`Window ${windowId} close timeout - forcing close`);
+        ipcMain.removeListener("window:close-ready", closeReadyHandler);
+        win.destroy();
+      }, 5000); // 5 second timeout
+    });
+
     return win;
   }
 

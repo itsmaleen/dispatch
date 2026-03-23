@@ -14,6 +14,8 @@ declare global {
         getId: () => number;
         getInitialFolderPath: () => string | undefined;
         create: (folderPath?: string) => Promise<{ ok: boolean }>;
+        /** Register callback for window close - allows saving state before window closes */
+        onClosing: (callback: () => Promise<void>) => () => void;
       };
       server: {
         getInfo: () => Promise<{ port: number; pid?: number }>;

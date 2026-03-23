@@ -73,6 +73,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
     getId: () => windowId,
     getInitialFolderPath: () => initialFolderPath,
     create: (folderPath?: string) => ipcRenderer.invoke("window:create", folderPath),
+    // Window close handling - allows renderer to save state before close
+    onClosing: (callback: () => Promise<void>) => {
+      const handler = async () => {
+        try {
+          await callback();
+        } catch (err) {
+          console.error("[preload] Error in onClosing callback:", err);
+        }
+        // Signal to main process that we're ready to close
+        ipcRenderer.send("window:close-ready");
+      };
+      ipcRenderer.on("window:closing", handler);
+      return () => ipcRenderer.removeListener("window:closing", handler);
+    },
   },
 
   // Server info - URLs available immediately (no race condition)

@@ -2173,6 +2173,165 @@ export function Workspace() {
   }, [terminals, realTerminals, tasksVisible, showAgentStatus]);
 
   // ============================================================================
+  // PROJECT STATE PERSISTENCE
+  // ============================================================================
+
+  // Ref to track if we've already restored state for this project
+  const hasRestoredStateRef = useRef<string | null>(null);
+
+  // Register data getters for state capture (once on mount)
+  useEffect(() => {
+    useWorkspaceStore.getState().registerDataGetters({
+      getConsoles: () => terminals.map(t => ({
+        id: t.id,
+        agentId: t.agent.id,
+        threadId: t.threadId,
+        sessionId: t.resumeSessionId,
+        label: t.settings?.label,
+        accentColor: t.settings?.accentColor,
+        cwd: t.path,
+        worktreePath: t.worktreePath,
+        worktreeBranch: t.worktreeBranch,
+      })),
+      getTerminals: () => realTerminals.map(t => ({
+        id: t.id,
+        name: t.name,
+        cwd: t.cwd,
+        createdBy: t.createdBy,
+        labels: t.labels,
+      })),
+    });
+  }, [terminals, realTerminals]);
+
+  // Register apply state callback for restoration (once on mount)
+  // Uses refs to access latest state/handlers without re-registering
+  useEffect(() => {
+    useWorkspaceStore.getState().registerApplyStateCallback(async (state) => {
+      console.log('[Workspace] Applying project state:', state);
+
+      // Restore terminals (PTY terminals)
+      for (const savedTerminal of state.terminals) {
+        try {
+          const res = await fetch(`${getApiUrl()}/api/terminals`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: savedTerminal.name,
+              cwd: savedTerminal.cwd,
+              initialCommand: savedTerminal.initialCommand,
+              labels: savedTerminal.labels,
+            }),
+          });
+          const data = await res.json();
+          if (data.ok && data.terminal) {
+            setRealTerminals(prev => [...prev, data.terminal]);
+          }
+        } catch (err) {
+          console.error('[Workspace] Failed to restore terminal:', savedTerminal.name, err);
+        }
+      }
+
+      // Restore consoles (agent consoles) using the ref for latest handler
+      for (const savedConsole of state.consoles) {
+        // Create console with resume options if thread exists
+        const options: ConsoleResumeOptions | undefined = savedConsole.threadId
+          ? {
+              threadId: savedConsole.threadId,
+              resume: !!savedConsole.sessionId,
+              sessionId: savedConsole.sessionId,
+              projectPath: savedConsole.cwd || state.projectPath,
+            }
+          : undefined;
+
+        // Use the first available agent ID (claude-code-local is typical)
+        // The handleNewTerminal will find the correct agent
+        handleNewTerminalRef.current('claude-code-local', options);
+      }
+
+      // Apply layout tree if present
+      if (state.layoutTree) {
+        useWorkspaceStore.getState().setLayoutTree(state.layoutTree as LayoutNode);
+      }
+    });
+  }, []);
+
+  // Auto-restore project state when workspace path changes
+  useEffect(() => {
+    if (!workspacePath) return;
+    if (hasRestoredStateRef.current === workspacePath) return; // Already restored
+
+    const restoreState = async () => {
+      try {
+        const state = await api.getProjectState(workspacePath);
+        if (state && (state.terminals.length > 0 || state.consoles.length > 0)) {
+          console.log('[Workspace] Found saved state for project:', workspacePath);
+          hasRestoredStateRef.current = workspacePath;
+          await useWorkspaceStore.getState().applyProjectState(state);
+        }
+      } catch (err) {
+        console.error('[Workspace] Failed to restore project state:', err);
+      }
+    };
+
+    // Small delay to ensure workspace is initialized
+    const timeout = setTimeout(restoreState, 500);
+    return () => clearTimeout(timeout);
+  }, [workspacePath]);
+
+  // Auto-save project state on changes (debounced)
+  const saveStateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!workspacePath) return;
+    if (terminals.length === 0 && realTerminals.length === 0) return;
+
+    // Debounce saves
+    if (saveStateTimeoutRef.current) {
+      clearTimeout(saveStateTimeoutRef.current);
+    }
+
+    saveStateTimeoutRef.current = setTimeout(async () => {
+      const state = useWorkspaceStore.getState().captureProjectState();
+      if (state) {
+        try {
+          await api.saveProjectState(workspacePath, state);
+          console.log('[Workspace] Auto-saved project state');
+        } catch (err) {
+          console.error('[Workspace] Failed to auto-save project state:', err);
+        }
+      }
+    }, 30000); // 30 second debounce
+
+    return () => {
+      if (saveStateTimeoutRef.current) {
+        clearTimeout(saveStateTimeoutRef.current);
+      }
+    };
+  }, [workspacePath, terminals, realTerminals, layoutTree, tasksVisible, showAgentStatus]);
+
+  // Save state before window closes (Electron integration)
+  useEffect(() => {
+    // Only run in Electron environment
+    if (!window.electronAPI?.window?.onClosing) return;
+
+    const cleanup = window.electronAPI.window.onClosing(async () => {
+      if (!workspacePath) return;
+
+      console.log('[Workspace] Window closing - saving state...');
+      const state = useWorkspaceStore.getState().captureProjectState();
+      if (state) {
+        try {
+          await api.saveProjectState(workspacePath, state);
+          console.log('[Workspace] State saved before close');
+        } catch (err) {
+          console.error('[Workspace] Failed to save state before close:', err);
+        }
+      }
+    });
+
+    return cleanup;
+  }, [workspacePath]);
+
+  // ============================================================================
   // CTRL+C DOUBLE-PRESS TO STOP AGENT (Claude Code style)
   // ============================================================================
   const lastCtrlCTimeRef = useRef<number>(0);
