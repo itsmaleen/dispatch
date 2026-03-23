@@ -1,6 +1,6 @@
 /**
- * Analytics service types for Dispatch telemetry.
- * 
+ * Analytics service types for Merry telemetry.
+ *
  * Based on T3Code's anonymous telemetry approach:
  * - No PII collection
  * - Hashed installation IDs
@@ -55,10 +55,10 @@ export interface AnalyticsService {
 }
 
 /**
- * Standard event names for Dispatch telemetry.
+ * Standard event names for Merry telemetry.
  * Following T3Code's naming convention: category.action.detail
  */
-export const DispatchEvents = {
+export const MerryEvents = {
   // App lifecycle
   APP_LAUNCHED: 'app.launched',
   APP_SHUTDOWN: 'app.shutdown',
@@ -93,4 +93,8 @@ export const DispatchEvents = {
   ERROR_OCCURRED: 'error.occurred',
 } as const;
 
-export type DispatchEventName = typeof DispatchEvents[keyof typeof DispatchEvents];
+export type MerryEventName = typeof MerryEvents[keyof typeof MerryEvents];
+
+// Legacy alias for backwards compatibility
+export const DispatchEvents = MerryEvents;
+export type DispatchEventName = MerryEventName;

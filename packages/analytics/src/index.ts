@@ -1,28 +1,28 @@
 /**
- * @dispatch/analytics - Anonymous telemetry for Dispatch
- * 
+ * @merry/analytics - Anonymous telemetry for Merry
+ *
  * Usage:
  * ```typescript
- * import { createAnalytics, DispatchEvents } from '@dispatch/analytics';
- * 
+ * import { createAnalytics, MerryEvents } from '@merry/analytics';
+ *
  * const analytics = createAnalytics({
- *   posthogKey: process.env.DISPATCH_POSTHOG_KEY!,
+ *   posthogKey: process.env.MERRY_POSTHOG_KEY!,
  *   appVersion: '0.1.0',
  *   clientType: 'desktop',
  * });
- * 
- * analytics.record(DispatchEvents.APP_LAUNCHED, {
+ *
+ * analytics.record(MerryEvents.APP_LAUNCHED, {
  *   platform: process.platform,
  * });
- * 
+ *
  * // On shutdown
  * await analytics.shutdown();
  * ```
  * 
  * Environment variables:
- * - DISPATCH_POSTHOG_KEY: PostHog project API key
- * - DISPATCH_POSTHOG_HOST: PostHog host (default: https://us.i.posthog.com)
- * - DISPATCH_TELEMETRY_ENABLED: Enable/disable telemetry (default: true)
+ * - MERRY_POSTHOG_KEY: PostHog project API key
+ * - MERRY_POSTHOG_HOST: PostHog host (default: https://us.i.posthog.com)
+ * - MERRY_TELEMETRY_ENABLED: Enable/disable telemetry (default: true)
  */
 
 export * from './types.js';
@@ -40,11 +40,11 @@ import { createNoopAnalytics } from './noop.js';
  * If telemetry is disabled (via config or environment), returns a no-op service.
  * 
  * Environment variables:
- * - DISPATCH_TELEMETRY_ENABLED: Set to 'false' to disable telemetry
+ * - MERRY_TELEMETRY_ENABLED: Set to 'false' to disable telemetry
  */
 export function createAnalytics(config: AnalyticsConfig): AnalyticsService {
   // Check environment for telemetry disable
-  const envEnabled = process.env.DISPATCH_TELEMETRY_ENABLED;
+  const envEnabled = process.env.MERRY_TELEMETRY_ENABLED;
   const isEnabled = config.enabled !== false && envEnabled !== 'false';
   
   if (!isEnabled) {
@@ -64,27 +64,27 @@ export function createAnalytics(config: AnalyticsConfig): AnalyticsService {
  * Create analytics from environment variables.
  * 
  * Required environment variables:
- * - DISPATCH_POSTHOG_KEY: PostHog project API key
+ * - MERRY_POSTHOG_KEY: PostHog project API key
  * 
  * Optional environment variables:
- * - DISPATCH_POSTHOG_HOST: PostHog host (default: https://us.i.posthog.com)
- * - DISPATCH_TELEMETRY_ENABLED: Enable/disable telemetry (default: true)
+ * - MERRY_POSTHOG_HOST: PostHog host (default: https://us.i.posthog.com)
+ * - MERRY_TELEMETRY_ENABLED: Enable/disable telemetry (default: true)
  */
 export function createAnalyticsFromEnv(options: {
   appVersion: string;
   clientType: 'desktop' | 'cli';
 }): AnalyticsService {
-  const posthogKey = process.env.DISPATCH_POSTHOG_KEY;
+  const posthogKey = process.env.MERRY_POSTHOG_KEY;
   
   if (!posthogKey) {
-    console.warn('[analytics] DISPATCH_POSTHOG_KEY not set, disabling telemetry');
+    console.warn('[analytics] MERRY_POSTHOG_KEY not set, disabling telemetry');
     return createNoopAnalytics();
   }
   
   return createAnalytics({
     posthogKey,
-    posthogHost: process.env.DISPATCH_POSTHOG_HOST,
-    enabled: process.env.DISPATCH_TELEMETRY_ENABLED !== 'false',
+    posthogHost: process.env.MERRY_POSTHOG_HOST,
+    enabled: process.env.MERRY_TELEMETRY_ENABLED !== 'false',
     appVersion: options.appVersion,
     clientType: options.clientType,
   });

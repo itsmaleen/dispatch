@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build and install Dispatch to /Applications
+# Build and install Merry to /Applications
 # Run from project root: ./scripts/build-and-install.sh
 
 set -e
@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 RELEASE_DIR="$PROJECT_DIR/packages/ui/release"
-APP_NAME="Dispatch"
+APP_NAME="Merry"
 DMG_NAME="$APP_NAME-0.1.0-arm64.dmg"
 
 echo "📦 Installing from $RELEASE_DIR/$DMG_NAME..."
@@ -39,4 +39,4 @@ hdiutil detach "$VOLUME_NAME" -quiet
 echo "✅ Installed to /Applications/$APP_NAME.app"
 echo ""
 echo "To run: open '/Applications/$APP_NAME.app'"
-echo "Or use Spotlight: Cmd+Space → 'Dispatch'"
+echo "Or use Spotlight: Cmd+Space → 'Merry'"

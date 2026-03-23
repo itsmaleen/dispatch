@@ -1,5 +1,5 @@
 /**
- * Dispatch - Server
+ * Merry - Server
  *
  * Provides:
  * - Adapter management (Claude Code, OpenClaw)

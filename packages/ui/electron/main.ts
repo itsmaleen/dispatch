@@ -26,7 +26,7 @@ const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
 
 // Separate identity for dev vs prod (allows running both simultaneously)
 const APP_NAME = isDev ? "Merry (Dev)" : "Merry";
-const USER_DATA_DIR = isDev ? "dispatch-dev" : "dispatch";
+const USER_DATA_DIR = isDev ? "merry-dev" : "merry";
 
 const DEFAULT_SERVER_PORT = isDev ? 3333 : 3334; // Different ports for dev/prod
 const MAX_RESTART_ATTEMPTS = 5;

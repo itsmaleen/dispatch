@@ -1,6 +1,6 @@
 # Electron Architecture Documentation Index
 
-This documentation provides a comprehensive exploration of the Agent Command Center (Dispatch) Electron application's window and folder management system.
+This documentation provides a comprehensive exploration of the Agent Command Center (Merry) Electron application's window and folder management system.
 
 ## Documentation Files
 
@@ -171,7 +171,7 @@ Key Source Files:
 1. Check: ELECTRON_QUICK_REFERENCE.md "Troubleshooting" section
 2. Review: ARCHITECTURE_DIAGRAM.md "Server Lifecycle"
 3. Read: ELECTRON_ARCHITECTURE.md section 3 (Server Lifecycle)
-4. Logs: ~/.dispatch(-dev)/logs/{main,server}.log
+4. Logs: ~/.merry(-dev)/logs/{main,server}.log
 
 ### Task: Understand IPC Communication
 1. Study: ARCHITECTURE_DIAGRAM.md "IPC Channel Map"

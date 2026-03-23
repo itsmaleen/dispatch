@@ -26,4 +26,4 @@ bun run build
 echo "🔐 Signing and notarizing DMG..."
 cd packages/ui && bun run build:electron:sign
 
-echo "✅ Done. Signed DMG: packages/ui/release/Dispatch-0.1.0-arm64.dmg"
+echo "✅ Done. Signed DMG: packages/ui/release/Merry-0.1.0-arm64.dmg"

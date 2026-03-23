@@ -26,7 +26,7 @@ import { executeTerminalTool, getTerminalToolSchema } from './services/terminal-
 import { getAgentConsoleLauncher, type AgentConsoleLauncher, type AgentConsole, type LaunchAgentOptions } from './services/agent-console-launcher';
 import { getSemanticSearchService, type CommandInfo } from './services/semantic-search';
 import type { TerminalClientMessage, CreateTerminalOptions, TerminalToolInput } from '@acc/contracts';
-import { initAnalytics, getAnalytics, shutdownAnalytics, DispatchEvents } from './analytics';
+import { initAnalytics, getAnalytics, shutdownAnalytics, MerryEvents } from './analytics';
 
 interface ManagedAdapter {
   implementation: AdapterImplementation;
@@ -295,7 +295,7 @@ export class CommandCenterServer {
         const result = await extractor.extract(output);
         
         // Track task extraction
-        getAnalytics().record(DispatchEvents.TASK_EXTRACTED, {
+        getAnalytics().record(MerryEvents.TASK_EXTRACTED, {
           taskCount: result.tasks?.length ?? 0,
         });
         
@@ -474,7 +474,7 @@ export class CommandCenterServer {
         });
         
         // Track session creation
-        getAnalytics().record(DispatchEvents.SESSION_CREATED, {
+        getAnalytics().record(MerryEvents.SESSION_CREATED, {
           hasWorktree: !!worktreePath,
           isResume: !!resume,
         });
@@ -2658,7 +2658,7 @@ Format your response as plain text only:
       appVersion: process.env.npm_package_version ?? '0.0.1',
       clientType: 'desktop',
     });
-    analytics.record(DispatchEvents.APP_LAUNCHED, {
+    analytics.record(MerryEvents.APP_LAUNCHED, {
       platform: process.platform,
       arch: process.arch,
     });
@@ -2969,7 +2969,7 @@ Format your response as plain text only:
 
   async stop(): Promise<void> {
     // Track app shutdown
-    getAnalytics().record(DispatchEvents.APP_SHUTDOWN);
+    getAnalytics().record(MerryEvents.APP_SHUTDOWN);
     
     // Flush analytics before shutting down
     await shutdownAnalytics();

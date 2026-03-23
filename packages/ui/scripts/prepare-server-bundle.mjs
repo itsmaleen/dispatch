@@ -80,9 +80,9 @@ async function main() {
     main: './dist/index.js',
   }, null, 2));
 
-  // 5. Inline @dispatch/analytics (since it was a workspace: dep)
-  console.log('  → Inlining @dispatch/analytics...');
-  const analyticsTarget = join(bundleDir, 'node_modules/@dispatch/analytics');
+  // 5. Inline @merry/analytics (since it was a workspace: dep)
+  console.log('  → Inlining @merry/analytics...');
+  const analyticsTarget = join(bundleDir, 'node_modules/@merry/analytics');
   await rm(analyticsTarget, { recursive: true }).catch(() => {});
   await mkdir(join(analyticsTarget, 'dist'), { recursive: true });
   await cp(join(analyticsDir, 'dist'), join(analyticsTarget, 'dist'), { recursive: true });
@@ -101,8 +101,8 @@ async function main() {
   }
   await writeFile(join(analyticsTarget, 'package.json'), JSON.stringify(analyticsBundlePkg, null, 2));
 
-  // Install @dispatch/analytics runtime dependencies (e.g. posthog-node)
-  console.log('  → Installing @dispatch/analytics dependencies...');
+  // Install @merry/analytics runtime dependencies (e.g. posthog-node)
+  console.log('  → Installing @merry/analytics dependencies...');
   execSync('npm install --omit=dev --legacy-peer-deps', {
     cwd: analyticsTarget,
     stdio: 'inherit',

@@ -1,5 +1,5 @@
 /**
- * Anonymous user identification for Dispatch telemetry.
+ * Anonymous user identification for Merry telemetry.
  * 
  * Based on T3Code's approach:
  * 1. Try to get existing anonymous ID from state dir
@@ -13,12 +13,12 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 
 /**
- * Get the Dispatch state directory.
+ * Get the Merry state directory.
  * Creates it if it doesn't exist.
  */
 function getStateDir(): string {
   const homeDir = os.homedir();
-  const stateDir = path.join(homeDir, '.dispatch');
+  const stateDir = path.join(homeDir, '.merry');
   
   if (!fs.existsSync(stateDir)) {
     fs.mkdirSync(stateDir, { recursive: true });

@@ -1,6 +1,6 @@
-# @dispatch/analytics
+# @merry/analytics
 
-Anonymous telemetry for Dispatch. Based on [T3Code's telemetry implementation](https://github.com/pingdotgg/t3code).
+Anonymous telemetry for Merry. Based on [T3Code's telemetry implementation](https://github.com/pingdotgg/t3code).
 
 ## Features
 
@@ -12,7 +12,7 @@ Anonymous telemetry for Dispatch. Based on [T3Code's telemetry implementation](h
 ## Installation
 
 ```bash
-bun add @dispatch/analytics
+bun add @merry/analytics
 ```
 
 ## Usage
@@ -20,16 +20,16 @@ bun add @dispatch/analytics
 ### Basic Usage
 
 ```typescript
-import { createAnalytics, DispatchEvents } from '@dispatch/analytics';
+import { createAnalytics, MerryEvents } from '@merry/analytics';
 
 const analytics = createAnalytics({
-  posthogKey: process.env.DISPATCH_POSTHOG_KEY!,
+  posthogKey: process.env.MERRY_POSTHOG_KEY!,
   appVersion: '0.1.0',
   clientType: 'desktop',
 });
 
 // Record events
-analytics.record(DispatchEvents.APP_LAUNCHED, {
+analytics.record(MerryEvents.APP_LAUNCHED, {
   platform: process.platform,
 });
 
@@ -40,7 +40,7 @@ await analytics.shutdown();
 ### Using Environment Variables
 
 ```typescript
-import { createAnalyticsFromEnv } from '@dispatch/analytics';
+import { createAnalyticsFromEnv } from '@merry/analytics';
 
 const analytics = createAnalyticsFromEnv({
   appVersion: '0.1.0',
@@ -51,7 +51,7 @@ const analytics = createAnalyticsFromEnv({
 ### Testing
 
 ```typescript
-import { createMockAnalytics } from '@dispatch/analytics';
+import { createMockAnalytics } from '@merry/analytics';
 
 const analytics = createMockAnalytics();
 
@@ -71,9 +71,9 @@ expect(events).toContainEqual({
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DISPATCH_POSTHOG_KEY` | PostHog project API key | Required |
-| `DISPATCH_POSTHOG_HOST` | PostHog host URL | `https://us.i.posthog.com` |
-| `DISPATCH_TELEMETRY_ENABLED` | Enable/disable telemetry | `true` |
+| `MERRY_POSTHOG_KEY` | PostHog project API key | Required |
+| `MERRY_POSTHOG_HOST` | PostHog host URL | `https://us.i.posthog.com` |
+| `MERRY_TELEMETRY_ENABLED` | Enable/disable telemetry | `true` |
 
 ### Programmatic Config
 
@@ -91,7 +91,7 @@ interface AnalyticsConfig {
 
 ## Events
 
-Standard events are defined in `DispatchEvents`:
+Standard events are defined in `MerryEvents`:
 
 | Event | Description |
 |-------|-------------|
@@ -124,14 +124,14 @@ Standard events are defined in `DispatchEvents`:
 
 ### Opt-out
 
-Set `DISPATCH_TELEMETRY_ENABLED=false` or pass `enabled: false` in config.
+Set `MERRY_TELEMETRY_ENABLED=false` or pass `enabled: false` in config.
 
 ## Getting a PostHog Key
 
 1. Go to [app.posthog.com/signup](https://app.posthog.com/signup)
 2. Create a free account (1M events/month free)
 3. Go to Project Settings → Project API Key
-4. Copy the key to `DISPATCH_POSTHOG_KEY`
+4. Copy the key to `MERRY_POSTHOG_KEY`
 
 ## Development
 

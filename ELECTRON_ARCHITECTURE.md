@@ -1,5 +1,5 @@
 # Electron Application Architecture Analysis
-## Agent Command Center (Dispatch)
+## Agent Command Center (Merry)
 
 ### Project: /Users/marlin/agent-command-center
 
@@ -20,15 +20,15 @@
 ### Development vs Production:
 ```javascript
 const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
-const APP_NAME = isDev ? "Dispatch (Dev)" : "Dispatch";
-const USER_DATA_DIR = isDev ? "dispatch-dev" : "dispatch";
+const APP_NAME = isDev ? "Merry (Dev)" : "Merry";
+const USER_DATA_DIR = isDev ? "merry-dev" : "merry";
 const DEFAULT_SERVER_PORT = isDev ? 3333 : 3334;
 ```
 
 ### State Directory:
 ```
-~/.dispatch-dev/          (development)
-~/.dispatch/              (production)
+~/.merry-dev/          (development)
+~/.merry/              (production)
 ```
 
 ---
@@ -117,7 +117,7 @@ const child = spawn(process.execPath, [serverEntry], {
 ACC_MODE=desktop
 ACC_SERVER_PORT={dynamicPort}
 ACC_AUTH_TOKEN={sessionToken}
-ACC_STATE_DIR=~/.dispatch(-dev)/
+ACC_STATE_DIR=~/.merry(-dev)/
 ACC_NO_BROWSER=1
 NODE_ENV=development|production
 FORCE_COLOR=0
@@ -131,7 +131,7 @@ PATH={augmented with tool paths}
 - Health check: `GET /health` endpoint
 
 ### Logging:
-- Log directory: `~/.dispatch(-dev)/logs/`
+- Log directory: `~/.merry(-dev)/logs/`
 - Files: `main.log`, `server.log`
 - Server output: Piped to logs, printed to console in dev mode
 
@@ -399,8 +399,8 @@ Currently: **Single main window model**
 ```json
 {
   "build": {
-    "appId": "com.dispatch.app",
-    "productName": "Dispatch",
+    "appId": "com.merry.app",
+    "productName": "Merry",
     "files": ["dist/**/*", "dist-electron/**/*"],
     "extraResources": [{
       "from": "server-bundle",

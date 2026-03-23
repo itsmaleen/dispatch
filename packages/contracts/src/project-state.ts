@@ -67,7 +67,7 @@ export interface SavedConsoleState {
 
 /**
  * Complete project state snapshot.
- * Serialized to JSON and stored in ~/.dispatch/project-states/<hash>.json
+ * Serialized to JSON and stored in ~/.merry/project-states/<hash>.json
  */
 export interface ProjectState {
   /** Schema version for future migrations */

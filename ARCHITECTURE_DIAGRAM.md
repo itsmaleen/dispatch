@@ -4,7 +4,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     DISPATCH ELECTRON APP                       │
+│                     MERRY ELECTRON APP                       │
 └─────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
@@ -106,7 +106,7 @@
 │  ├─ ACC_MODE=desktop                                           │
 │  ├─ ACC_SERVER_PORT={dynamicPort}                              │
 │  ├─ ACC_AUTH_TOKEN={sessionToken}                              │
-│  ├─ ACC_STATE_DIR=~/.dispatch(-dev)/                           │
+│  ├─ ACC_STATE_DIR=~/.merry(-dev)/                           │
 │  ├─ ELECTRON_RUN_AS_NODE=1                                     │
 │  └─ PATH={augmented with tools}                                │
 │                                                                  │
@@ -117,7 +117,7 @@
 │  ├─ Thread Management                                          │
 │  └─ Adapter Communication                                      │
 │                                                                  │
-│  Logging: ~/.dispatch(-dev)/logs/                              │
+│  Logging: ~/.merry(-dev)/logs/                              │
 │  ├─ main.log                                                   │
 │  └─ server.log                                                 │
 └─────────────────────────────────────────────────────────────────┘
@@ -363,14 +363,14 @@ Preload Bridge
 ## Storage Locations
 
 ```
-Development (~/.dispatch-dev/)
+Development (~/.merry-dev/)
 ├─ logs/
 │  ├─ main.log
 │  └─ server.log
 ├─ Cache/
 └─ Preferences/
 
-Production (~/.dispatch/)
+Production (~/.merry/)
 ├─ logs/
 │  ├─ main.log
 │  └─ server.log

@@ -6,7 +6,7 @@ import {
   createMockAnalytics, 
   createNoopAnalytics, 
   createAnalytics,
-  DispatchEvents,
+  MerryEvents,
   getTelemetryIdentifier,
   clearTelemetryIdentifier,
 } from './index.js';
@@ -15,8 +15,8 @@ describe('MockAnalyticsService', () => {
   it('should record events', () => {
     const analytics = createMockAnalytics();
     
-    analytics.record(DispatchEvents.APP_LAUNCHED, { platform: 'darwin' });
-    analytics.record(DispatchEvents.SESSION_CREATED, { agentType: 'claude-code' });
+    analytics.record(MerryEvents.APP_LAUNCHED, { platform: 'darwin' });
+    analytics.record(MerryEvents.SESSION_CREATED, { agentType: 'claude-code' });
     
     const events = analytics.getEvents();
     expect(events).toHaveLength(2);
@@ -33,7 +33,7 @@ describe('MockAnalyticsService', () => {
   it('should clear events', () => {
     const analytics = createMockAnalytics();
     
-    analytics.record(DispatchEvents.APP_LAUNCHED);
+    analytics.record(MerryEvents.APP_LAUNCHED);
     expect(analytics.getEvents()).toHaveLength(1);
     
     analytics.clearEvents();
@@ -45,7 +45,7 @@ describe('MockAnalyticsService', () => {
     expect(analytics.isEnabled()).toBe(true);
     
     analytics.setEnabled(false);
-    analytics.record(DispatchEvents.APP_LAUNCHED);
+    analytics.record(MerryEvents.APP_LAUNCHED);
     
     expect(analytics.isEnabled()).toBe(false);
     expect(analytics.getEvents()).toHaveLength(0);
@@ -54,7 +54,7 @@ describe('MockAnalyticsService', () => {
   it('should record events without properties', () => {
     const analytics = createMockAnalytics();
     
-    analytics.record(DispatchEvents.COMMAND_PALETTE_OPENED);
+    analytics.record(MerryEvents.COMMAND_PALETTE_OPENED);
     
     const events = analytics.getEvents();
     expect(events[0]).toEqual({
@@ -69,7 +69,7 @@ describe('NoopAnalyticsService', () => {
     const analytics = createNoopAnalytics();
     
     expect(() => {
-      analytics.record(DispatchEvents.APP_LAUNCHED, { platform: 'darwin' });
+      analytics.record(MerryEvents.APP_LAUNCHED, { platform: 'darwin' });
     }).not.toThrow();
   });
   
@@ -111,8 +111,8 @@ describe('createAnalytics', () => {
     expect(analytics.isEnabled()).toBe(false);
   });
   
-  it('should return noop service when DISPATCH_TELEMETRY_ENABLED is false', () => {
-    process.env.DISPATCH_TELEMETRY_ENABLED = 'false';
+  it('should return noop service when MERRY_TELEMETRY_ENABLED is false', () => {
+    process.env.MERRY_TELEMETRY_ENABLED = 'false';
     
     const analytics = createAnalytics({
       posthogKey: 'test-key',
@@ -135,7 +135,7 @@ describe('createAnalytics', () => {
 });
 
 describe('getTelemetryIdentifier', () => {
-  const testStateDir = path.join(os.tmpdir(), 'dispatch-test-' + Date.now());
+  const testStateDir = path.join(os.tmpdir(), 'merry-test-' + Date.now());
   const originalHome = process.env.HOME;
   
   beforeEach(() => {
@@ -177,11 +177,11 @@ describe('getTelemetryIdentifier', () => {
   });
 });
 
-describe('DispatchEvents', () => {
+describe('MerryEvents', () => {
   it('should have expected event names', () => {
-    expect(DispatchEvents.APP_LAUNCHED).toBe('app.launched');
-    expect(DispatchEvents.SESSION_CREATED).toBe('session.created');
-    expect(DispatchEvents.TASK_EXTRACTED).toBe('task.extracted');
-    expect(DispatchEvents.VIEW_CHANGED).toBe('view.changed');
+    expect(MerryEvents.APP_LAUNCHED).toBe('app.launched');
+    expect(MerryEvents.SESSION_CREATED).toBe('session.created');
+    expect(MerryEvents.TASK_EXTRACTED).toBe('task.extracted');
+    expect(MerryEvents.VIEW_CHANGED).toBe('view.changed');
   });
 });

@@ -1,4 +1,4 @@
-// Dispatch - Shared Contracts
+// Merry - Shared Contracts
 
 export * from './adapter';
 export * from './events';

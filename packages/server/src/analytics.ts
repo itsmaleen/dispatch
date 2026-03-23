@@ -4,15 +4,15 @@
  * Initializes telemetry and provides a global analytics instance.
  */
 
-import { 
-  createAnalyticsFromEnv, 
+import {
+  createAnalyticsFromEnv,
   createNoopAnalytics,
   type AnalyticsService,
-  DispatchEvents,
-} from '@dispatch/analytics';
+  MerryEvents,
+} from '@merry/analytics';
 
 // Re-export events for convenience
-export { DispatchEvents } from '@dispatch/analytics';
+export { MerryEvents } from '@merry/analytics';
 
 let analytics: AnalyticsService | null = null;
 

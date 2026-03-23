@@ -100,7 +100,7 @@ mainWindow?.webContents.send("adapter:event", ...)
 
 ```javascript
 new BrowserWindow({
-  title: APP_NAME,           // "Dispatch" or "Dispatch (Dev)"
+  title: APP_NAME,           // "Merry" or "Merry (Dev)"
   width: 1400,
   height: 900,
   minWidth: 1000,
@@ -158,7 +158,7 @@ For the server process:
 ACC_MODE=desktop
 ACC_SERVER_PORT={dynamicPort}
 ACC_AUTH_TOKEN={sessionToken}
-ACC_STATE_DIR=~/.dispatch(-dev)/
+ACC_STATE_DIR=~/.merry(-dev)/
 ACC_NO_BROWSER=1
 NODE_ENV=development|production
 FORCE_COLOR=0
@@ -264,8 +264,8 @@ useWorkspaceStore.getState().restoreLayout()
 
 | Aspect | Dev | Prod |
 |--------|-----|------|
-| App Name | "Dispatch (Dev)" | "Dispatch" |
-| User Data Dir | `~/.dispatch-dev/` | `~/.dispatch/` |
+| App Name | "Merry (Dev)" | "Merry" |
+| User Data Dir | `~/.merry-dev/` | `~/.merry/` |
 | Default Port | 3333 | 3334 |
 | Window Loading | http://localhost:5173 | file:///dist/index.html |
 | DevTools | Opened | Closed |
@@ -275,8 +275,8 @@ useWorkspaceStore.getState().restoreLayout()
 
 ### Log Locations
 ```
-~/.dispatch-dev/logs/     # Development logs
-~/.dispatch/logs/         # Production logs
+~/.merry-dev/logs/     # Development logs
+~/.merry/logs/         # Production logs
 ├─ main.log               # Main process logs
 └─ server.log             # Server process logs
 ```
@@ -329,7 +329,7 @@ useWorkspaceStore.getState().toggleMaximizeFocusedWidget()
 ## Troubleshooting
 
 ### Server Not Starting
-1. Check `~/.dispatch(-dev)/logs/main.log` and `server.log`
+1. Check `~/.merry(-dev)/logs/main.log` and `server.log`
 2. Verify port 3333/3334 not in use: `lsof -i :3333`
 3. Check server entry point exists
 4. Verify `package.json` build is correct
@@ -355,8 +355,8 @@ useWorkspaceStore.getState().toggleMaximizeFocusedWidget()
 
 ```json
 {
-  "appId": "com.dispatch.app",
-  "productName": "Dispatch",
+  "appId": "com.merry.app",
+  "productName": "Merry",
   "files": ["dist/**/*", "dist-electron/**/*"],
   "extraResources": [
     { "from": "server-bundle", "to": "server" }

@@ -4,7 +4,7 @@
  * Manages per-project workspace state persistence.
  * Saves and restores terminals, consoles, layout, and UI state.
  *
- * State files are stored in ~/.dispatch/project-states/<hash>.json
+ * State files are stored in ~/.merry/project-states/<hash>.json
  * where hash is a SHA-256 of the project path (first 16 chars).
  */
 
@@ -17,7 +17,7 @@ import type { ProjectState } from '@acc/contracts';
 // CONFIGURATION
 // ============================================================================
 
-const STATE_DIR = process.env.ACC_STATE_DIR || path.join(process.env.HOME || '~', '.dispatch');
+const STATE_DIR = process.env.ACC_STATE_DIR || path.join(process.env.HOME || '~', '.merry');
 const PROJECT_STATES_DIR = path.join(STATE_DIR, 'project-states');
 
 // ============================================================================

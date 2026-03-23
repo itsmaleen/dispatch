@@ -1,7 +1,7 @@
 {
-  "name": "@dispatch/analytics",
+  "name": "@merry/analytics",
   "version": "0.0.1",
-  "description": "Anonymous telemetry for Dispatch",
+  "description": "Anonymous telemetry for Merry",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

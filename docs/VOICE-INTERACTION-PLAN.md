@@ -1,10 +1,10 @@
-# Voice Interaction Layer for Dispatch
+# Voice Interaction Layer for Merry
 
 > **Goal:** Create a sticky "wow moment" through voice-native agent orchestration — talk to your agents, hear them respond.
 
 ## Vision
 
-Transform Dispatch from a visual-only interface to a voice-native coding companion:
+Transform Merry from a visual-only interface to a voice-native coding companion:
 
 1. **Talk to agents** — "Claude, refactor the auth module" → agent starts working
 2. **Agents talk back** — Progress updates, questions, and summaries spoken aloud
@@ -57,7 +57,7 @@ Transform Dispatch from a visual-only interface to a voice-native coding compani
 └─────────────────────────────────────────────────────────────────┘
              ↓                              ↑
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Dispatch Core (existing)                      │
+│                    Merry Core (existing)                      │
 │  - Session Manager                                               │
 │  - Adapters (Claude Code, OpenClaw)                             │
 │  - Task Store                                                    │
@@ -274,7 +274,7 @@ const INTENT_PATTERNS = [
 **Deliverable:** Production-quality voice interaction
 
 ### Phase 4: Advanced Features (Week 4+)
-- [ ] Wake word detection ("Hey Dispatch")
+- [ ] Wake word detection ("Hey Merry")
 - [ ] Multi-speaker diarization
 - [ ] Voice cloning (user's voice for custom agents)
 - [ ] Conversation memory ("do that again")
@@ -331,13 +331,13 @@ const INTENT_PATTERNS = [
 
 ### TTS Cache
 - Key: `hash(text + voiceId + style)`
-- Storage: Local filesystem (`~/.dispatch/speech-cache/`)
+- Storage: Local filesystem (`~/.merry/speech-cache/`)
 - Eviction: LRU, max 500MB
 - Pre-cache common phrases: "Done", "Working on it", "I found an error"
 
 ### STT Model Cache
 - Download models on first use
-- Store in `~/.dispatch/models/`
+- Store in `~/.merry/models/`
 - Whisper: ~1.5GB, Kokoro: ~200MB
 
 ---
@@ -375,7 +375,7 @@ interface SpeechConfig {
   input: {
     pushToTalkKey: string;  // 'Space', 'F1', etc.
     enableWakeWord: boolean;
-    wakeWord: string;  // 'hey dispatch'
+    wakeWord: string;  // 'hey merry'
   };
   cache: {
     enabled: boolean;
