@@ -2102,6 +2102,8 @@ export function Workspace() {
   // Register real terminal creation callback for command palette (once on mount)
   useEffect(() => {
     useWorkspaceStore.getState().registerTerminalCallback(async (cwd?: string) => {
+      // Create terminal via HTTP - the server no longer broadcasts terminal:created events,
+      // so the terminal only appears in this window (fixing multi-window isolation)
       try {
         const res = await fetch(`${getApiUrl()}/api/terminals`, {
           method: 'POST',
@@ -2110,7 +2112,6 @@ export function Workspace() {
         });
         const data = await res.json();
         if (data.ok && data.terminal) {
-          // Add to state - the layout sync effect will add it to the layout
           setRealTerminals(prev => [...prev, data.terminal]);
         } else {
           console.error('Failed to create terminal:', data.error);

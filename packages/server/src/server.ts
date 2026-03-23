@@ -2069,13 +2069,10 @@ Format your response as plain text only:
   private setupTerminalEventForwarding(): void {
     if (!this.terminalManager) return;
 
-    // Forward terminal:created events
-    this.terminalManager.on('terminal:created', (terminal) => {
-      this.broadcastRaw({
-        type: 'terminal:created',
-        terminal,
-      });
-    });
+    // NOTE: terminal:created events are NOT broadcast to all clients.
+    // The HTTP POST /api/terminals returns the terminal directly to the caller,
+    // so only the requesting window adds it to state.
+    // This prevents terminals from appearing in all windows when using multi-window mode.
 
     // Forward terminal:output events to attached clients only
     this.terminalManager.on('terminal:output', (terminalId: string, data: string) => {
