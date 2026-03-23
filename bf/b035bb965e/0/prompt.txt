@@ -1,0 +1,5 @@
+how can we update this electron app to allow for multiple windows so that I can work on different folders at the same time
+
+---
+
+yes go ahead
