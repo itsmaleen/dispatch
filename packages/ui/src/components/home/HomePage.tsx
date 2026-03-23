@@ -68,7 +68,7 @@ export function HomePage({ onStartTask, onOpenTask }: HomePageProps) {
           <div className="text-center space-y-4">
             <div className="text-6xl">🦞</div>
             <h1 className="text-2xl font-semibold text-zinc-100">
-              Welcome to Dispatch
+              Welcome to Merry
             </h1>
             <p className="text-zinc-400">
               Open a project to start working with AI agents

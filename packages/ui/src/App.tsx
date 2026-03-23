@@ -419,7 +419,7 @@ export function App() {
             <code className="bg-zinc-800 px-1 rounded">
               ./scripts/start-server.sh
             </code>{" "}
-            from the Dispatch repo.
+            from the Merry repo.
           </div>
         )}
         <Workspace />
@@ -437,7 +437,7 @@ export function App() {
           <code className="bg-zinc-800 px-1 rounded">
             ./scripts/start-server.sh
           </code>{" "}
-          from the Dispatch repo, or restart the app.
+          from the Merry repo, or restart the app.
         </div>
       )}
       {/* Title bar area */}
@@ -451,7 +451,7 @@ export function App() {
               <span className="text-zinc-300">{currentProject.name}</span>
             </>
           ) : (
-            <span className="font-semibold">Dispatch</span>
+            <span className="font-semibold">Merry</span>
           )}
         </div>
 

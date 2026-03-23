@@ -154,7 +154,7 @@ export function AgentsPanel({ isOpen, onClose, serverUrl }: AgentsPanelProps) {
   };
 
   // Simple prompt that can be sent to OpenClaw via any channel (Telegram, etc.)
-  const agentPrompt = `Install the ACC Channel plugin and connect to Dispatch.
+  const agentPrompt = `Install the ACC Channel plugin and connect to Merry.
 
 Run: curl -sL https://raw.githubusercontent.com/moltyfromclaw/acc-channel/main/install.sh | bash
 
@@ -310,7 +310,7 @@ openclaw gateway restart`;
 
                 {/* Connection Method Tabs */}
                 <div className="space-y-3">
-                  <label className="text-xs text-zinc-400">How will OpenClaw connect to Dispatch?</label>
+                  <label className="text-xs text-zinc-400">How will OpenClaw connect to Merry?</label>
                   <div className="flex flex-wrap gap-1">
                     {[
                       { id: 'local' as const, label: 'Same Machine' },
@@ -339,14 +339,14 @@ openclaw gateway restart`;
                   {/* Provider-specific instructions and input */}
                   {tunnelProvider === 'local' && (
                     <p className="text-xs text-zinc-500">
-                      OpenClaw is running on the same machine as Dispatch. Connection URL: <code className="text-green-400">{getAccWsUrl()}</code>
+                      OpenClaw is running on the same machine as Merry. Connection URL: <code className="text-green-400">{getAccWsUrl()}</code>
                     </p>
                   )}
 
                   {tunnelProvider === 'ngrok' && (
                     <div className="space-y-2">
                       <p className="text-xs text-zinc-500">
-                        Run <code className="text-zinc-300">ngrok http {getServerPort()}</code> on your Dispatch machine, then paste the URL:
+                        Run <code className="text-zinc-300">ngrok http {getServerPort()}</code> on your Merry machine, then paste the URL:
                       </p>
                       <input
                         type="text"
@@ -391,7 +391,7 @@ openclaw gateway restart`;
                   {tunnelProvider === 'custom' && (
                     <div className="space-y-2">
                       <p className="text-xs text-zinc-500">
-                        Enter the full URL where Dispatch is accessible:
+                        Enter the full URL where Merry is accessible:
                       </p>
                       <input
                         type="text"

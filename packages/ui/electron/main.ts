@@ -8,7 +8,7 @@
  * - Works identically in dev and packaged builds
  */
 
-import { app, BrowserWindow, ipcMain, dialog, Menu } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, Menu, nativeImage } from "electron";
 import * as path from "path";
 import * as fs from "fs";
 import * as net from "net";
@@ -25,7 +25,7 @@ const __dirname = path.dirname(__filename);
 const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
 
 // Separate identity for dev vs prod (allows running both simultaneously)
-const APP_NAME = isDev ? "Dispatch (Dev)" : "Dispatch";
+const APP_NAME = isDev ? "Merry (Dev)" : "Merry";
 const USER_DATA_DIR = isDev ? "dispatch-dev" : "dispatch";
 
 const DEFAULT_SERVER_PORT = isDev ? 3333 : 3334; // Different ports for dev/prod
@@ -63,6 +63,12 @@ class WindowManager {
 
     log(`Creating window ${windowId} - Server URLs: API=${apiUrl} WS=${wsUrl}`);
 
+    // Determine icon path based on dev/prod mode
+    const iconName = isDev ? "icon-dev" : "icon";
+    const iconExt = process.platform === "win32" ? "ico" : process.platform === "darwin" ? "icns" : "png";
+    const iconPath = path.join(__dirname, "..", "build", `${iconName}.${iconExt}`);
+    log(`Icon path: ${iconPath} (exists: ${fs.existsSync(iconPath)})`);
+
     const win = new BrowserWindow({
       title: APP_NAME,
       width: 1400,
@@ -71,6 +77,7 @@ class WindowManager {
       minHeight: 600,
       titleBarStyle: "hiddenInset",
       trafficLightPosition: { x: 16, y: 16 },
+      icon: iconPath,
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
@@ -504,9 +511,9 @@ async function bootstrap(): Promise<void> {
 function createApplicationMenu(): void {
   const template: Electron.MenuItemConstructorOptions[] = [
     {
-      label: app.name,
+      label: APP_NAME,
       submenu: [
-        { role: 'about' },
+        { label: `About ${APP_NAME}`, role: 'about' },
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
@@ -617,9 +624,21 @@ if (!gotSingleInstanceLock) {
 // ============ App Lifecycle ============
 
 app.whenReady().then(() => {
+  // Set dock icon on macOS (works in dev mode)
+  if (process.platform === "darwin" && app.dock) {
+    const iconName = isDev ? "icon-dev" : "icon";
+    const dockIconPath = path.join(__dirname, "..", "build", `${iconName}.png`);
+    if (fs.existsSync(dockIconPath)) {
+      app.dock.setIcon(nativeImage.createFromPath(dockIconPath));
+      log(`Dock icon set: ${dockIconPath}`);
+    } else {
+      log(`Dock icon not found: ${dockIconPath}`);
+    }
+  }
+
   bootstrap().catch((error) => {
     log("Bootstrap failed:", error);
-    dialog.showErrorBox("Dispatch failed to start", String(error));
+    dialog.showErrorBox("Merry failed to start", String(error));
     app.quit();
   });
 

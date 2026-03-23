@@ -3701,7 +3701,7 @@ export function Workspace() {
               `Agent "${terminal.agent.name}" is not connected.\n\n` +
               `To connect this agent:\n` +
               `1. Install the ACC channel plugin on the OpenClaw instance\n` +
-              `2. Configure it to point to this Dispatch server\n` +
+              `2. Configure it to point to this Merry server\n` +
               `3. Restart the OpenClaw gateway\n\n` +
               `See Agents panel for setup instructions.`
             );
@@ -3959,8 +3959,8 @@ export function Workspace() {
         {/* Center: Title & Workspace Path */}
         <div className="flex items-center gap-3 flex-1 justify-center">
           <div className="flex items-center gap-2">
-            <span className="text-lg">📡</span>
-            <span className="text-sm font-semibold text-zinc-100 tracking-wide">Dispatch</span>
+            <span className="text-lg">🐐</span>
+            <span className="text-sm font-semibold text-zinc-100 tracking-wide">Merry</span>
           </div>
 
           <span className="text-zinc-700">|</span>
