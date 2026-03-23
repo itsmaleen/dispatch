@@ -1844,7 +1844,11 @@ Format your response as plain text only:
     // Send a message to an agent console
     this.app.post('/api/agent-consoles/:id/send', async (c) => {
       const id = c.req.param('id');
-      const { message } = await c.req.json<{ message: string }>();
+      const { message, mode, taskOptions } = await c.req.json<{
+        message: string;
+        mode?: 'default' | 'plan';
+        taskOptions?: Record<string, unknown>;
+      }>();
 
       if (!this.agentConsoleLauncher) {
         return c.json({ ok: false, error: 'Agent console launcher not initialized' }, 500);
@@ -1855,7 +1859,7 @@ Format your response as plain text only:
       }
 
       try {
-        await this.agentConsoleLauncher.sendMessage(id, message);
+        await this.agentConsoleLauncher.sendMessage(id, message, { mode, taskOptions });
         return c.json({ ok: true });
       } catch (error) {
         return c.json({

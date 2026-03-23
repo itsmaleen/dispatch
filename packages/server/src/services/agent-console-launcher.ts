@@ -170,7 +170,14 @@ export class AgentConsoleLauncher extends EventEmitter {
   /**
    * Send a follow-up message to an agent console
    */
-  async sendMessage(consoleId: string, message: string): Promise<void> {
+  async sendMessage(
+    consoleId: string,
+    message: string,
+    options?: {
+      mode?: 'default' | 'plan';
+      taskOptions?: Record<string, unknown>;
+    }
+  ): Promise<void> {
     const agentConsole = this.consoles.get(consoleId);
     if (!agentConsole) {
       throw new Error(`Console not found: ${consoleId}`);
@@ -183,7 +190,11 @@ export class AgentConsoleLauncher extends EventEmitter {
     agentConsole.status = 'running';
     this.emit('console:status_changed', consoleId, 'running');
 
-    await this.sessionManager.send(agentConsole.threadId, { message });
+    await this.sessionManager.send(agentConsole.threadId, {
+      message,
+      mode: options?.mode,
+      taskOptions: options?.taskOptions,
+    });
   }
 
   /**

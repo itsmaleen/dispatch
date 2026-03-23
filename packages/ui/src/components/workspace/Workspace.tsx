@@ -97,6 +97,16 @@ interface ConsoleLine {
   isStreaming?: boolean;
   /** Block index for tool_call lines (used to match input_json_delta updates) */
   blockIndex?: number;
+  /** Block ID for tool_call lines (unique identifier from SDK, used for activity.update matching) */
+  blockId?: string;
+  /** Tool name (for tool_call lines) */
+  toolName?: string;
+  /** Item ID for activity tracking (matches activity events) */
+  itemId?: string;
+  /** Tool result content (for displaying results like AskUserQuestion) */
+  toolResult?: unknown;
+  /** Parsed tool input JSON (for interactive tools like AskUserQuestion) */
+  toolInput?: Record<string, unknown>;
 }
 
 /** Agent console display settings */
@@ -326,6 +336,99 @@ function ConsoleLineItem({ line, showTimestamp = true }: { line: ConsoleLine; sh
     }
   };
 
+  // Check if this is an AskUserQuestion tool
+  const isAskUserQuestion = line.toolName === 'AskUserQuestion' && line.toolInput?.questions;
+
+  if (isAskUserQuestion) {
+    return (
+      <AskUserQuestionDisplay
+        line={line}
+        showTimestamp={showTimestamp}
+      />
+    );
+  }
+
+  // Check if this is an EnterPlanMode tool
+  const isEnterPlanMode = line.toolName === 'EnterPlanMode';
+  if (isEnterPlanMode) {
+    return (
+      <div className="flex items-start gap-2 py-1">
+        {showTimestamp && line.timestamp && (
+          <span className="text-[10px] text-zinc-600 font-mono w-16 flex-shrink-0">
+            {line.timestamp}
+          </span>
+        )}
+        <div className="flex items-center gap-2 px-2 py-1 bg-violet-500/10 border border-violet-500/30 rounded">
+          <Brain className="w-4 h-4 text-violet-400" />
+          <span className="text-violet-300 text-sm">Entering Plan Mode</span>
+          {line.isStreaming && (
+            <Loader2 className="w-3 h-3 text-violet-400 animate-spin" />
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Check if this is a TodoWrite tool
+  const isTodoWrite = line.toolName === 'TodoWrite' && line.toolInput?.todos;
+  if (isTodoWrite) {
+    return (
+      <TodoWriteDisplay line={line} showTimestamp={showTimestamp} />
+    );
+  }
+
+  // Check if this is a Task/Agent tool
+  const isTask = line.toolName === 'Task' && line.toolInput;
+  if (isTask) {
+    return (
+      <TaskDisplay line={line} showTimestamp={showTimestamp} />
+    );
+  }
+
+  // Check if this is ExitPlanMode
+  const isExitPlanMode = line.toolName === 'ExitPlanMode';
+  if (isExitPlanMode) {
+    return (
+      <div className="flex items-start gap-2 py-1">
+        {showTimestamp && line.timestamp && (
+          <span className="text-[10px] text-zinc-600 font-mono w-16 flex-shrink-0">
+            {line.timestamp}
+          </span>
+        )}
+        <div className="flex items-center gap-2 px-2 py-1 bg-emerald-500/10 border border-emerald-500/30 rounded">
+          <Check className="w-4 h-4 text-emerald-400" />
+          <span className="text-emerald-300 text-sm">Exiting Plan Mode - Ready to Execute</span>
+          {line.isStreaming && (
+            <Loader2 className="w-3 h-3 text-emerald-400 animate-spin" />
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Check if this is WebSearch
+  const isWebSearch = line.toolName === 'WebSearch' && line.toolInput;
+  if (isWebSearch) {
+    const query = line.toolInput?.query as string;
+    return (
+      <div className="flex items-start gap-2 py-1">
+        {showTimestamp && line.timestamp && (
+          <span className="text-[10px] text-zinc-600 font-mono w-16 flex-shrink-0">
+            {line.timestamp}
+          </span>
+        )}
+        <Globe className="w-4 h-4 text-cyan-400 flex-shrink-0 mt-0.5" />
+        <div className="flex flex-col">
+          <span className="text-cyan-400 text-sm">Searching web</span>
+          {query && <span className="text-zinc-400 text-xs font-mono">{query}</span>}
+          {line.isStreaming && (
+            <Loader2 className="w-3 h-3 text-cyan-400 animate-spin mt-1" />
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex items-start gap-2 py-0.5">
       {showTimestamp && line.timestamp && (
@@ -340,6 +443,162 @@ function ConsoleLineItem({ line, showTimestamp = true }: { line: ConsoleLine; sh
           <span className="inline-block w-2 h-4 ml-0.5 bg-current animate-pulse" />
         )}
       </span>
+    </div>
+  );
+}
+
+/** AskUserQuestion interactive display */
+function AskUserQuestionDisplay({ line, showTimestamp }: { line: ConsoleLine; showTimestamp?: boolean }) {
+  const questions = (line.toolInput?.questions as Array<{
+    question: string;
+    header?: string;
+    options: Array<{ label: string; description?: string }>;
+    multiSelect?: boolean;
+  }>) || [];
+
+  return (
+    <div className="py-2">
+      {showTimestamp && line.timestamp && (
+        <span className="text-[10px] text-zinc-600 font-mono block mb-1">
+          {line.timestamp}
+        </span>
+      )}
+      <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3">
+        <div className="flex items-center gap-2 mb-2">
+          <div className="w-5 h-5 rounded-full bg-blue-500/20 flex items-center justify-center">
+            <span className="text-blue-400 text-xs">?</span>
+          </div>
+          <span className="text-blue-300 text-sm font-medium">Question from Claude</span>
+          {line.isStreaming && (
+            <Loader2 className="w-3 h-3 text-blue-400 animate-spin" />
+          )}
+        </div>
+        {questions.map((q, qIdx) => (
+          <div key={qIdx} className="mt-2">
+            {q.header && (
+              <span className="text-[10px] uppercase tracking-wide text-zinc-500 block mb-1">
+                {q.header}
+              </span>
+            )}
+            <p className="text-zinc-200 text-sm mb-2">{q.question}</p>
+            <div className="flex flex-wrap gap-2">
+              {q.options.map((opt, optIdx) => (
+                <button
+                  key={optIdx}
+                  className="px-3 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 hover:border-blue-500/50 rounded-md text-zinc-300 hover:text-zinc-100 transition-colors cursor-not-allowed opacity-60"
+                  disabled
+                  title="Interactive questions not yet supported - respond in chat"
+                >
+                  {opt.label}
+                  {opt.description && (
+                    <span className="block text-[10px] text-zinc-500 mt-0.5">
+                      {opt.description}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+            <p className="text-[10px] text-zinc-500 mt-2 italic">
+              Reply in chat to answer this question
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** TodoWrite task list display */
+function TodoWriteDisplay({ line, showTimestamp }: { line: ConsoleLine; showTimestamp?: boolean }) {
+  const todos = (line.toolInput?.todos as Array<{
+    content: string;
+    status: 'pending' | 'in_progress' | 'completed';
+    activeForm?: string;
+  }>) || [];
+
+  const completed = todos.filter(t => t.status === 'completed').length;
+  const inProgress = todos.filter(t => t.status === 'in_progress').length;
+  const pending = todos.filter(t => t.status === 'pending').length;
+
+  return (
+    <div className="py-2">
+      {showTimestamp && line.timestamp && (
+        <span className="text-[10px] text-zinc-600 font-mono block mb-1">
+          {line.timestamp}
+        </span>
+      )}
+      <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-amber-400 text-sm font-medium">📋 Task List</span>
+          <span className="text-xs text-zinc-500">
+            {completed}✓ {inProgress}⏳ {pending}○
+          </span>
+          {line.isStreaming && (
+            <Loader2 className="w-3 h-3 text-amber-400 animate-spin" />
+          )}
+        </div>
+        <div className="space-y-1">
+          {todos.map((todo, idx) => (
+            <div key={idx} className="flex items-start gap-2 text-sm">
+              <span className="flex-shrink-0 mt-0.5">
+                {todo.status === 'completed' ? '✓' : todo.status === 'in_progress' ? '⏳' : '○'}
+              </span>
+              <span className={`${
+                todo.status === 'completed' ? 'text-zinc-500 line-through' :
+                todo.status === 'in_progress' ? 'text-amber-300' : 'text-zinc-300'
+              }`}>
+                {todo.status === 'in_progress' && todo.activeForm ? todo.activeForm : todo.content}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Task/Agent spawn display */
+function TaskDisplay({ line, showTimestamp }: { line: ConsoleLine; showTimestamp?: boolean }) {
+  const input = line.toolInput as {
+    description?: string;
+    prompt?: string;
+    subagent_type?: string;
+    model?: string;
+    run_in_background?: boolean;
+  } | undefined;
+
+  return (
+    <div className="py-2">
+      {showTimestamp && line.timestamp && (
+        <span className="text-[10px] text-zinc-600 font-mono block mb-1">
+          {line.timestamp}
+        </span>
+      )}
+      <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-3">
+        <div className="flex items-center gap-2 mb-1">
+          <Sparkles className="w-4 h-4 text-purple-400" />
+          <span className="text-purple-300 text-sm font-medium">Launching Agent</span>
+          {input?.subagent_type && (
+            <span className="text-xs px-1.5 py-0.5 bg-purple-500/20 rounded text-purple-300">
+              {input.subagent_type}
+            </span>
+          )}
+          {input?.run_in_background && (
+            <span className="text-xs px-1.5 py-0.5 bg-zinc-700 rounded text-zinc-400">
+              background
+            </span>
+          )}
+          {line.isStreaming && (
+            <Loader2 className="w-3 h-3 text-purple-400 animate-spin" />
+          )}
+        </div>
+        {input?.description && (
+          <p className="text-zinc-300 text-sm">{input.description}</p>
+        )}
+        {input?.prompt && (
+          <p className="text-zinc-500 text-xs mt-1 line-clamp-2">{input.prompt}</p>
+        )}
+      </div>
     </div>
   );
 }
@@ -2154,8 +2413,10 @@ export function Workspace() {
   terminalsRef.current = terminals;
   /** Map threadId → terminalId for immediate lookup (avoids React state race condition) */
   const threadToTerminalRef = useRef<Record<string, string>>({});
-  /** Accumulate tool input JSON per block index (for input_json_delta) */
-  const toolInputByBlockRef = useRef<Record<number, string>>({});
+  /** Accumulate tool input JSON per blockId (for input_json_delta) */
+  const toolInputByBlockRef = useRef<Record<string, string>>({});
+  /** Map blockIndex → blockId for current message (reset on message_start) */
+  const blockIndexToIdRef = useRef<Record<number, string>>({});
 
   // Fetch agents on mount
   const fetchAgents = useCallback(async () => {
@@ -3070,7 +3331,10 @@ export function Workspace() {
           } else if (blockType === 'tool_use' || blockType === 'server_tool_use') {
             const toolName = block?.name ?? 'Tool';
             const idx = blockIndex ?? 0;
-            toolInputByBlockRef.current[idx] = '';
+            // Map blockIndex to blockId for delta events
+            blockIndexToIdRef.current[idx] = blockId;
+            // Use blockId for tracking - ensures we can match deltas to the correct tool call
+            toolInputByBlockRef.current[blockId] = '';
             const line: TerminalLine = {
               id: `tool-${blockId}`,
               type: 'tool_call',
@@ -3078,6 +3342,8 @@ export function Workspace() {
               timestamp: makeTimestamp(),
               isStreaming: true,
               blockIndex: idx,
+              blockId: blockId,
+              toolName: toolName,
             };
             updateAllTerminals(t => ({ ...t, lines: [...t.lines, line], isStreaming: true }));
           }
@@ -3152,22 +3418,38 @@ export function Workspace() {
             // Accumulate tool input JSON and update tool_call line with human-readable detail
             const blockIdx = streamEvent?.index;
             if (typeof blockIdx === 'number') {
-              const acc = (toolInputByBlockRef.current[blockIdx] || '') + delta.partial_json;
-              toolInputByBlockRef.current[blockIdx] = acc;
-              const detail = tryExtractToolDetail(acc);
-              if (detail != null) {
+              // Look up blockId from blockIndex
+              const blockId = blockIndexToIdRef.current[blockIdx];
+              if (blockId) {
+                const acc = (toolInputByBlockRef.current[blockId] || '') + delta.partial_json;
+                toolInputByBlockRef.current[blockId] = acc;
+                const detail = tryExtractToolDetail(acc);
+
+                // Try to parse full JSON for interactive tools
+                let parsedInput: Record<string, unknown> | undefined;
+                try {
+                  parsedInput = JSON.parse(acc);
+                } catch {
+                  // JSON not complete yet
+                }
+
                 updateAllTerminalsRaw(prev => prev.map(t => {
                   if (!matchesTerminal(t)) return t;
+                  // Match by blockId (unique identifier) instead of blockIndex
                   const lineIdx = t.lines.findIndex(
-                    (l) => l.type === 'tool_call' && l.blockIndex === blockIdx
+                    (l) => l.type === 'tool_call' && l.blockId === blockId
                   );
                   if (lineIdx < 0) return t;
                   const line = t.lines[lineIdx];
-                  const baseContent = line.content.includes(': ') ? line.content.split(': ')[0] : line.content;
+                  const baseContent = line.toolName ?? (line.content.includes(': ') ? line.content.split(': ')[0] : line.content);
                   return {
                     ...t,
                     lines: t.lines.map((l, i) =>
-                      i === lineIdx ? { ...l, content: `${baseContent}: ${detail}` } : l
+                      i === lineIdx ? {
+                        ...l,
+                        content: detail != null ? `${baseContent}: ${detail}` : l.content,
+                        toolInput: parsedInput ?? l.toolInput,
+                      } : l
                     ),
                   };
                 }));
@@ -3211,17 +3493,49 @@ export function Workspace() {
         activityType === 'command' ? 'command' : 'info';
 
       const line: TerminalLine = {
-        id: `${Date.now()}-${Math.random()}`,
+        id: event.payload.itemId || `${Date.now()}-${Math.random()}`,
         type: lineType,
         content: event.payload.label + (event.payload.detail ? `: ${event.payload.detail}` : ''),
         timestamp: makeTimestamp(),
         isStreaming: event.payload.status === 'running',
+        itemId: event.payload.itemId,
+        toolName: event.payload.label,
       };
 
       updateAllTerminals(t => ({
         ...t,
         lines: [...t.lines, line],
         isStreaming: event.payload.status === 'running',
+      }));
+    }
+
+    // Handle activity.update events (updates existing activity by itemId)
+    if (event.type === 'activity.update' && event.payload?.itemId) {
+      const { itemId, detail, status, result } = event.payload;
+
+      updateAllTerminalsRaw(prev => prev.map(t => {
+        if (!matchesTerminal(t)) return t;
+
+        // Find the line with matching itemId
+        const lineIdx = t.lines.findIndex(l => l.itemId === itemId || l.id === itemId);
+        if (lineIdx < 0) return t;
+
+        const line = t.lines[lineIdx];
+        const toolName = line.toolName ?? (line.content.includes(': ') ? line.content.split(': ')[0] : line.content);
+
+        return {
+          ...t,
+          lines: t.lines.map((l, i) => {
+            if (i !== lineIdx) return l;
+            return {
+              ...l,
+              content: detail ? `${toolName}: ${detail}` : l.content,
+              isStreaming: status === 'running',
+              toolResult: result ?? l.toolResult,
+            };
+          }),
+          isStreaming: status === 'running' ? true : t.isStreaming,
+        };
       }));
     }
 
@@ -3281,7 +3595,10 @@ export function Workspace() {
 
     // Handle turn/item completion: update terminal streaming state and sync plan step + cost
     if (event.type === 'turn.completed' || event.type === 'item.completed') {
-      if (event.type === 'turn.completed') toolInputByBlockRef.current = {};
+      if (event.type === 'turn.completed') {
+        toolInputByBlockRef.current = {};
+        blockIndexToIdRef.current = {};
+      }
       const matchedTerminal = terminalsRef.current.find(matchesTerminal);
       const stepIdToComplete = matchedTerminal?.currentStepId;
       const usage = event.type === 'turn.completed' ? event.payload?.usage : undefined;

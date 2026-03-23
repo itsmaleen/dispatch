@@ -38,6 +38,12 @@ export interface TaskOptions {
   maxTurns?: number;
   /** Override model for this task */
   model?: string;
+  /** System prompt suffix to append to the default system prompt */
+  systemPromptSuffix?: string;
+  /** Allowed tools (restrict which tools the agent can use) */
+  allowedTools?: string[];
+  /** Disallowed tools (prevent specific tools from being used) */
+  disallowedTools?: string[];
 }
 
 interface QueuedMessage {
@@ -173,6 +179,21 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
     // Task options (classification is now handled by separate classifier service)
     const taskOptions: TaskOptions = options.taskOptions ?? {};
 
+    // Handle mode option - convert to system prompt suffix for plan mode
+    if (options.mode === 'plan') {
+      const planModePrompt = `\n\n[MODE: PLAN]
+You are in PLAN MODE. Before implementing anything:
+1. Analyze the task and identify all components that need to be created or modified
+2. Create a clear, step-by-step plan
+3. List the files that will need to be created or modified
+4. Identify potential challenges or edge cases
+5. Ask clarifying questions if anything is unclear
+6. Present your plan to the user and wait for approval before proceeding
+
+Do NOT write any code or make any changes until your plan is approved by the user.`;
+      taskOptions.systemPromptSuffix = (taskOptions.systemPromptSuffix || '') + planModePrompt;
+    }
+
     // Create a promise that will resolve when this turn completes
     const turnPromise = new Promise<string>((resolve, reject) => {
       const queuedMessage: QueuedMessage = { 
@@ -280,6 +301,21 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
       // Max turns (1 = single response)
       if (taskOpts.maxTurns) {
         sdkOptions.maxTurns = taskOpts.maxTurns;
+      }
+
+      // System prompt suffix
+      if (taskOpts.systemPromptSuffix) {
+        (sdkOptions as any).systemPromptSuffix = taskOpts.systemPromptSuffix;
+      }
+
+      // Allowed tools
+      if (taskOpts.allowedTools?.length) {
+        (sdkOptions as any).allowedTools = taskOpts.allowedTools;
+      }
+
+      // Disallowed tools
+      if (taskOpts.disallowedTools?.length) {
+        (sdkOptions as any).disallowedTools = taskOpts.disallowedTools;
       }
 
       // Create query with the message
@@ -671,32 +707,76 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
     try {
       // Try to parse - may fail if still accumulating
       const input = JSON.parse(json);
-      
+
       // File operations
       if (input.path) return input.path;
       if (input.file_path) return input.file_path;
       if (input.file) return input.file;
-      
+      if (input.notebook_path) return input.notebook_path;
+
       // Commands
       if (input.command) {
         const cmd = String(input.command);
         return cmd.length > 60 ? cmd.slice(0, 57) + '...' : cmd;
       }
-      
+
       // Search patterns
       if (input.pattern) return input.pattern;
       if (input.query) return input.query;
       if (input.regex) return input.regex;
-      
+
+      // URLs
+      if (input.url) return input.url;
+
+      // Task/Agent
+      if (input.description) return input.description;
+      if (input.prompt) {
+        const prompt = String(input.prompt);
+        return prompt.length > 50 ? prompt.slice(0, 47) + '...' : prompt;
+      }
+
+      // Skill
+      if (input.skill) return input.skill;
+
+      // Task ID
+      if (input.task_id) return `Task: ${input.task_id}`;
+      if (input.shell_id) return `Shell: ${input.shell_id}`;
+
+      // MCP
+      if (input.resource_uri) return input.resource_uri;
+
+      // AskUserQuestion - show first question header or question
+      if (input.questions && Array.isArray(input.questions) && input.questions.length > 0) {
+        const q = input.questions[0];
+        return q.header || (q.question?.slice(0, 40) + '...');
+      }
+
+      // TodoWrite - show count
+      if (input.todos && Array.isArray(input.todos)) {
+        const pending = input.todos.filter((t: any) => t.status === 'pending').length;
+        const inProgress = input.todos.filter((t: any) => t.status === 'in_progress').length;
+        const completed = input.todos.filter((t: any) => t.status === 'completed').length;
+        return `${completed}✓ ${inProgress}⏳ ${pending}○`;
+      }
+
       return undefined;
     } catch {
       // JSON not complete yet - try partial extraction
-      const pathMatch = json.match(/"(?:path|file_path|file)"\s*:\s*"([^"]+)"/);
+      const pathMatch = json.match(/"(?:path|file_path|file|notebook_path)"\s*:\s*"([^"]+)"/);
       if (pathMatch) return pathMatch[1];
-      
+
       const cmdMatch = json.match(/"command"\s*:\s*"([^"]{1,60})/);
       if (cmdMatch) return cmdMatch[1] + (json.includes(cmdMatch[0] + '"') ? '' : '...');
-      
+
+      const urlMatch = json.match(/"url"\s*:\s*"([^"]+)"/);
+      if (urlMatch) return urlMatch[1];
+
+      const skillMatch = json.match(/"skill"\s*:\s*"([^"]+)"/);
+      if (skillMatch) return skillMatch[1];
+
+      const descMatch = json.match(/"description"\s*:\s*"([^"]{1,50})/);
+      if (descMatch) return descMatch[1] + '...';
+
       return undefined;
     }
   }
@@ -712,12 +792,43 @@ export class ClaudeCodeAdapter implements AdapterImplementation {
   }
   
   private toolLabel(toolName: string): string {
+    // Exact matches first for all Claude Code tools
+    const exactLabels: Record<string, string> = {
+      'Read': 'Reading file',
+      'Write': 'Writing file',
+      'Edit': 'Editing file',
+      'Bash': 'Running command',
+      'Glob': 'Finding files',
+      'Grep': 'Searching content',
+      'WebFetch': 'Fetching URL',
+      'WebSearch': 'Searching web',
+      'AskUserQuestion': 'Asking question',
+      'EnterPlanMode': 'Entering plan mode',
+      'ExitPlanMode': 'Exiting plan mode',
+      'TodoWrite': 'Updating tasks',
+      'NotebookEdit': 'Editing notebook',
+      'Task': 'Launching agent',
+      'TaskOutput': 'Getting task output',
+      'KillShell': 'Stopping process',
+      'Skill': 'Running skill',
+      'EnterWorktree': 'Creating worktree',
+      'ExitWorktree': 'Exiting worktree',
+      'ListMcpResources': 'Listing MCP resources',
+      'ReadMcpResource': 'Reading MCP resource',
+      'Mcp': 'MCP operation',
+    };
+
+    if (exactLabels[toolName]) return exactLabels[toolName];
+
+    // Fallback to pattern matching
     const name = toolName.toLowerCase();
     if (name.includes('read')) return 'Reading file';
     if (name.includes('edit') || name.includes('write')) return 'Editing file';
     if (name.includes('bash') || name.includes('command')) return 'Running command';
     if (name.includes('glob') || name.includes('find')) return 'Searching files';
     if (name.includes('grep')) return 'Searching content';
+    if (name.includes('task')) return 'Running task';
+    if (name.includes('mcp')) return 'MCP operation';
     return toolName;
   }
   

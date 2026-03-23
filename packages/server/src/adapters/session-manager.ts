@@ -89,6 +89,10 @@ export interface SendMessageOptions {
   thinking?: { type: 'adaptive' } | { type: 'enabled'; budgetTokens?: number } | { type: 'disabled' };
   maxTurns?: number;
   model?: string;
+  /** Interaction mode - 'plan' triggers plan mode behavior */
+  mode?: 'default' | 'plan';
+  /** Adapter-specific task options */
+  taskOptions?: Record<string, unknown>;
 }
 
 /** Thread summary for listing */
@@ -369,6 +373,26 @@ export class SessionManager extends EventEmitter {
     if (options.thinking) sdkOpts.thinking = options.thinking;
     if (options.maxTurns) sdkOpts.maxTurns = options.maxTurns;
     if (options.model) sdkOpts.model = options.model;
+
+    // Handle plan mode - use system prompt suffix to guide planning behavior
+    if (options.mode === 'plan') {
+      const planModePrompt = `\n\n[MODE: PLAN]
+You are in PLAN MODE. Before implementing anything:
+1. Analyze the task and identify all components that need to be created or modified
+2. Create a clear, step-by-step plan
+3. List the files that will need to be created or modified
+4. Identify potential challenges or edge cases
+5. Ask clarifying questions if anything is unclear
+6. Present your plan to the user and wait for approval before proceeding
+
+Do NOT write any code or make any changes until your plan is approved by the user.`;
+      (sdkOpts as any).systemPromptSuffix = planModePrompt;
+    }
+
+    // Pass through additional task options
+    if (options.taskOptions) {
+      Object.assign(sdkOpts, options.taskOptions);
+    }
 
     // Resume from previous session if available
     if (thread.sessionId) {
