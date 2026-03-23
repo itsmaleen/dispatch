@@ -60,6 +60,30 @@ export function App() {
     discoverServerPort().then(() => setServerReady(true));
   }, []);
 
+  // Initialize with folder path from Electron (for multi-window support)
+  useEffect(() => {
+    if (!isElectron) return;
+
+    // Check URL params for folder path (passed when creating window)
+    const params = new URLSearchParams(window.location.search);
+    const folderFromUrl = params.get('folder');
+
+    // Also check Electron API
+    const folderFromElectron = window.electronAPI?.window?.getInitialFolderPath?.();
+
+    const initialFolder = folderFromUrl || folderFromElectron;
+
+    if (initialFolder && !currentProject) {
+      // Set as current project
+      const folderName = initialFolder.split('/').pop() || initialFolder;
+      setProject({
+        path: initialFolder,
+        name: folderName,
+        lastOpened: Date.now(),
+      });
+    }
+  }, [isElectron, currentProject, setProject]);
+
   // Initialize command registry with default commands (once)
   useEffect(() => {
     commandRegistry.clear();

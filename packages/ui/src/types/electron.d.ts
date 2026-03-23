@@ -10,12 +10,17 @@ export {};
 declare global {
   interface Window {
     electronAPI?: {
+      window: {
+        getId: () => number;
+        getInitialFolderPath: () => string | undefined;
+        create: (folderPath?: string) => Promise<{ ok: boolean }>;
+      };
       server: {
         getInfo: () => Promise<{ port: number; pid?: number }>;
         getPort: () => number;
         getApiUrl: () => string;
         getWsUrl: () => string;
-        onInfo: (callback: (info: { port: number }) => void) => () => void;
+        onInfo: (callback: (info: { port: number; windowId?: number; folderPath?: string }) => void) => () => void;
       };
       adapter: {
         connect: (adapterId: string, config: unknown) => Promise<{ ok: boolean }>;

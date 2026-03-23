@@ -7,7 +7,7 @@
  * - Server lifecycle fully managed by Electron
  * - Works identically in dev and packaged builds
  */
-import { app, BrowserWindow, ipcMain, dialog } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, Menu } from "electron";
 import * as path from "path";
 import * as fs from "fs";
 import * as net from "net";
@@ -29,8 +29,80 @@ const RESTART_BACKOFF_MAX_MS = 30000;
 const SERVER_STARTUP_TIMEOUT_MS = 15000;
 const STATE_DIR = path.join(os.homedir(), `.${USER_DATA_DIR}`);
 const LOG_DIR = path.join(STATE_DIR, "logs");
+// ============ Window Manager ============
+class WindowManager {
+    windows = new Map();
+    windowCounter = 0;
+    create(folderPath) {
+        const windowId = ++this.windowCounter;
+        const win = this.createWindow(windowId, folderPath);
+        this.windows.set(win.id, win);
+        win.on("closed", () => {
+            this.windows.delete(win.id);
+        });
+        return win;
+    }
+    createWindow(windowId, folderPath) {
+        // Set env vars BEFORE creating window so preload can access them
+        const apiUrl = `http://127.0.0.1:${serverPort}`;
+        const wsUrl = `ws://127.0.0.1:${serverPort}`;
+        process.env.ACC_SERVER_API_URL = apiUrl;
+        process.env.ACC_SERVER_WS_URL = wsUrl;
+        log(`Creating window ${windowId} - Server URLs: API=${apiUrl} WS=${wsUrl}`);
+        const win = new BrowserWindow({
+            title: APP_NAME,
+            width: 1400,
+            height: 900,
+            minWidth: 1000,
+            minHeight: 600,
+            titleBarStyle: "hiddenInset",
+            trafficLightPosition: { x: 16, y: 16 },
+            webPreferences: {
+                nodeIntegration: false,
+                contextIsolation: true,
+                preload: path.join(__dirname, "preload.js"),
+                additionalArguments: [`--window-id=${windowId}`],
+            },
+        });
+        if (isDev) {
+            // In dev, load from Vite dev server
+            const viteUrl = process.env.VITE_DEV_SERVER_URL || "http://localhost:5173";
+            const urlWithWindowId = `${viteUrl}?windowId=${windowId}${folderPath ? `&folder=${encodeURIComponent(folderPath)}` : ''}`;
+            win.loadURL(urlWithWindowId);
+            win.webContents.openDevTools();
+        }
+        else {
+            const htmlPath = path.join(__dirname, "../dist/index.html");
+            const urlParams = `?windowId=${windowId}${folderPath ? `&folder=${encodeURIComponent(folderPath)}` : ''}`;
+            win.loadFile(htmlPath, { search: urlParams });
+        }
+        // Send server info once page loads
+        win.webContents.on("did-finish-load", () => {
+            win.webContents.send("server-info", {
+                port: serverPort,
+                apiUrl,
+                wsUrl,
+                windowId,
+                folderPath,
+            });
+        });
+        return win;
+    }
+    getAll() {
+        return Array.from(this.windows.values());
+    }
+    get(id) {
+        return this.windows.get(id);
+    }
+    getFocused() {
+        return BrowserWindow.getFocusedWindow();
+    }
+    getCount() {
+        return this.windows.size;
+    }
+}
 // ============ State ============
-let mainWindow = null;
+const windowManager = new WindowManager();
 let serverProcess = null;
 let serverPort = 0; // Dynamically assigned
 let serverAuthToken = "";
@@ -263,12 +335,14 @@ function scheduleRestart(reason) {
         restartTimer = null;
         const started = await startServer();
         if (started) {
-            // Notify renderer of new server URL
-            mainWindow?.webContents.send("server-info", {
-                port: serverPort,
-                apiUrl: `http://127.0.0.1:${serverPort}`,
-                wsUrl: `ws://127.0.0.1:${serverPort}`,
-            });
+            // Notify all windows of new server URL
+            for (const win of windowManager.getAll()) {
+                win.webContents.send("server-info", {
+                    port: serverPort,
+                    apiUrl: `http://127.0.0.1:${serverPort}`,
+                    wsUrl: `ws://127.0.0.1:${serverPort}`,
+                });
+            }
         }
     }, delayMs);
 }
@@ -296,48 +370,6 @@ function stopServer() {
     }
 }
 // ============ Window Management ============
-function createWindow() {
-    // Set env vars BEFORE creating window so preload can access them
-    const apiUrl = `http://127.0.0.1:${serverPort}`;
-    const wsUrl = `ws://127.0.0.1:${serverPort}`;
-    process.env.ACC_SERVER_API_URL = apiUrl;
-    process.env.ACC_SERVER_WS_URL = wsUrl;
-    log(`Server URLs: API=${apiUrl} WS=${wsUrl}`);
-    mainWindow = new BrowserWindow({
-        title: APP_NAME,
-        width: 1400,
-        height: 900,
-        minWidth: 1000,
-        minHeight: 600,
-        titleBarStyle: "hiddenInset",
-        trafficLightPosition: { x: 16, y: 16 },
-        webPreferences: {
-            nodeIntegration: false,
-            contextIsolation: true,
-            preload: path.join(__dirname, "preload.js"),
-        },
-    });
-    if (isDev) {
-        // In dev, load from Vite dev server
-        const viteUrl = process.env.VITE_DEV_SERVER_URL || "http://localhost:5173";
-        mainWindow.loadURL(viteUrl);
-        mainWindow.webContents.openDevTools();
-    }
-    else {
-        mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
-    }
-    mainWindow.on("closed", () => {
-        mainWindow = null;
-    });
-    // Send server info once page loads
-    mainWindow.webContents.on("did-finish-load", () => {
-        mainWindow?.webContents.send("server-info", {
-            port: serverPort,
-            apiUrl,
-            wsUrl,
-        });
-    });
-}
 async function bootstrap() {
     log("Bootstrap starting...");
     // Always start our own server (T3 pattern - no checking for existing)
@@ -345,8 +377,95 @@ async function bootstrap() {
     if (!serverStarted) {
         log("Warning: Server failed to start, app may not work correctly");
     }
-    createWindow();
+    // Create first window
+    windowManager.create();
+    // Create application menu with multi-window support
+    createApplicationMenu();
     log("Bootstrap complete");
+}
+function createApplicationMenu() {
+    const template = [
+        {
+            label: app.name,
+            submenu: [
+                { role: 'about' },
+                { type: 'separator' },
+                { role: 'services' },
+                { type: 'separator' },
+                { role: 'hide' },
+                { role: 'hideOthers' },
+                { role: 'unhide' },
+                { type: 'separator' },
+                { role: 'quit' }
+            ]
+        },
+        {
+            label: 'File',
+            submenu: [
+                {
+                    label: 'New Window',
+                    accelerator: 'CmdOrCtrl+N',
+                    click: () => {
+                        windowManager.create();
+                    }
+                },
+                {
+                    label: 'Open Folder...',
+                    accelerator: 'CmdOrCtrl+O',
+                    click: async () => {
+                        const result = await dialog.showOpenDialog({
+                            properties: ['openDirectory'],
+                            title: 'Select Project Folder',
+                        });
+                        if (!result.canceled && result.filePaths.length > 0) {
+                            windowManager.create(result.filePaths[0]);
+                        }
+                    }
+                },
+                { type: 'separator' },
+                { role: 'close' }
+            ]
+        },
+        {
+            label: 'Edit',
+            submenu: [
+                { role: 'undo' },
+                { role: 'redo' },
+                { type: 'separator' },
+                { role: 'cut' },
+                { role: 'copy' },
+                { role: 'paste' },
+                { role: 'selectAll' }
+            ]
+        },
+        {
+            label: 'View',
+            submenu: [
+                { role: 'reload' },
+                { role: 'forceReload' },
+                { role: 'toggleDevTools' },
+                { type: 'separator' },
+                { role: 'resetZoom' },
+                { role: 'zoomIn' },
+                { role: 'zoomOut' },
+                { type: 'separator' },
+                { role: 'togglefullscreen' }
+            ]
+        },
+        {
+            label: 'Window',
+            submenu: [
+                { role: 'minimize' },
+                { role: 'zoom' },
+                { type: 'separator' },
+                { role: 'front' },
+                { type: 'separator' },
+                { role: 'window' }
+            ]
+        }
+    ];
+    const menu = Menu.buildFromTemplate(template);
+    Menu.setApplicationMenu(menu);
 }
 // ============ App Identity (Dev vs Prod) ============
 // Set app name and user data path BEFORE requesting single instance lock
@@ -357,17 +476,16 @@ log(`App identity: ${APP_NAME} (isDev=${isDev})`);
 log(`User data: ${app.getPath("userData")}`);
 // ============ Single Instance ============
 // Use different instance lock names for dev vs prod
+// When a second instance is launched, create a new window instead of quitting
 const gotSingleInstanceLock = app.requestSingleInstanceLock({ key: USER_DATA_DIR });
 if (!gotSingleInstanceLock) {
     app.quit();
 }
 else {
-    app.on("second-instance", () => {
-        if (mainWindow) {
-            if (mainWindow.isMinimized())
-                mainWindow.restore();
-            mainWindow.focus();
-        }
+    app.on("second-instance", (event, commandLine, workingDirectory) => {
+        // Someone tried to run a second instance, create a new window instead
+        log("Second instance detected, creating new window");
+        windowManager.create();
     });
 }
 // ============ App Lifecycle ============
@@ -378,8 +496,9 @@ app.whenReady().then(() => {
         app.quit();
     });
     app.on("activate", () => {
-        if (BrowserWindow.getAllWindows().length === 0) {
-            bootstrap();
+        // On macOS, create a new window when clicking the dock icon if no windows exist
+        if (windowManager.getCount() === 0) {
+            windowManager.create();
         }
     });
 });
@@ -488,14 +607,24 @@ ipcMain.handle("github:createPr", async (_event, options) => {
     });
 });
 // Dialog: Open Folder
-ipcMain.handle("dialog:openFolder", async (_event, defaultPath) => {
-    const result = await dialog.showOpenDialog(mainWindow, {
+ipcMain.handle("dialog:openFolder", async (event, defaultPath) => {
+    // Get the window that sent the request
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const dialogOptions = {
         properties: ["openDirectory"],
         title: "Select Project Folder",
         defaultPath: defaultPath || undefined,
-    });
+    };
+    const result = window
+        ? await dialog.showOpenDialog(window, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions);
     if (result.canceled || result.filePaths.length === 0) {
         return null;
     }
     return result.filePaths[0];
+});
+// Window management IPC handlers
+ipcMain.handle("window:create", async (_event, folderPath) => {
+    windowManager.create(folderPath);
+    return { ok: true };
 });

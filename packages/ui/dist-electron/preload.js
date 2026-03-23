@@ -8,13 +8,22 @@
  * - Server URLs are set by main process BEFORE window is created
  * - Available via env vars or sync IPC fallback
  * - Listen for server-info events for dynamic updates (e.g., server restart)
+ * - Window ID is passed via additionalArguments for multi-window support
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
+// Extract window ID from process arguments (passed via additionalArguments)
+let windowId = 1; // default to 1
+const windowIdArg = process.argv.find(arg => arg.startsWith('--window-id='));
+if (windowIdArg) {
+    windowId = parseInt(windowIdArg.split('=')[1], 10) || 1;
+}
+console.log("[preload] Window ID:", windowId);
 // Server URLs - get from main process via sync IPC (most reliable)
 let serverApiUrl = "";
 let serverWsUrl = "";
 let serverPort = 0;
+let initialFolderPath;
 try {
     const info = electron_1.ipcRenderer.sendSync("server:get-urls");
     if (info && typeof info === 'object') {
@@ -45,10 +54,18 @@ electron_1.ipcRenderer.on("server-info", (_event, info) => {
         serverWsUrl = info.wsUrl;
     if (info.port)
         serverPort = info.port;
+    if (info.folderPath)
+        initialFolderPath = info.folderPath;
 });
 // Expose protected methods that allow the renderer process to use
 // ipcRenderer without exposing the entire object
 electron_1.contextBridge.exposeInMainWorld("electronAPI", {
+    // Window info - for multi-window support
+    window: {
+        getId: () => windowId,
+        getInitialFolderPath: () => initialFolderPath,
+        create: (folderPath) => electron_1.ipcRenderer.invoke("window:create", folderPath),
+    },
     // Server info - URLs available immediately (no race condition)
     server: {
         getInfo: () => electron_1.ipcRenderer.invoke("server:info"),

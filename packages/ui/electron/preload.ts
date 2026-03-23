@@ -2,19 +2,30 @@
  * Electron Preload Script
  *
  * Exposes safe APIs to the renderer process via contextBridge.
- * 
+ *
  * T3 Code Pattern:
  * - Server URLs are set by main process BEFORE window is created
  * - Available via env vars or sync IPC fallback
  * - Listen for server-info events for dynamic updates (e.g., server restart)
+ * - Window ID is passed via additionalArguments for multi-window support
  */
 
 import { contextBridge, ipcRenderer } from "electron";
+
+// Extract window ID from process arguments (passed via additionalArguments)
+let windowId = 1; // default to 1
+const windowIdArg = process.argv.find(arg => arg.startsWith('--window-id='));
+if (windowIdArg) {
+  windowId = parseInt(windowIdArg.split('=')[1], 10) || 1;
+}
+
+console.log("[preload] Window ID:", windowId);
 
 // Server URLs - get from main process via sync IPC (most reliable)
 let serverApiUrl = "";
 let serverWsUrl = "";
 let serverPort = 0;
+let initialFolderPath: string | undefined;
 
 try {
   const info = ipcRenderer.sendSync("server:get-urls");
@@ -40,24 +51,38 @@ console.log("[preload]   WS:", serverWsUrl);
 console.log("[preload]   Port:", serverPort);
 
 // Listen for server info updates (e.g., after server restart)
-ipcRenderer.on("server-info", (_event, info: { port: number; apiUrl?: string; wsUrl?: string }) => {
+ipcRenderer.on("server-info", (_event, info: {
+  port: number;
+  apiUrl?: string;
+  wsUrl?: string;
+  windowId?: number;
+  folderPath?: string;
+}) => {
   console.log("[preload] Server info updated:", info);
   if (info.apiUrl) serverApiUrl = info.apiUrl;
   if (info.wsUrl) serverWsUrl = info.wsUrl;
   if (info.port) serverPort = info.port;
+  if (info.folderPath) initialFolderPath = info.folderPath;
 });
 
 // Expose protected methods that allow the renderer process to use
 // ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld("electronAPI", {
+  // Window info - for multi-window support
+  window: {
+    getId: () => windowId,
+    getInitialFolderPath: () => initialFolderPath,
+    create: (folderPath?: string) => ipcRenderer.invoke("window:create", folderPath),
+  },
+
   // Server info - URLs available immediately (no race condition)
   server: {
     getInfo: () => ipcRenderer.invoke("server:info"),
     getPort: () => serverPort,
     getApiUrl: () => serverApiUrl,
     getWsUrl: () => serverWsUrl,
-    onInfo: (callback: (info: { port: number }) => void) => {
-      const handler = (_event: unknown, info: { port: number }) => callback(info);
+    onInfo: (callback: (info: { port: number; windowId?: number; folderPath?: string }) => void) => {
+      const handler = (_event: unknown, info: { port: number; windowId?: number; folderPath?: string }) => callback(info);
       ipcRenderer.on("server-info", handler);
       return () => ipcRenderer.removeListener("server-info", handler);
     },

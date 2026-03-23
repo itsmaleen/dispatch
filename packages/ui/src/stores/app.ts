@@ -4,6 +4,31 @@ import { persist } from 'zustand/middleware';
 const DEFAULT_SERVER_PORT = 3333;
 const PORT_DISCOVERY_MAX = 50; // try 3333..3362
 
+// Get window ID for multi-window support
+function getWindowId(): number {
+  if (typeof window !== 'undefined' && window.electronAPI?.window?.getId) {
+    return window.electronAPI.window.getId();
+  }
+  // Fallback: try to get from URL query params (for dev/browser mode)
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search);
+    const windowId = params.get('windowId');
+    if (windowId) {
+      return parseInt(windowId, 10) || 1;
+    }
+  }
+  return 1; // default window ID
+}
+
+// Get storage key with window ID for multi-window isolation
+function getStorageKey(): string {
+  const windowId = getWindowId();
+  return `acc-storage-window-${windowId}`;
+}
+
+// Get global storage key for shared data (like recent projects)
+const GLOBAL_STORAGE_KEY = 'acc-storage-global';
+
 // Dynamic API URL - uses Electron's server URLs (set via env var, no race condition)
 function getApiUrl(): string {
   // In Electron, get URL directly from preload (available immediately)
@@ -431,6 +456,34 @@ interface AppState {
   refreshAgentStatus: () => Promise<void>;
 }
 
+// Global store for shared data across all windows (like recent projects)
+interface GlobalAppState {
+  recentProjects: Project[];
+  addRecentProject: (project: Project) => void;
+}
+
+const useGlobalAppStore = create<GlobalAppState>()(
+  persist(
+    (set) => ({
+      recentProjects: [],
+      addRecentProject: (project) => {
+        set((state) => {
+          const filtered = state.recentProjects.filter(p => p.path !== project.path);
+          return {
+            recentProjects: [
+              { ...project, lastOpened: Date.now() },
+              ...filtered,
+            ].slice(0, 10),
+          };
+        });
+      },
+    }),
+    {
+      name: GLOBAL_STORAGE_KEY,
+    }
+  )
+);
+
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
@@ -455,15 +508,10 @@ export const useAppStore = create<AppState>()(
       },
 
       addRecentProject: (project) => {
-        set((state) => {
-          const filtered = state.recentProjects.filter(p => p.path !== project.path);
-          return {
-            recentProjects: [
-              { ...project, lastOpened: Date.now() },
-              ...filtered,
-            ].slice(0, 10),
-          };
-        });
+        // Add to global store (shared across windows)
+        useGlobalAppStore.getState().addRecentProject(project);
+        // Also update local state for this window
+        set({ recentProjects: useGlobalAppStore.getState().recentProjects });
       },
 
       setAgents: (agents) => set({ agents }),
@@ -529,12 +577,15 @@ export const useAppStore = create<AppState>()(
             status: 'idle' as const,
           })),
         });
+
+        // Sync recent projects from global store
+        set({ recentProjects: useGlobalAppStore.getState().recentProjects });
       },
     }),
     {
-      name: 'acc-storage',
+      name: getStorageKey(),
       partialize: (state) => ({
-        recentProjects: state.recentProjects,
+        currentProject: state.currentProject,
         widgetLayouts: state.widgetLayouts,
       }),
     }
