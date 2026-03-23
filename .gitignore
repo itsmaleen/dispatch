@@ -10,6 +10,8 @@ out/
 # Electron
 release/
 server-bundle/
+dist-electron/
+**/dist-electron/
 
 # Logs
 *.log
