@@ -439,15 +439,19 @@ export class CommandCenterServer {
       const id = c.req.param('id');
       const limit = parseInt(c.req.query('limit') ?? '100');
       const beforeId = c.req.query('before') ? parseInt(c.req.query('before')!) : undefined;
-      
+
+      console.log(`[threads/${id}/messages] Fetching messages:`, { limit, beforeId });
+
       const manager = getSessionManager();
       const thread = manager.getThread(id);
-      
+
       if (!thread) {
+        console.log(`[threads/${id}/messages] Thread not found`);
         return c.json({ ok: false, error: 'Thread not found' }, 404);
       }
 
       const messages = manager.getMessages(id, { limit, beforeId });
+      console.log(`[threads/${id}/messages] Returning ${messages.length} messages`);
       return c.json({ ok: true, messages });
     });
 
@@ -455,15 +459,16 @@ export class CommandCenterServer {
     this.app.post('/threads/:id/session', async (c) => {
       const id = c.req.param('id');
       console.log(`[threads/${id}] Session create request`);
-      const { cwd, name, worktreePath, resume } = await c.req.json<{
+      const { cwd, name, worktreePath, resume, sessionId } = await c.req.json<{
         cwd: string;
         name?: string;
         worktreePath?: string;
         resume?: boolean;
+        sessionId?: string;
       }>();
 
       const manager = getSessionManager();
-      
+
       try {
         const session = await manager.createSession({
           threadId: id,
@@ -471,6 +476,7 @@ export class CommandCenterServer {
           name,
           worktreePath,
           resume,
+          sessionId,
         });
         
         // Track session creation

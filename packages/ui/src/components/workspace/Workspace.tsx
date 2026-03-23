@@ -2604,6 +2604,8 @@ export function Workspace() {
 
   // Ref to track if we've already restored state for this project
   const hasRestoredStateRef = useRef<string | null>(null);
+  // Ref to track if state restoration is in progress (prevents layout sync from overwriting)
+  const isRestoringStateRef = useRef<boolean>(false);
 
   // Register data getters for state capture (once on mount)
   useEffect(() => {
@@ -2634,6 +2636,9 @@ export function Workspace() {
   useEffect(() => {
     useWorkspaceStore.getState().registerApplyStateCallback(async (state) => {
       console.log('[Workspace] Applying project state:', state);
+
+      // Set flag to prevent layout sync from overwriting restored layout
+      isRestoringStateRef.current = true;
 
       // Restore terminals (PTY terminals)
       for (const savedTerminal of state.terminals) {
@@ -2669,14 +2674,32 @@ export function Workspace() {
             }
           : undefined;
 
+        console.log('[Workspace] Restoring console:', {
+          savedConsole,
+          options,
+          hasThreadId: !!savedConsole.threadId,
+          hasSessionId: !!savedConsole.sessionId,
+        });
+
         // Use the first available agent ID (claude-code-local is typical)
         // The handleNewTerminal will find the correct agent
         handleNewTerminalRef.current('claude-code-local', options);
       }
 
-      // Apply layout tree if present
+      // Apply layout tree AFTER consoles are created
+      // Use requestAnimationFrame + setTimeout to ensure React has processed state updates
       if (state.layoutTree) {
-        useWorkspaceStore.getState().setLayoutTree(state.layoutTree as LayoutNode);
+        requestAnimationFrame(() => {
+          setTimeout(() => {
+            console.log('[Workspace] Applying restored layout tree');
+            useWorkspaceStore.getState().setLayoutTree(state.layoutTree as LayoutNode);
+            // Clear restoring flag after layout is applied
+            isRestoringStateRef.current = false;
+          }, 50);
+        });
+      } else {
+        // Clear flag if no layout to restore
+        isRestoringStateRef.current = false;
       }
     });
   }, []);
@@ -2878,6 +2901,13 @@ export function Workspace() {
   // Initialize/update layout tree when terminals change
   useEffect(() => {
     if (!useFlexibleLayout) return;
+
+    // Skip layout sync if we're in the middle of restoring state
+    // The restored layout will be applied after all consoles are created
+    if (isRestoringStateRef.current) {
+      console.log('[LayoutSync] Skipping - state restoration in progress');
+      return;
+    }
 
     const currentLayout = useWorkspaceStore.getState().layoutTree;
     const consoleIds = terminals.map(t => t.id);
@@ -3741,6 +3771,7 @@ export function Workspace() {
       ? `Session resumed — ${agent.name}`
       : `Session started — ${agent.name}`;
 
+    // Create the initial console with system message
     setTerminals(prev => [...prev, {
       id: newTerminalId,
       agent,
@@ -3754,6 +3785,87 @@ export function Workspace() {
       path: resumeOptions?.projectPath,
     }]);
 
+    // If we have a threadId, load previous conversation history
+    // This applies both when resuming a session (with sessionId) and when restoring a console (threadId only)
+    if (resumeOptions?.threadId) {
+      // Fetch last N messages from the thread to show conversation context
+      const HISTORY_LIMIT = 10; // Last 5 exchanges (user + assistant)
+      const historyUrl = `${getApiUrl()}/threads/${resumeOptions.threadId}/messages?limit=${HISTORY_LIMIT}`;
+      console.log('[Workspace] Loading conversation history:', {
+        threadId: resumeOptions.threadId,
+        url: historyUrl,
+        terminalId: newTerminalId,
+      });
+
+      fetch(historyUrl)
+        .then(res => {
+          console.log('[Workspace] History fetch response status:', res.status);
+          return res.json();
+        })
+        .then(data => {
+          console.log('[Workspace] History fetch response data:', {
+            ok: data.ok,
+            messageCount: data.messages?.length ?? 0,
+            error: data.error,
+            rawData: data,
+          });
+
+          if (data.ok && data.messages && data.messages.length > 0) {
+            // Convert server messages to console lines
+            const historyLines: ConsoleLine[] = data.messages.map((msg: { id: number; role: 'user' | 'assistant'; content: string; timestamp: string }) => ({
+              id: `history-${msg.id}`,
+              type: msg.role === 'user' ? 'prompt' as ConsoleLineType : 'output' as ConsoleLineType,
+              content: msg.content,
+              timestamp: new Date(msg.timestamp).toLocaleTimeString(),
+            }));
+
+            console.log('[Workspace] Converted history lines:', historyLines.length, historyLines);
+
+            // Add a separator line to indicate this is history
+            const separatorLine: ConsoleLine = {
+              id: `history-separator-${Date.now()}`,
+              type: 'system' as ConsoleLineType,
+              content: `── Previous conversation (${data.messages.length} messages) ──`,
+              timestamp: makeTimestamp(),
+            };
+
+            // Insert history before the "Session resumed" message
+            setTerminals(prev => {
+              console.log('[Workspace] Updating terminals with history. Current terminals:', prev.map(t => ({ id: t.id, lineCount: t.lines.length })));
+              const updated = prev.map(t => {
+                if (t.id === newTerminalId) {
+                  // Get the system message (last line)
+                  const systemLine = t.lines[t.lines.length - 1];
+                  const newLines = [separatorLine, ...historyLines, systemLine];
+                  console.log('[Workspace] Terminal found, updating lines:', {
+                    terminalId: t.id,
+                    oldLineCount: t.lines.length,
+                    newLineCount: newLines.length,
+                  });
+                  // Prepend history + separator, then the system message
+                  return {
+                    ...t,
+                    lines: newLines,
+                  };
+                }
+                return t;
+              });
+              return updated;
+            });
+          } else {
+            console.log('[Workspace] No messages to load or response not ok:', { ok: data.ok, hasMessages: !!data.messages });
+          }
+        })
+        .catch(err => {
+          console.error('[Workspace] Failed to load conversation history:', err);
+        });
+    } else {
+      console.log('[Workspace] Not loading history - no threadId in resumeOptions:', {
+        hasThreadId: !!resumeOptions?.threadId,
+        resumeOptions,
+      });
+    }
+
     // If an initial message was provided (non-resume case), send it after the terminal is created
     if (initialMessage) {
       // Use requestAnimationFrame + setTimeout to ensure state has updated
@@ -3764,17 +3876,7 @@ export function Workspace() {
       });
     }
 
-    // If resuming a session, automatically send a summary prompt to show the user context
-    if (resumeOptions?.resume) {
-      requestAnimationFrame(() => {
-        setTimeout(() => {
-          handleTerminalMessageRef.current(
-            newTerminalId,
-            'Please provide a brief summary of what we were working on in the previous session, including any pending tasks or next steps.'
-          );
-        }, 100);
-      });
-    }
+    // NOTE: We no longer auto-send a summary prompt since we now show actual conversation history
 
     return newTerminalId;
   }, [agents]);
