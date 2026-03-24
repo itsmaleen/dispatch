@@ -2627,13 +2627,6 @@ export function Workspace() {
     });
   }, []);
 
-  // Register send-to-console callback for command palette
-  useEffect(() => {
-    useWorkspaceStore.getState().registerSendToConsoleCallback(
-      (prompt: string, consoleId: string) => handleSendTaskToTerminal(prompt, consoleId)
-    );
-  }, [handleSendTaskToTerminal]);
-
   // Sync widgets to workspace store for arrow key navigation
   useEffect(() => {
     const widgets: Array<{ id: string; type: 'agent-console' | 'tasks' | 'agent-status' | 'terminal' }> = [];
@@ -4578,6 +4571,13 @@ export function Workspace() {
       setTimeout(() => handleTerminalMessage(newConsoleId, taskText), 100);
     }
   }, [terminals, agents, handleTerminalMessage]);
+
+  // Register send-to-console callback for command palette
+  useEffect(() => {
+    useWorkspaceStore.getState().registerSendToConsoleCallback(
+      (prompt: string, consoleId: string) => handleSendTaskToTerminal(prompt, consoleId)
+    );
+  }, [handleSendTaskToTerminal]);
 
   // Handler for highlighting a console by its threadId (session ID)
   const handleHighlightTerminal = useCallback((threadId: string) => {
