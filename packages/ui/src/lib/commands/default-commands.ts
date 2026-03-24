@@ -20,6 +20,7 @@ import {
   Keyboard,
   Search,
   History,
+  Send,
 } from 'lucide-react';
 import type { Command } from './types';
 import { useWorkspaceStore, type LayoutWidgetInfo } from '../../stores/workspace';
@@ -286,6 +287,169 @@ export function createDefaultCommands(): Command[] {
               action: { type: 'execute', handler: () => {} },
             }];
           }
+        },
+      },
+    },
+
+    // Send Prompt to Console
+    {
+      id: 'send-prompt-to-console',
+      label: 'Send Prompt to Console',
+      description: 'Send a prompt to a new or existing agent console',
+      category: 'console',
+      icon: Send,
+      keywords: ['send', 'prompt', 'message', 'console', 'agent', 'chat', 'ask'],
+      action: {
+        type: 'subcommand',
+        getCommands: (): Command[] => {
+          const { claudeCodeAvailable } = useAppStore.getState();
+          const { consoles, agents: workspaceAgents, pendingPrompt } = useWorkspaceStore.getState();
+
+          const subcommands: Command[] = [];
+
+          // === NEW CONSOLE OPTIONS ===
+          subcommands.push({
+            id: 'prompt-new-console',
+            label: '+ New Console',
+            description: 'Create a new console and send prompt',
+            category: 'console',
+            action: {
+              type: 'subcommand',
+              getCommands: (): Command[] => {
+                const { pendingPrompt: currentPendingPrompt, agents: currentAgents } = useWorkspaceStore.getState();
+                const { claudeCodeAvailable: isClaudeAvailable } = useAppStore.getState();
+                const newConsoleOptions: Command[] = [];
+
+                // Claude Code option
+                if (isClaudeAvailable) {
+                  newConsoleOptions.push({
+                    id: 'prompt-new-claude-code',
+                    label: 'Claude Code',
+                    description: currentPendingPrompt
+                      ? `Send pending prompt to new Claude Code console`
+                      : 'Create new Claude Code console',
+                    category: 'console',
+                    action: currentPendingPrompt ? {
+                      // Direct execution when we have a pending prompt
+                      type: 'execute',
+                      handler: () => {
+                        const store = useWorkspaceStore.getState();
+                        const prompt = store.pendingPrompt!;
+                        store.setPendingPrompt(null);
+                        store.createConsole('claude-code-local');
+                        setTimeout(() => {
+                          const newConsoles = useWorkspaceStore.getState().consoles;
+                          const latestConsole = newConsoles[newConsoles.length - 1];
+                          if (latestConsole) {
+                            store.sendToConsole(prompt, latestConsole.id);
+                          }
+                        }, 500);
+                      },
+                    } : {
+                      type: 'input',
+                      placeholder: 'Enter prompt to send...',
+                      onSubmit: (prompt: string) => {
+                        const store = useWorkspaceStore.getState();
+                        store.createConsole('claude-code-local');
+                        setTimeout(() => {
+                          const newConsoles = useWorkspaceStore.getState().consoles;
+                          const latestConsole = newConsoles[newConsoles.length - 1];
+                          if (latestConsole) {
+                            store.sendToConsole(prompt, latestConsole.id);
+                          }
+                        }, 500);
+                      },
+                    },
+                  });
+                }
+
+                // OpenClaw/other agents
+                for (const agent of currentAgents) {
+                  if (agent.type !== 'claude-code') {
+                    newConsoleOptions.push({
+                      id: `prompt-new-${agent.id}`,
+                      label: agent.name,
+                      description: currentPendingPrompt
+                        ? `Send pending prompt to new ${agent.type} console`
+                        : `Create new ${agent.type} console`,
+                      category: 'console',
+                      action: currentPendingPrompt ? {
+                        type: 'execute',
+                        handler: () => {
+                          const store = useWorkspaceStore.getState();
+                          const prompt = store.pendingPrompt!;
+                          store.setPendingPrompt(null);
+                          store.createConsole(agent.id);
+                          setTimeout(() => {
+                            const newConsoles = useWorkspaceStore.getState().consoles;
+                            const latestConsole = newConsoles[newConsoles.length - 1];
+                            if (latestConsole) {
+                              store.sendToConsole(prompt, latestConsole.id);
+                            }
+                          }, 500);
+                        },
+                      } : {
+                        type: 'input',
+                        placeholder: 'Enter prompt to send...',
+                        onSubmit: (prompt: string) => {
+                          const store = useWorkspaceStore.getState();
+                          store.createConsole(agent.id);
+                          setTimeout(() => {
+                            const newConsoles = useWorkspaceStore.getState().consoles;
+                            const latestConsole = newConsoles[newConsoles.length - 1];
+                            if (latestConsole) {
+                              store.sendToConsole(prompt, latestConsole.id);
+                            }
+                          }, 500);
+                        },
+                      },
+                    });
+                  }
+                }
+
+                if (newConsoleOptions.length === 0) {
+                  return [{
+                    id: 'no-agents-for-prompt',
+                    label: 'No agents available',
+                    description: 'Connect an agent first',
+                    category: 'console',
+                    action: { type: 'execute', handler: () => {} },
+                  }];
+                }
+
+                return newConsoleOptions;
+              },
+            },
+          });
+
+          // === EXISTING CONSOLES ===
+          for (const console of consoles) {
+            subcommands.push({
+              id: `prompt-to-${console.id}`,
+              label: console.agentName,
+              description: pendingPrompt
+                ? `Send pending prompt to ${console.agentName}`
+                : `Send to existing console (${console.id.slice(0, 8)})`,
+              category: 'console',
+              action: pendingPrompt ? {
+                // Direct execution when we have a pending prompt
+                type: 'execute',
+                handler: () => {
+                  const store = useWorkspaceStore.getState();
+                  store.sendToConsole(store.pendingPrompt!, console.id);
+                  store.setPendingPrompt(null);
+                },
+              } : {
+                type: 'input',
+                placeholder: 'Enter prompt to send...',
+                onSubmit: (prompt: string) => {
+                  useWorkspaceStore.getState().sendToConsole(prompt, console.id);
+                },
+              },
+            });
+          }
+
+          return subcommands;
         },
       },
     },

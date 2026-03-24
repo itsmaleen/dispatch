@@ -621,6 +621,12 @@ interface WorkspaceState {
   onRestoreConsole: ((consoleId: string) => void) | null;
   onClearConsole: ((consoleId: string) => void) | null;
 
+  // Send prompt to console callback (set by Workspace.tsx)
+  onSendToConsole: ((prompt: string, consoleId: string) => void) | null;
+
+  // Pending prompt for command palette fallback flow
+  pendingPrompt: string | null;
+
   // Actions for external callers (command palette)
   setWorkspacePath: (path: string | null) => void;
   setAgents: (agents: WorkspaceAgent[]) => void;
@@ -663,6 +669,7 @@ interface WorkspaceState {
     onRestore: (consoleId: string) => void;
     onClear: (consoleId: string) => void;
   }) => void;
+  registerSendToConsoleCallback: (callback: (prompt: string, consoleId: string) => void) => void;
 
   // Command palette calls these
   createConsole: (agentId: string, options?: ConsoleResumeOptions) => void;
@@ -678,6 +685,10 @@ interface WorkspaceState {
   clearConsole: (consoleId: string) => void;
   closeFocusedConsole: () => void;
   toggleMaximizeFocusedWidget: () => void;
+
+  // Send prompt to console (called by command palette)
+  sendToConsole: (prompt: string, consoleId: string) => void;
+  setPendingPrompt: (prompt: string | null) => void;
 
   // Project State Persistence
   // Full console data getter (set by Workspace.tsx for state capture)
@@ -744,6 +755,8 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
   onMaximizeConsole: null,
   onRestoreConsole: null,
   onClearConsole: null,
+  onSendToConsole: null,
+  pendingPrompt: null,
   getFullConsoleData: null,
   getFullTerminalData: null,
   onApplyProjectState: null,
@@ -1135,6 +1148,7 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
     onRestoreConsole: callbacks.onRestore,
     onClearConsole: callbacks.onClear,
   }),
+  registerSendToConsoleCallback: (callback) => set({ onSendToConsole: callback }),
 
   // Action dispatchers (called by command palette)
   createConsole: (agentId, options) => {
@@ -1236,6 +1250,18 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
       set({ maximizedWidgetId: focusedWidgetId });
     }
   },
+
+  // Send prompt to console
+  sendToConsole: (prompt, consoleId) => {
+    const { onSendToConsole } = get();
+    if (onSendToConsole) {
+      onSendToConsole(prompt, consoleId);
+    } else {
+      console.warn('[WorkspaceStore] No sendToConsole callback registered');
+    }
+  },
+
+  setPendingPrompt: (prompt) => set({ pendingPrompt: prompt }),
 
   // Project State Persistence
   registerDataGetters: (getters) => set({

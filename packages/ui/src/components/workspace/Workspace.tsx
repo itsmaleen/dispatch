@@ -2627,6 +2627,13 @@ export function Workspace() {
     });
   }, []);
 
+  // Register send-to-console callback for command palette
+  useEffect(() => {
+    useWorkspaceStore.getState().registerSendToConsoleCallback(
+      (prompt: string, consoleId: string) => handleSendTaskToTerminal(prompt, consoleId)
+    );
+  }, [handleSendTaskToTerminal]);
+
   // Sync widgets to workspace store for arrow key navigation
   useEffect(() => {
     const widgets: Array<{ id: string; type: 'agent-console' | 'tasks' | 'agent-status' | 'terminal' }> = [];

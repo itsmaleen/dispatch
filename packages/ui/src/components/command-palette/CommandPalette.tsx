@@ -1,5 +1,5 @@
 import { useEffect, useRef, useMemo, useCallback, useState } from 'react';
-import { Search, ChevronRight, ArrowLeft, Loader2 } from 'lucide-react';
+import { Search, ChevronRight, ArrowLeft, Loader2, Send } from 'lucide-react';
 import { useCommandPaletteStore } from '../../stores/command-palette';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { commandRegistry, mergeWithSemanticResults } from '../../lib/commands/registry';
@@ -7,6 +7,43 @@ import { useSemanticSearch } from '../../hooks/useSemanticSearch';
 import { CommandGroup } from './CommandGroup';
 import { CommandItem } from './CommandItem';
 import type { Command } from '../../lib/commands/types';
+
+/**
+ * Fallback option shown when no commands match the query.
+ * Allows sending the typed text as a prompt to a console.
+ */
+function FallbackPromptOption({
+  query,
+  onSelect,
+  isSelected,
+}: {
+  query: string;
+  onSelect: () => void;
+  isSelected: boolean;
+}) {
+  return (
+    <div className="py-2">
+      <button
+        onClick={onSelect}
+        className={`w-full px-4 py-3 flex items-center gap-3 text-left transition-colors ${
+          isSelected ? 'bg-zinc-800' : 'hover:bg-zinc-800'
+        }`}
+        data-selected={isSelected}
+      >
+        <Send className="w-4 h-4 text-violet-400" />
+        <div className="flex-1 min-w-0">
+          <div className="text-sm text-zinc-100 truncate">
+            Send "{query.length > 40 ? query.slice(0, 40) + '...' : query}" to console
+          </div>
+          <div className="text-xs text-zinc-500">
+            No matching commands • Send as prompt instead
+          </div>
+        </div>
+        <ChevronRight className="w-4 h-4 text-zinc-600" />
+      </button>
+    </div>
+  );
+}
 
 export function CommandPalette() {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -244,6 +281,13 @@ export function CommandPalette() {
             }
           } else if (flatCommands[selectedIndex]) {
             executeCommand(flatCommands[selectedIndex]);
+          } else if (flatCommands.length === 0 && query.trim()) {
+            // Fallback: trigger send-prompt-to-console with query
+            const sendPromptCmd = commandRegistry.getById('send-prompt-to-console');
+            if (sendPromptCmd) {
+              useWorkspaceStore.getState().setPendingPrompt(query);
+              pushSubcommand(sendPromptCmd);
+            }
           }
           break;
         case 'Backspace':
@@ -354,6 +398,19 @@ export function CommandPalette() {
             <div className="px-4 py-6 text-center text-zinc-400 text-sm">
               Type your task and press Enter
             </div>
+          ) : flatCommands.length === 0 && query.trim() ? (
+            // Fallback: offer to send the query as a prompt to a console
+            <FallbackPromptOption
+              query={query}
+              isSelected={true}
+              onSelect={() => {
+                const sendPromptCmd = commandRegistry.getById('send-prompt-to-console');
+                if (sendPromptCmd) {
+                  useWorkspaceStore.getState().setPendingPrompt(query);
+                  pushSubcommand(sendPromptCmd);
+                }
+              }}
+            />
           ) : flatCommands.length === 0 ? (
             <div className="px-4 py-6 text-center text-zinc-500 text-sm">
               No commands found
