@@ -176,6 +176,7 @@ export function TasksWidget({
       className={`h-full bg-zinc-900 border rounded-lg flex flex-col overflow-hidden transition-all duration-150 ${getBorderClass()}`}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
+      onMouseDown={onFocus}
     >
       {/* Header */}
       <div

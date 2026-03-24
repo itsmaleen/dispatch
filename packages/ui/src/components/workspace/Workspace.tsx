@@ -1477,6 +1477,7 @@ function AgentConsoleWidget({
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
       onContextMenu={handleContextMenu}
+      onMouseDown={onFocus}
     >
       {/* Context Menu */}
       {contextMenu && (
@@ -1645,6 +1646,7 @@ function AgentConsoleWidget({
           onValueChange={onDraftInputChange ? (value) => onDraftInputChange(consoleState.id, value) : undefined}
           filesValue={consoleState.draftFiles}
           onFilesChange={onDraftFilesChange ? (files) => onDraftFilesChange(consoleState.id, files) : undefined}
+          autoFocus={isFocused}
         />
       </div>
 
@@ -1728,6 +1730,7 @@ function UnifiedAgentStatusWidget({
       className={`h-full bg-zinc-900 border rounded-lg flex flex-col overflow-hidden transition-all duration-150 ${getBorderClass()}`}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
+      onMouseDown={onFocus}
     >
       {/* Header - clicking here sets focus */}
       <div
@@ -1917,6 +1920,7 @@ function TasksWidget({
       className={`h-full bg-zinc-900 border rounded-lg flex flex-col overflow-hidden transition-all duration-150 ${getBorderClass()}`}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
+      onMouseDown={onFocus}
     >
       {/* Header - clicking here sets focus */}
       <div
@@ -2952,50 +2956,50 @@ export function Workspace() {
   const ctrlCCountRef = useRef<number>(0);
   const DOUBLE_PRESS_THRESHOLD = 1500; // 1.5 seconds
 
-  // Stop all running sessions for the focused console or all consoles
-  const stopActiveSessions = useCallback(async (forceStop = false) => {
-    // Find running sessions - check which terminals are streaming
-    const runningSessions = terminals.filter(t => t.isStreaming);
+  // Stop the focused console's session (or do nothing if focused console isn't streaming)
+  const stopFocusedSession = useCallback(async (forceStop = false) => {
+    // Get the currently focused widget ID
+    const currentFocusedId = useWorkspaceStore.getState().focusedWidgetId;
 
-    if (runningSessions.length === 0) {
-      console.log('[Workspace] No running sessions to stop');
+    // Find the focused terminal that is streaming
+    const focusedTerminal = terminals.find(t => t.id === currentFocusedId && t.isStreaming);
+
+    if (!focusedTerminal) {
+      console.log('[Workspace] No running session in focused console to stop');
       return;
     }
 
-    // Stop each running session
-    for (const terminal of runningSessions) {
-      const sessionId = terminal.threadId || terminal.id;
-      try {
-        const endpoint = forceStop
-          ? `/sessions/${sessionId}/force-stop`
-          : `/sessions/${sessionId}/stop`;
+    const sessionId = focusedTerminal.threadId || focusedTerminal.id;
+    try {
+      const endpoint = forceStop
+        ? `/sessions/${sessionId}/force-stop`
+        : `/sessions/${sessionId}/stop`;
 
-        await api.post(endpoint);
-        console.log(`[Workspace] ${forceStop ? 'Force stopped' : 'Stopped'} session ${sessionId}`);
+      await api.post(endpoint);
+      console.log(`[Workspace] ${forceStop ? 'Force stopped' : 'Stopped'} session ${sessionId}`);
 
-        // Update local terminal state - session stays active, just stop streaming
-        setTerminals(prev => prev.map(t =>
-          t.id === terminal.id
-            ? {
-                ...t,
-                isStreaming: false,
-                lines: [
-                  ...t.lines,
-                  {
-                    id: crypto.randomUUID(),
-                    type: 'system' as ConsoleLineType,
-                    content: forceStop
-                      ? '⚠️ Agent interrupted. You can continue the conversation.'
-                      : '⚠️ Agent stopped. You can continue the conversation.',
-                    timestamp: makeTimestamp(),
-                  }
-                ]
-              }
-            : t
-        ));
-      } catch (err) {
-        console.error(`[Workspace] Failed to stop session ${sessionId}:`, err);
-      }
+      // Update local terminal state - session stays active, just stop streaming
+      setTerminals(prev => prev.map(t =>
+        t.id === focusedTerminal.id
+          ? {
+              ...t,
+              isStreaming: false,
+              lines: [
+                ...t.lines,
+                {
+                  id: crypto.randomUUID(),
+                  type: 'system' as ConsoleLineType,
+                  content: forceStop
+                    ? '⚠️ Agent interrupted. You can continue the conversation.'
+                    : '⚠️ Agent stopped. You can continue the conversation.',
+                  timestamp: makeTimestamp(),
+                }
+              ]
+            }
+          : t
+      ));
+    } catch (err) {
+      console.error(`[Workspace] Failed to stop session ${sessionId}:`, err);
     }
   }, [terminals]);
 
@@ -3016,27 +3020,30 @@ export function Workspace() {
 
         // Only intercept if not in input and no text selected
         if (!isInInput && !hasTextSelection) {
-          // Check if any sessions are running
-          const hasRunningSessions = terminals.some(t => t.isStreaming);
+          // Get the currently focused widget
+          const currentFocusedId = useWorkspaceStore.getState().focusedWidgetId;
 
-          if (hasRunningSessions) {
+          // Check if the focused console is streaming
+          const focusedTerminal = terminals.find(t => t.id === currentFocusedId && t.isStreaming);
+
+          if (focusedTerminal) {
             const now = Date.now();
 
             if (now - lastCtrlCTimeRef.current < DOUBLE_PRESS_THRESHOLD) {
               // Second press within threshold - force stop!
               e.preventDefault();
               ctrlCCountRef.current = 0;
-              stopActiveSessions(true);
-              console.log('[Workspace] Double CTRL+C detected - force stopping agent');
+              stopFocusedSession(true);
+              console.log('[Workspace] Double CTRL+C detected - force stopping focused agent');
             } else {
               // First press - show warning and prepare for double-press
               e.preventDefault();
               ctrlCCountRef.current = 1;
               lastCtrlCTimeRef.current = now;
 
-              // Add a visual hint to the running terminals
+              // Add a visual hint to the focused terminal only
               setTerminals(prev => prev.map(t =>
-                t.isStreaming
+                t.id === focusedTerminal.id
                   ? {
                       ...t,
                       lines: [
@@ -3052,7 +3059,7 @@ export function Workspace() {
                   : t
               ));
 
-              console.log('[Workspace] First CTRL+C - press again to stop agent');
+              console.log('[Workspace] First CTRL+C - press again to stop focused agent');
             }
           }
         }
@@ -3061,7 +3068,7 @@ export function Workspace() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [terminals, stopActiveSessions]);
+  }, [terminals, stopFocusedSession]);
 
   // Initialize/update layout tree when terminals change
   useEffect(() => {
@@ -5276,7 +5283,7 @@ export function Workspace() {
           return (
             <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
               <div
-                className="w-full h-full max-w-[95vw] max-h-[90vh] animate-in zoom-in-95 duration-200"
+                className="w-full h-full max-w-[95vw] max-h-[90vh] animate-in fade-in duration-100"
                 onClick={(e) => e.stopPropagation()}
               >
                 <RealTerminalWidget
@@ -5302,7 +5309,7 @@ export function Workspace() {
           return (
             <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
               <div
-                className="w-full h-full max-w-[95vw] max-h-[90vh] animate-in zoom-in-95 duration-200"
+                className="w-full h-full max-w-[95vw] max-h-[90vh] animate-in fade-in duration-100"
                 onClick={(e) => e.stopPropagation()}
               >
                 <AgentConsoleWidget
@@ -5319,6 +5326,8 @@ export function Workspace() {
                   onWorktreeMerged={handleWorktreeMerged}
                   onOpenTerminal={(cwd) => useWorkspaceStore.getState().createTerminal(cwd)}
                   onRetry={handleRetry}
+                  onDraftInputChange={handleDraftInputChange}
+                  onDraftFilesChange={handleDraftFilesChange}
                   workspacePath={workspacePath ?? undefined}
                   isFocused={true}
                 />
@@ -5337,7 +5346,7 @@ export function Workspace() {
           return (
             <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
               <div
-                className="w-full h-full max-w-[95vw] max-h-[90vh] animate-in zoom-in-95 duration-200"
+                className="w-full h-full max-w-[95vw] max-h-[90vh] animate-in fade-in duration-100"
                 onClick={(e) => e.stopPropagation()}
               >
                 <TasksWidgetContainer

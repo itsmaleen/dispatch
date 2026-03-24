@@ -38,6 +38,8 @@ interface ChatInputProps {
   filesValue?: UploadedFile[];
   /** Called when files change (for controlled mode) */
   onFilesChange?: (files: UploadedFile[]) => void;
+  /** When true, automatically focuses the input */
+  autoFocus?: boolean;
 }
 
 function formatFileSize(bytes: number): string {
@@ -67,6 +69,7 @@ export function ChatInput({
   onValueChange,
   filesValue,
   onFilesChange,
+  autoFocus = false,
 }: ChatInputProps) {
   // Support both controlled and uncontrolled modes
   const [internalInput, setInternalInput] = useState('');
@@ -103,7 +106,7 @@ export function ChatInput({
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
-    
+
     // Reset height to auto to get the correct scrollHeight
     textarea.style.height = 'auto';
     // Set to scrollHeight, but cap at max height
@@ -111,6 +114,16 @@ export function ChatInput({
     const newHeight = Math.min(textarea.scrollHeight, maxHeight);
     textarea.style.height = `${newHeight}px`;
   }, [input]);
+
+  // Auto-focus when autoFocus prop becomes true
+  useEffect(() => {
+    if (autoFocus && textareaRef.current) {
+      // Use requestAnimationFrame to ensure DOM is ready after mount/re-render
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+      });
+    }
+  }, [autoFocus]);
 
   const handleSubmit = useCallback(() => {
     if (!input.trim() && files.length === 0) return;

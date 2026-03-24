@@ -20,6 +20,26 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// ============ Graceful Shutdown Handling ============
+
+// Track if we're in the process of quitting to suppress benign errors
+let isShuttingDown = false;
+
+// Handle uncaught exceptions gracefully during shutdown
+// EPIPE errors occur when stdout/stderr pipes are closed (e.g., terminal closed)
+process.on("uncaughtException", (error: NodeJS.ErrnoException) => {
+  // Suppress EPIPE errors during shutdown - they're expected when pipes close
+  if (error.code === "EPIPE") {
+    return;
+  }
+  // For other errors during shutdown, just exit quietly
+  if (isShuttingDown) {
+    process.exit(1);
+  }
+  // Re-throw unexpected errors during normal operation
+  throw error;
+});
+
 // ============ Configuration ============
 
 const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
@@ -193,8 +213,15 @@ function ensureLogDir(): void {
 function log(message: string, ...args: unknown[]): void {
   const timestamp = new Date().toISOString();
   const line = `[${timestamp}] [main] ${message}`;
-  console.log(line, ...args);
-  
+
+  // Safely write to console - may fail with EPIPE during shutdown
+  try {
+    console.log(line, ...args);
+  } catch {
+    // Ignore console errors (EPIPE when terminal closes)
+  }
+
+  // Always try to write to file log
   try {
     ensureLogDir();
     fs.appendFileSync(
@@ -652,6 +679,7 @@ app.whenReady().then(() => {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  isShuttingDown = true;
   stopServer();
 });
 
@@ -666,13 +694,15 @@ if (process.platform !== "win32") {
   process.on("SIGINT", () => {
     if (isQuitting) return;
     isQuitting = true;
+    isShuttingDown = true;
     stopServer();
     app.quit();
   });
-  
+
   process.on("SIGTERM", () => {
     if (isQuitting) return;
     isQuitting = true;
+    isShuttingDown = true;
     stopServer();
     app.quit();
   });
