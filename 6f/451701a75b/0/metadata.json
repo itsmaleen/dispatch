@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "6f451701a75b",
+  "session_id": "e56efd05-1c6f-45f5-b6fc-dd3b4628bdaf",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T19:22:51.204961Z",
+  "branch": "main",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "scripts/build-and-install.sh",
+    "scripts/rebuild-and-install.sh",
+    "scripts/sign-and-notarize-mac.sh",
+    "package.json",
+    "packages/server/src/adapters/session-manager.ts",
+    "packages/server/src/persistence/sqlite-store.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "6cee2d8f2fc4",
+  "checkpoint_transcript_start": 31,
+  "transcript_lines_at_start": 31,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T19:22:51.152378Z",
+    "agent_lines": 93,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 93,
+    "agent_percentage": 100
+  }
+}
