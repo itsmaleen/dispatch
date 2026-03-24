@@ -47,7 +47,7 @@ import {
 } from 'lucide-react';
 import { AgentsPanel } from '../agents/AgentsPanel';
 import { api, getServerUrl, getWsUrl } from '../../stores/app';
-import { useWorkspaceStore, type LayoutNode, type LayoutLeaf, type LayoutGroup, type WidgetType, type ConsoleResumeOptions, layoutHelpers } from '../../stores/workspace';
+import { useWorkspaceStore, type LayoutNode, type LayoutLeaf, type LayoutGroup, type WidgetType, type ConsoleResumeOptions, layoutHelpers, getBrowserSessionId } from '../../stores/workspace';
 import { ChatInput, type UploadedFile } from './ChatInput';
 import { TasksWidgetContainer } from './TasksWidgetContainer';
 import { TerminalWidget as RealTerminalWidget } from '../terminal/TerminalWidget';
@@ -2463,11 +2463,12 @@ export function Workspace() {
     return () => clearInterval(interval);
   }, [fetchAgents]);
 
-  // Fetch existing real terminals on mount
+  // Fetch existing real terminals on mount (filtered by browser session)
   useEffect(() => {
     const fetchTerminals = async () => {
       try {
-        const res = await fetch(`${getApiUrl()}/api/terminals`);
+        const browserSessionId = getBrowserSessionId();
+        const res = await fetch(`${getApiUrl()}/api/terminals?browserSessionId=${encodeURIComponent(browserSessionId)}`);
         const data = await res.json();
         if (data.terminals) {
           setRealTerminals(data.terminals);
@@ -2531,10 +2532,14 @@ export function Workspace() {
       // Create terminal via HTTP - the server no longer broadcasts terminal:created events,
       // so the terminal only appears in this window (fixing multi-window isolation)
       try {
+        const browserSessionId = getBrowserSessionId();
         const res = await fetch(`${getApiUrl()}/api/terminals`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cwd: cwd || workspacePath || undefined }),
+          body: JSON.stringify({
+            cwd: cwd || workspacePath || undefined,
+            browserSessionId,
+          }),
         });
         const data = await res.json();
         if (data.ok && data.terminal) {
@@ -2641,6 +2646,7 @@ export function Workspace() {
       isRestoringStateRef.current = true;
 
       // Restore terminals (PTY terminals)
+      const browserSessionId = getBrowserSessionId();
       for (const savedTerminal of state.terminals) {
         try {
           const res = await fetch(`${getApiUrl()}/api/terminals`, {
@@ -2651,6 +2657,7 @@ export function Workspace() {
               cwd: savedTerminal.cwd,
               initialCommand: savedTerminal.initialCommand,
               labels: savedTerminal.labels,
+              browserSessionId,
             }),
           });
           const data = await res.json();
@@ -4717,10 +4724,14 @@ export function Workspace() {
                     <button
                       onClick={async () => {
                         try {
+                          const browserSessionId = getBrowserSessionId();
                           const res = await fetch(`${getApiUrl()}/api/terminals`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ cwd: workspacePath || undefined }),
+                            body: JSON.stringify({
+                              cwd: workspacePath || undefined,
+                              browserSessionId,
+                            }),
                           });
                           const data = await res.json();
                           if (data.ok && data.terminal) {

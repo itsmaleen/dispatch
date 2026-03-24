@@ -54,8 +54,42 @@ export interface LayoutWidgetInfo {
   id: string;
 }
 
-/** Storage key for layout persistence */
-const LAYOUT_STORAGE_KEY = 'workspace-layout-v1';
+// ============================================================================
+// BROWSER SESSION ID (for multi-window isolation)
+// ============================================================================
+
+/**
+ * Get a unique session ID for this browser tab/window.
+ * Uses sessionStorage so it persists across page refreshes but is unique per tab.
+ * In Electron, uses the window ID from the main process.
+ */
+export function getBrowserSessionId(): string {
+  // In Electron, use window ID from main process
+  if (typeof window !== 'undefined' && window.electronAPI?.window?.getId) {
+    return `electron-${window.electronAPI.window.getId()}`;
+  }
+
+  // In browser, use sessionStorage for per-tab isolation
+  if (typeof window !== 'undefined' && typeof sessionStorage !== 'undefined') {
+    const SESSION_ID_KEY = 'acc-browser-session-id';
+    let sessionId = sessionStorage.getItem(SESSION_ID_KEY);
+    if (!sessionId) {
+      sessionId = `browser-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+      sessionStorage.setItem(SESSION_ID_KEY, sessionId);
+    }
+    return sessionId;
+  }
+
+  return 'default';
+}
+
+/** Storage key for layout persistence - scoped by browser session */
+function getLayoutStorageKey(): string {
+  return `workspace-layout-v2-${getBrowserSessionId()}`;
+}
+
+// Legacy key for migration
+const LEGACY_LAYOUT_STORAGE_KEY = 'workspace-layout-v1';
 
 // ============================================================================
 // LAYOUT TREE HELPERS
@@ -1055,7 +1089,8 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
     const { layoutTree } = get();
     if (layoutTree) {
       try {
-        localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layoutTree));
+        const key = getLayoutStorageKey();
+        localStorage.setItem(key, JSON.stringify(layoutTree));
       } catch (e) {
         console.warn('[WorkspaceStore] Failed to save layout:', e);
       }
@@ -1064,7 +1099,19 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
 
   restoreLayout: () => {
     try {
-      const saved = localStorage.getItem(LAYOUT_STORAGE_KEY);
+      const key = getLayoutStorageKey();
+      let saved = localStorage.getItem(key);
+
+      // Migration: try legacy key if session-scoped key doesn't exist
+      if (!saved) {
+        saved = localStorage.getItem(LEGACY_LAYOUT_STORAGE_KEY);
+        if (saved) {
+          // Migrate to new key and clear legacy
+          localStorage.setItem(key, saved);
+          localStorage.removeItem(LEGACY_LAYOUT_STORAGE_KEY);
+        }
+      }
+
       if (saved) {
         const tree = JSON.parse(saved) as LayoutNode;
         set({ layoutTree: tree });

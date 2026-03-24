@@ -1629,12 +1629,13 @@ Format your response as plain text only:
 
     // ============ Terminal Routes (PTY-based shell terminals) ============
 
-    // List all terminals
+    // List all terminals (filtered by browserSessionId if provided)
     this.app.get('/api/terminals', (c) => {
       if (!this.terminalManager) {
         return c.json({ terminals: [] });
       }
-      const terminals = this.terminalManager.list();
+      const browserSessionId = c.req.query('browserSessionId');
+      const terminals = this.terminalManager.list(browserSessionId);
       return c.json({ terminals });
     });
 

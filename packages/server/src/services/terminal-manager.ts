@@ -217,6 +217,7 @@ export class TerminalManager extends EventEmitter {
       sessionId: options.sessionId,
       status: 'running',
       labels: options.labels,
+      browserSessionId: options.browserSessionId,
     };
 
     const managed: ManagedTerminal = {
@@ -330,10 +331,14 @@ export class TerminalManager extends EventEmitter {
   }
 
   /**
-   * List all terminals
+   * List all terminals, optionally filtered by browserSessionId
    */
-  list(): TerminalInstance[] {
-    return Array.from(this.terminals.values()).map((m) => m.instance);
+  list(browserSessionId?: string): TerminalInstance[] {
+    const all = Array.from(this.terminals.values()).map((m) => m.instance);
+    if (browserSessionId) {
+      return all.filter((t) => t.browserSessionId === browserSessionId);
+    }
+    return all;
   }
 
   /**

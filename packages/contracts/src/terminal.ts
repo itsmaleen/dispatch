@@ -56,6 +56,9 @@ export interface TerminalInstance {
 
   /** User-defined labels for organization */
   labels?: Record<string, string>;
+
+  /** Browser session ID for multi-window isolation */
+  browserSessionId?: string;
 }
 
 /** Options for creating a new terminal */
@@ -90,6 +93,9 @@ export interface CreateTerminalOptions {
 
   /** Labels for organization */
   labels?: Record<string, string>;
+
+  /** Browser session ID for multi-window isolation */
+  browserSessionId?: string;
 }
 
 // ============================================================================
