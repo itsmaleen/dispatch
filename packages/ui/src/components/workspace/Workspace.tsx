@@ -44,6 +44,7 @@ import {
   GripVertical,
   GitBranch,
   Terminal as TerminalIcon, // Keep for command line icon usage
+  Link2,
 } from 'lucide-react';
 import { AgentsPanel } from '../agents/AgentsPanel';
 import { api, getServerUrl, getWsUrl } from '../../stores/app';
@@ -423,6 +424,56 @@ function ConsoleLineItem({ line, showTimestamp = true }: { line: ConsoleLine; sh
           {query && <span className="text-zinc-400 text-xs font-mono">{query}</span>}
           {line.isStreaming && (
             <Loader2 className="w-3 h-3 text-cyan-400 animate-spin mt-1" />
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Check if this is WebFetch
+  const isWebFetch = line.toolName === 'WebFetch' && line.toolInput;
+  if (isWebFetch) {
+    const url = line.toolInput?.url as string;
+    const prompt = line.toolInput?.prompt as string;
+    // Try to extract domain from URL for cleaner display
+    let displayUrl = url;
+    try {
+      const urlObj = new URL(url);
+      displayUrl = urlObj.hostname + (urlObj.pathname !== '/' ? urlObj.pathname : '');
+      // Truncate if too long
+      if (displayUrl.length > 60) {
+        displayUrl = displayUrl.substring(0, 57) + '...';
+      }
+    } catch {
+      // Keep original URL if parsing fails
+    }
+    return (
+      <div className="flex items-start gap-2 py-1">
+        {showTimestamp && line.timestamp && (
+          <span className="text-[10px] text-zinc-600 font-mono w-16 flex-shrink-0">
+            {line.timestamp}
+          </span>
+        )}
+        <Link2 className="w-4 h-4 text-sky-400 flex-shrink-0 mt-0.5" />
+        <div className="flex flex-col gap-0.5">
+          <span className="text-sky-400 text-sm">Fetching URL</span>
+          {url && (
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-zinc-400 text-xs font-mono hover:text-sky-300 hover:underline"
+            >
+              {displayUrl}
+            </a>
+          )}
+          {prompt && (
+            <span className="text-zinc-500 text-xs italic truncate max-w-md">
+              "{prompt}"
+            </span>
+          )}
+          {line.isStreaming && (
+            <Loader2 className="w-3 h-3 text-sky-400 animate-spin mt-1" />
           )}
         </div>
       </div>
