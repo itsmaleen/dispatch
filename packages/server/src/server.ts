@@ -1627,6 +1627,26 @@ Format your response as plain text only:
       }
     });
 
+    // ============ Worktree Routes ============
+
+    // List all worktrees for a project
+    this.app.get('/api/worktrees', async (c) => {
+      const projectPath = c.req.query('projectPath');
+      if (!projectPath) {
+        return c.json({ ok: false, error: 'projectPath query parameter required' }, 400);
+      }
+
+      try {
+        const { WorktreeManager } = await import('./services/worktree-manager');
+        const manager = new WorktreeManager({ repoPath: projectPath });
+        const worktrees = await manager.list();
+        return c.json({ ok: true, worktrees });
+      } catch (error) {
+        // Not a git repo or no worktrees - return empty list
+        return c.json({ ok: true, worktrees: [] });
+      }
+    });
+
     // ============ Terminal Routes (PTY-based shell terminals) ============
 
     // List all terminals (filtered by browserSessionId if provided)

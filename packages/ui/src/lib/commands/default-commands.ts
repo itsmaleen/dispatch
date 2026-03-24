@@ -21,6 +21,7 @@ import {
   Search,
   History,
   Send,
+  GitBranch,
 } from 'lucide-react';
 import type { Command } from './types';
 import { useWorkspaceStore, type LayoutWidgetInfo } from '../../stores/workspace';
@@ -797,6 +798,96 @@ export function createDefaultCommands(): Command[] {
             } catch (err) {
               console.error('Failed to close terminal:', err);
             }
+          }
+        },
+      },
+    },
+    {
+      id: 'new-worktree-terminal',
+      label: 'New Worktree Terminal',
+      description: 'Open a terminal in a git worktree',
+      category: 'terminal',
+      icon: GitBranch,
+      keywords: ['terminal', 'worktree', 'git', 'branch', 'shell'],
+      action: {
+        type: 'subcommand',
+        getCommands: (): Command[] => {
+          const { workspacePath } = useWorkspaceStore.getState();
+          if (!workspacePath) {
+            return [{
+              id: 'no-workspace-worktree',
+              label: 'No workspace open',
+              description: 'Open a project to view worktrees',
+              category: 'terminal',
+              action: { type: 'execute', handler: () => {} },
+            }];
+          }
+
+          // Return a loading placeholder
+          return [{
+            id: 'worktrees-loading',
+            label: 'Loading worktrees...',
+            description: 'Fetching git worktrees',
+            category: 'terminal',
+            action: { type: 'execute', handler: () => {} },
+          }];
+        },
+        getCommandsAsync: async (): Promise<Command[]> => {
+          const { workspacePath } = useWorkspaceStore.getState();
+          if (!workspacePath) return [];
+
+          try {
+            const res = await fetch(`${getServerUrl()}/api/worktrees?projectPath=${encodeURIComponent(workspacePath)}`);
+            const data = await res.json();
+
+            if (!data.ok || !data.worktrees || data.worktrees.length === 0) {
+              return [{
+                id: 'no-worktrees',
+                label: 'No worktrees found',
+                description: 'Create a worktree from an agent console first',
+                category: 'terminal',
+                icon: GitBranch,
+                action: { type: 'execute', handler: () => {} },
+              }];
+            }
+
+            // Filter out the main worktree (isMain: true) since that's the regular project
+            const worktrees = data.worktrees.filter((wt: { isMain?: boolean }) => !wt.isMain);
+
+            if (worktrees.length === 0) {
+              return [{
+                id: 'no-worktrees',
+                label: 'No worktrees found',
+                description: 'Create a worktree from an agent console first',
+                category: 'terminal',
+                icon: GitBranch,
+                action: { type: 'execute', handler: () => {} },
+              }];
+            }
+
+            return worktrees.map((worktree: { path: string; branch: string; isClean?: boolean }) => ({
+              id: `worktree-terminal-${worktree.branch}`,
+              label: worktree.branch,
+              description: `${worktree.path}${worktree.isClean === false ? ' (has changes)' : ''}`,
+              category: 'terminal',
+              icon: GitBranch,
+              keywords: [worktree.branch.toLowerCase(), 'worktree', 'terminal'],
+              action: {
+                type: 'execute',
+                handler: () => {
+                  useWorkspaceStore.getState().createTerminal(worktree.path);
+                },
+              },
+            }));
+          } catch (err) {
+            console.error('Failed to fetch worktrees:', err);
+            return [{
+              id: 'worktrees-error',
+              label: 'Failed to load worktrees',
+              description: err instanceof Error ? err.message : 'Unknown error',
+              category: 'terminal',
+              action: { type: 'execute', handler: () => {} },
+            }];
           }
         },
       },
