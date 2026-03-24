@@ -654,8 +654,8 @@ Do NOT write any code or make any changes until your plan is approved by the use
       return;
     }
 
-    // Track resume attempt for error handling
-    const resumeFromSessionId = session.resumeFromSessionId;
+    // Track resume attempt for error handling - check both session-level and SDK opts
+    const resumeFromSessionId = session.resumeFromSessionId || sdkOpts.resume;
 
     try {
       const isResuming = !!resumeFromSessionId;
@@ -667,8 +667,8 @@ Do NOT write any code or make any changes until your plan is approved by the use
         ...sdkOpts,
         includePartialMessages: true,
         pathToClaudeCodeExecutable: claudePath,
-        // Resume from previous SDK session if available
-        ...(resumeFromSessionId ? { resume: resumeFromSessionId } : {}),
+        // Resume from previous SDK session if available (session-level takes precedence)
+        ...(session.resumeFromSessionId ? { resume: session.resumeFromSessionId } : {}),
       };
       const queryIter = query({
         prompt: message,
@@ -837,14 +837,33 @@ Do NOT write any code or make any changes until your plan is approved by the use
       console.error(`[SessionManager] processQuery error:`, error);
       const exitCode1 = /exited with code 1/i.test(errMsg);
 
-      // Check if this was a resume attempt that failed
+      // Check if this was a resume attempt that failed - retry without resume
       if (resumeFromSessionId && exitCode1) {
-        console.error(
+        console.warn(
           `[SessionManager] Resume attempt failed for session ${resumeFromSessionId}. ` +
           'The session file may no longer exist or the CWD may have changed. ' +
-          'Starting a new session instead.'
+          'Retrying with a fresh session...'
         );
-      } else if (exitCode1) {
+
+        // Clear the stale session ID from the thread
+        this.getStore().updateThread(thread.id, { sessionId: null });
+
+        // Retry without the resume flag
+        const retryOpts: Options = {
+          ...sdkOpts,
+          // Don't include resume in retry
+        };
+        delete (retryOpts as any).resume;
+
+        // Reset session state for retry
+        session.outputBuffer = '';
+        session.status = 'running';
+
+        // Recursive call without resume - this will create a fresh session
+        return this.processQuery(session, thread, message, retryOpts, turnId);
+      }
+
+      if (exitCode1) {
         console.error(
           '[SessionManager] Hint: Claude Code subprocess exited with code 1. ' +
           'Ensure you are logged in with your Claude account: run "claude auth status" to check, or "claude auth login" to sign in.'
