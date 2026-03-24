@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import type { Command } from './types';
 import { useWorkspaceStore, type LayoutWidgetInfo } from '../../stores/workspace';
-import { useAppStore, api, getServerUrl } from '../../stores/app';
+import { useAppStore, api, getServerUrl, getRecentProjects } from '../../stores/app';
 import { useShortcutsStore } from '../../stores/shortcuts';
 
 /**
@@ -767,7 +767,8 @@ export function createDefaultCommands(): Command[] {
       action: {
         type: 'subcommand',
         getCommands: (): Command[] => {
-          const { recentProjects } = useAppStore.getState();
+          // Use getRecentProjects() to read from global store (reliably persisted)
+          const recentProjects = getRecentProjects();
 
           if (recentProjects.length === 0) {
             return [{

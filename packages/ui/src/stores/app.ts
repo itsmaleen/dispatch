@@ -523,6 +523,14 @@ const useGlobalAppStore = create<GlobalAppState>()(
   )
 );
 
+/**
+ * Get recent projects from the global store (persisted across all windows).
+ * Use this instead of useAppStore().recentProjects for reliable access.
+ */
+export function getRecentProjects(): Project[] {
+  return useGlobalAppStore.getState().recentProjects;
+}
+
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
