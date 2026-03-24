@@ -8,7 +8,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 RELEASE_DIR="$PROJECT_DIR/packages/ui/release"
 APP_NAME="Merry"
-DMG_NAME="$APP_NAME-0.1.0-arm64.dmg"
+
+# Get version from package.json
+VERSION=$(node -p "require('$PROJECT_DIR/packages/ui/package.json').version")
+ARCH=$(uname -m)
+if [ "$ARCH" = "x86_64" ]; then
+    ARCH="x64"
+elif [ "$ARCH" = "arm64" ]; then
+    ARCH="arm64"
+fi
+DMG_NAME="$APP_NAME-$VERSION-$ARCH.dmg"
 
 echo "📦 Installing from $RELEASE_DIR/$DMG_NAME..."
 cd "$RELEASE_DIR"

@@ -61,6 +61,7 @@ export interface ThreadRow {
   created_at: string;
   last_active_at: string;
   session_id: string | null;
+  session_cwd: string | null;  // Migration 4: path used when session was created
   metadata_json: string;
   // Session resume fields (Migration 1)
   status: SessionStatus | null;
@@ -90,6 +91,8 @@ export interface Thread {
   createdAt: Date;
   lastActiveAt: Date;
   sessionId?: string;
+  /** The cwd used when the session was created (for correct resume path) */
+  sessionCwd?: string;
   metadata?: Record<string, unknown>;
   // Session resume fields (Migration 1) - all optional for backwards compatibility
   status?: SessionStatus;
@@ -277,6 +280,18 @@ export class SqliteThreadStore {
 
       this.recordMigration(3, 'Backfill message_count, last_prompt, and FTS index');
     }
+
+    // Migration 4: Add session_cwd column to track which path was used when session was created
+    // This fixes session resume when consoles are reopened from different paths (e.g., worktrees)
+    if (currentVersion < 4) {
+      console.log('[SqliteThreadStore] Running migration 4: Add session_cwd column');
+
+      if (!this.hasColumn('threads', 'session_cwd')) {
+        this.db.exec(`ALTER TABLE threads ADD COLUMN session_cwd TEXT`);
+      }
+
+      this.recordMigration(4, 'Add session_cwd column for correct session resume path');
+    }
   }
 
   // ==================== Thread Operations ====================
@@ -333,6 +348,7 @@ export class SqliteThreadStore {
     threadId: string,
     update: Partial<Pick<Thread, 'name' | 'metadata' | 'worktreePath' | 'status' | 'lastPrompt' | 'layoutPanelId'>> & {
       sessionId?: string | null;
+      sessionCwd?: string | null;
       closedAt?: Date | null;
       incrementMessageCount?: boolean;
     }
@@ -347,6 +363,10 @@ export class SqliteThreadStore {
     if (update.sessionId !== undefined) {
       sets.push('session_id = ?');
       values.push(update.sessionId ?? null);
+    }
+    if (update.sessionCwd !== undefined) {
+      sets.push('session_cwd = ?');
+      values.push(update.sessionCwd ?? null);
     }
     if (update.metadata !== undefined) {
       sets.push('metadata_json = ?');
@@ -686,6 +706,7 @@ export class SqliteThreadStore {
       createdAt: new Date(row.created_at),
       lastActiveAt: new Date(row.last_active_at),
       sessionId: row.session_id ?? undefined,
+      sessionCwd: row.session_cwd ?? undefined,
       metadata: JSON.parse(row.metadata_json || '{}'),
       // Session resume fields
       status: row.status ?? 'active',

@@ -15,7 +15,7 @@
     "dev": "turbo dev",
     "build": "turbo build",
     "sign:mac": "./scripts/sign-and-notarize-mac.sh",
-    "install:app": "bun run build && ./scripts/build-and-install.sh",
+    "install:app": "./scripts/rebuild-and-install.sh",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
     "clean": "turbo clean && rm -rf node_modules"

@@ -397,7 +397,12 @@ Do NOT write any code or make any changes until your plan is approved by the use
     // Resume from previous session if available
     if (thread.sessionId) {
       sdkOpts.resume = thread.sessionId;
-      console.log(`[SessionManager] Resuming session ${thread.sessionId}`);
+      // Use the original session's cwd for resume (session files are stored per-project-path)
+      if (thread.sessionCwd && thread.sessionCwd !== session.cwd) {
+        console.log(`[SessionManager] Using stored sessionCwd for resume: ${thread.sessionCwd} (current: ${session.cwd})`);
+        sdkOpts.cwd = thread.sessionCwd;
+      }
+      console.log(`[SessionManager] Resuming session ${thread.sessionId} (cwd: ${sdkOpts.cwd})`);
     }
 
     // Process query in background
@@ -660,16 +665,20 @@ Do NOT write any code or make any changes until your plan is approved by the use
     try {
       const isResuming = !!resumeFromSessionId;
       console.log(`[SessionManager] Creating SDK query... (using Claude Code at ${claudePath})`);
+      console.log(`[SessionManager] Resume state: session.resumeFromSessionId=${session.resumeFromSessionId}, sdkOpts.resume=${sdkOpts.resume}, combined=${resumeFromSessionId}`);
       if (isResuming) {
         console.log(`[SessionManager] Attempting to resume session: ${resumeFromSessionId} (cwd: ${sdkOpts.cwd})`);
       }
+
+      // Build query options - ensure resume is properly passed through
       const queryOpts: Options = {
         ...sdkOpts,
         includePartialMessages: true,
         pathToClaudeCodeExecutable: claudePath,
-        // Resume from previous SDK session if available (session-level takes precedence)
-        ...(session.resumeFromSessionId ? { resume: session.resumeFromSessionId } : {}),
+        // Explicitly set resume from the combined source
+        ...(resumeFromSessionId ? { resume: resumeFromSessionId } : {}),
       };
+      console.log(`[SessionManager] queryOpts.resume after build: ${queryOpts.resume}`);
       const queryIter = query({
         prompt: message,
         options: queryOpts,
@@ -730,8 +739,8 @@ Do NOT write any code or make any changes until your plan is approved by the use
             });
             const actualSessionId = sortedSessions[0].sessionId;
             if (actualSessionId !== thread.sessionId) {
-              console.log(`[SessionManager] Saving session ID on interrupt for resume: ${actualSessionId}`);
-              this.getStore().updateThread(thread.id, { sessionId: actualSessionId });
+              console.log(`[SessionManager] Saving session ID on interrupt for resume: ${actualSessionId} (cwd: ${session.cwd})`);
+              this.getStore().updateThread(thread.id, { sessionId: actualSessionId, sessionCwd: session.cwd });
               session.sdkSessionId = actualSessionId;
             }
           }
@@ -739,7 +748,7 @@ Do NOT write any code or make any changes until your plan is approved by the use
           console.error('[SessionManager] Failed to save session ID on interrupt:', err);
           // Fall back to captured ID
           if (capturedSessionId && capturedSessionId !== thread.sessionId) {
-            this.getStore().updateThread(thread.id, { sessionId: capturedSessionId });
+            this.getStore().updateThread(thread.id, { sessionId: capturedSessionId, sessionCwd: session.cwd });
           }
         }
 
@@ -784,8 +793,8 @@ Do NOT write any code or make any changes until your plan is approved by the use
           });
           const actualSessionId = sortedSessions[0].sessionId;
           if (actualSessionId !== thread.sessionId) {
-            console.log(`[SessionManager] Updating thread with actual SDK session ID: ${actualSessionId}`);
-            this.getStore().updateThread(thread.id, { sessionId: actualSessionId });
+            console.log(`[SessionManager] Updating thread with actual SDK session ID: ${actualSessionId} (cwd: ${session.cwd})`);
+            this.getStore().updateThread(thread.id, { sessionId: actualSessionId, sessionCwd: session.cwd });
             session.sdkSessionId = actualSessionId;
           }
         }
@@ -793,7 +802,7 @@ Do NOT write any code or make any changes until your plan is approved by the use
         console.error('[SessionManager] Failed to get actual session ID from SDK:', err);
         // Fall back to captured ID (though it may not work for resume)
         if (capturedSessionId && capturedSessionId !== thread.sessionId) {
-          this.getStore().updateThread(thread.id, { sessionId: capturedSessionId });
+          this.getStore().updateThread(thread.id, { sessionId: capturedSessionId, sessionCwd: session.cwd });
         }
       }
 
@@ -845,8 +854,8 @@ Do NOT write any code or make any changes until your plan is approved by the use
           'Retrying with a fresh session...'
         );
 
-        // Clear the stale session ID from the thread
-        this.getStore().updateThread(thread.id, { sessionId: null });
+        // Clear the stale session ID and cwd from the thread
+        this.getStore().updateThread(thread.id, { sessionId: null, sessionCwd: null });
 
         // Retry without the resume flag
         const retryOpts: Options = {
@@ -880,7 +889,7 @@ Do NOT write any code or make any changes until your plan is approved by the use
         });
 
         if (capturedSessionId && capturedSessionId !== thread.sessionId) {
-          this.getStore().updateThread(thread.id, { sessionId: capturedSessionId });
+          this.getStore().updateThread(thread.id, { sessionId: capturedSessionId, sessionCwd: session.cwd });
         }
 
         session.status = 'idle';

@@ -26,4 +26,12 @@ bun run build
 echo "🔐 Signing and notarizing DMG..."
 cd packages/ui && bun run build:electron:sign
 
-echo "✅ Done. Signed DMG: packages/ui/release/Merry-0.1.0-arm64.dmg"
+# Get version from package.json
+VERSION=$(node -p "require('./packages/ui/package.json').version")
+ARCH=$(uname -m)
+if [ "$ARCH" = "x86_64" ]; then
+    ARCH="x64"
+elif [ "$ARCH" = "arm64" ]; then
+    ARCH="arm64"
+fi
+echo "✅ Done. Signed DMG: packages/ui/release/Merry-$VERSION-$ARCH.dmg"
