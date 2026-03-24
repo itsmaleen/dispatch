@@ -143,6 +143,81 @@ const ACCENT_COLORS = [
   { id: 'cyan', label: 'Cyan', class: 'bg-cyan-500' },
 ];
 
+// ============================================================================
+// ERROR HANDLING AND RETRY UTILITIES
+// ============================================================================
+
+/** Error types for classification */
+type ErrorType = 'transient' | 'session' | 'auth' | 'permanent';
+
+/** Classify an error to determine retry strategy */
+function classifyError(error: string): ErrorType {
+  const lowerError = error.toLowerCase();
+
+  // Session-related errors - can be fixed by recreating session
+  if (
+    lowerError.includes('no active session') ||
+    lowerError.includes('session not found') ||
+    lowerError.includes('session closed') ||
+    lowerError.includes('session expired')
+  ) {
+    return 'session';
+  }
+
+  // Auth errors - user needs to take action
+  if (
+    lowerError.includes('auth') ||
+    lowerError.includes('login') ||
+    lowerError.includes('unauthorized') ||
+    lowerError.includes('authentication') ||
+    lowerError.includes('code 1')  // Claude CLI exit code 1 usually means auth issue
+  ) {
+    return 'auth';
+  }
+
+  // Transient errors - worth retrying automatically
+  if (
+    lowerError.includes('timeout') ||
+    lowerError.includes('timed out') ||
+    lowerError.includes('rate limit') ||
+    lowerError.includes('too many requests') ||
+    lowerError.includes('network') ||
+    lowerError.includes('connection') ||
+    lowerError.includes('econnrefused') ||
+    lowerError.includes('econnreset') ||
+    lowerError.includes('fetch failed') ||
+    lowerError.includes('overloaded') ||
+    lowerError.includes('temporarily unavailable') ||
+    lowerError.includes('502') ||
+    lowerError.includes('503') ||
+    lowerError.includes('504')
+  ) {
+    return 'transient';
+  }
+
+  // Default to permanent (don't auto-retry)
+  return 'permanent';
+}
+
+/** Calculate backoff delay with jitter */
+function getBackoffDelay(attempt: number, baseMs = 1000, maxMs = 30000): number {
+  const exponentialDelay = Math.min(baseMs * Math.pow(2, attempt), maxMs);
+  // Add 10-30% jitter to avoid thundering herd
+  const jitter = exponentialDelay * (0.1 + Math.random() * 0.2);
+  return Math.round(exponentialDelay + jitter);
+}
+
+/** Sleep for specified milliseconds */
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/** Max retry attempts for different error types */
+const MAX_RETRIES: Record<ErrorType, number> = {
+  transient: 3,
+  session: 2,
+  auth: 0,      // Don't auto-retry auth errors
+  permanent: 0, // Don't auto-retry permanent errors
+};
+
 interface QueuedMessage {
   message: string;
   files?: UploadedFile[];
@@ -172,6 +247,10 @@ interface ConsoleState {
   // Worktree isolation
   worktreePath?: string;
   worktreeBranch?: string;
+  // Error recovery state
+  lastError?: string;
+  lastFailedMessage?: string;
+  retryCount?: number;
 }
 
 interface MinimizedWidget {
@@ -1275,6 +1354,7 @@ function AgentConsoleWidget({
   onWorktreeEnabled,
   onWorktreeMerged,
   onOpenTerminal,
+  onRetry,
   workspacePath,
   isHighlighted,
   isFocused,
@@ -1300,6 +1380,7 @@ function AgentConsoleWidget({
   onWorktreeEnabled?: (consoleId: string, worktreePath: string, branch: string) => void;
   onWorktreeMerged?: (consoleId: string) => void;
   onOpenTerminal?: (cwd: string) => void;
+  onRetry?: (consoleId: string) => void;
   workspacePath?: string;
   isHighlighted?: boolean;
   isFocused?: boolean;
@@ -1528,6 +1609,25 @@ function AgentConsoleWidget({
           <ConsoleLineItem key={line.id} line={line} showTimestamp={settings.showTimestamps !== false} />
         ))}
       </div>
+
+      {/* Retry Bar - show when there's a failed message that can be retried */}
+      {consoleState.lastFailedMessage && onRetry && !consoleState.isStreaming && (
+        <div className="flex-shrink-0 px-3 py-2 border-t border-zinc-800 bg-red-950/30">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs text-red-400 truncate">
+              <WifiOff className="w-3.5 h-3.5 flex-shrink-0" />
+              <span className="truncate">Last message failed to send</span>
+            </div>
+            <button
+              onClick={() => onRetry(consoleState.id)}
+              className="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-red-600 hover:bg-red-500 text-white rounded transition-colors flex-shrink-0"
+            >
+              <RefreshCw className="w-3 h-3" />
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Input */}
       <div className="flex-shrink-0 p-2 border-t border-zinc-800">
@@ -2070,6 +2170,7 @@ interface LayoutRendererProps {
   onWorktreeEnabled?: (terminalId: string, worktreePath: string, branch: string) => void;
   onWorktreeMerged?: (terminalId: string) => void;
   onOpenTerminal?: (cwd: string) => void;
+  onRetry?: (terminalId: string) => void;
   // Tasks widget props (legacy - kept for old TasksWidget)
   onExecute: () => void;
   isExecuting: boolean;
@@ -2131,6 +2232,7 @@ function LayoutRenderer({
   onWorktreeEnabled,
   onWorktreeMerged,
   onOpenTerminal,
+  onRetry,
   onExecute,
   isExecuting,
   onStepAgentChange,
@@ -2186,6 +2288,7 @@ function LayoutRenderer({
               onWorktreeEnabled={onWorktreeEnabled}
               onWorktreeMerged={onWorktreeMerged}
               onOpenTerminal={onOpenTerminal}
+              onRetry={onRetry}
               workspacePath={workspacePath ?? undefined}
               isHighlighted={highlightedTerminalId === terminal.id}
               isFocused={focusedWidgetId === terminal.id}
@@ -2365,6 +2468,7 @@ function LayoutRenderer({
               onWorktreeEnabled={onWorktreeEnabled}
               onWorktreeMerged={onWorktreeMerged}
               onOpenTerminal={onOpenTerminal}
+              onRetry={onRetry}
               onExecute={onExecute}
               isExecuting={isExecuting}
               onStepAgentChange={onStepAgentChange}
@@ -2729,6 +2833,8 @@ export function Workspace() {
               resume: !!savedConsole.sessionId,
               sessionId: savedConsole.sessionId,
               projectPath: savedConsole.cwd || state.projectPath,
+              worktreePath: savedConsole.worktreePath,
+              worktreeBranch: savedConsole.worktreeBranch,
             }
           : undefined;
 
@@ -2737,6 +2843,7 @@ export function Workspace() {
           options,
           hasThreadId: !!savedConsole.threadId,
           hasSessionId: !!savedConsole.sessionId,
+          hasWorktree: !!savedConsole.worktreePath,
         });
 
         // Use the first available agent ID (claude-code-local is typical)
@@ -3838,8 +3945,12 @@ export function Workspace() {
       threadId: resumeOptions?.threadId,
       // Store the Claude Code SDK session ID for resume
       resumeSessionId: resumeOptions?.sessionId,
-      // Use the original project path for resumed sessions (critical for SDK to find session files)
-      path: resumeOptions?.projectPath,
+      // Use worktree path if available, otherwise use original project path
+      // (critical for SDK to find session files and for worktree isolation)
+      path: resumeOptions?.worktreePath || resumeOptions?.projectPath,
+      // Restore worktree isolation state
+      worktreePath: resumeOptions?.worktreePath,
+      worktreeBranch: resumeOptions?.worktreeBranch,
     }]);
 
     // If we have a threadId, load previous conversation history
@@ -4304,6 +4415,32 @@ export function Workspace() {
     });
   };
 
+  // Handle retry - resend the last failed message
+  const handleRetry = useCallback((terminalId: string) => {
+    const terminal = terminals.find(t => t.id === terminalId);
+    if (!terminal?.lastFailedMessage) return;
+
+    const message = terminal.lastFailedMessage;
+
+    // Clear the error state before retrying
+    setTerminals(prev => prev.map(t =>
+      t.id === terminalId ? {
+        ...t,
+        lastError: undefined,
+        lastFailedMessage: undefined,
+        lines: [...t.lines, {
+          id: `retry-attempt-${Date.now()}`,
+          type: 'system' as ConsoleLineType,
+          content: 'Retrying...',
+          timestamp: makeTimestamp(),
+        }],
+      } : t
+    ));
+
+    // Resend the message
+    handleTerminalMessage(terminalId, message);
+  }, [terminals]);
+
   const handleTerminalMessage = async (terminalId: string, message: string, files?: UploadedFile[]) => {
     const terminal = terminals.find(t => t.id === terminalId);
     if (!terminal) return;
@@ -4377,15 +4514,13 @@ export function Workspace() {
         let threadId = terminal.threadId;
         const resumeSessionId = terminal.resumeSessionId;
 
-        // Create thread/session if needed (Phase 2/3) or resume existing
-        if (!threadId || !terminal.sessionActive) {
-          // If threadId already exists (resume case), use it; otherwise generate new
-          if (!threadId) {
-            threadId = `thread-${terminalId}`;
+        // Helper to create/recreate session
+        const createSession = async (forceNew = false) => {
+          if (forceNew) {
+            setTerminals(prev => prev.map(t =>
+              t.id === terminalId ? { ...t, sessionActive: false } : t
+            ));
           }
-
-          // Register mapping immediately (before async state update)
-          threadToTerminalRef.current[threadId] = terminalId;
 
           const sessionRes = await fetch(`${getApiUrl()}/threads/${threadId}/session`, {
             method: 'POST',
@@ -4393,9 +4528,9 @@ export function Workspace() {
             body: JSON.stringify({
               cwd,
               name: `${terminal.agent.name} - ${new Date().toLocaleString()}`,
-              // Pass resume flag and session ID if resuming a previous session
-              resume: !!resumeSessionId,
-              sessionId: resumeSessionId,
+              // Pass resume flag and session ID if resuming a previous session (only on first create)
+              resume: !forceNew && !!resumeSessionId,
+              sessionId: !forceNew ? resumeSessionId : undefined,
             }),
           });
           const sessionData = await sessionRes.json();
@@ -4406,54 +4541,152 @@ export function Workspace() {
           setTerminals(prev => prev.map(t =>
             t.id === terminalId ? { ...t, threadId, sessionActive: true, currentStepId: extractedStepId, resumeSessionId: undefined } : t
           ));
+        };
+
+        // Helper to send message
+        const sendMessage = async () => {
+          const res = await fetch(`${getApiUrl()}/threads/${threadId}/send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message }),
+          });
+          return res.json();
+        };
+
+        // Create thread/session if needed (Phase 2/3) or resume existing
+        if (!threadId || !terminal.sessionActive) {
+          // If threadId already exists (resume case), use it; otherwise generate new
+          if (!threadId) {
+            threadId = `thread-${terminalId}`;
+          }
+
+          // Register mapping immediately (before async state update)
+          threadToTerminalRef.current[threadId] = terminalId;
+
+          await createSession();
         } else {
           // Ensure mapping exists for existing threadId
           threadToTerminalRef.current[threadId] = terminalId;
         }
 
-        // Send via thread API (persistent session)
-        let res = await fetch(`${getApiUrl()}/threads/${threadId}/send`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message }),
-        });
-        let data = await res.json();
+        // Send with retry logic
+        let lastError = 'Send failed';
+        let attempt = 0;
+        const maxAttempts = 4; // Initial + 3 retries
 
-        // If server restarted, session is gone; create session and retry send once
-        if (!data.ok && data.error === 'No active session for thread' && terminal.threadId) {
-          setTerminals(prev => prev.map(t =>
-            t.id === terminalId ? { ...t, threadId: undefined, sessionActive: false } : t
-          ));
-          const sessionRes = await fetch(`${getApiUrl()}/threads/${threadId}/session`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ cwd, name: `${terminal.agent.name} - ${new Date().toLocaleString()}` }),
-          });
-          const sessionData = await sessionRes.json();
-          if (!sessionData.ok) throw new Error(sessionData.error || 'Failed to create session');
-          setTerminals(prev => prev.map(t =>
-            t.id === terminalId ? { ...t, threadId, sessionActive: true } : t
-          ));
-          res = await fetch(`${getApiUrl()}/threads/${threadId}/send`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message }),
-          });
-          data = await res.json();
+        while (attempt < maxAttempts) {
+          try {
+            const data = await sendMessage();
+
+            if (data.ok) {
+              // Success! Clear any error state
+              setTerminals(prev => prev.map(t =>
+                t.id === terminalId ? { ...t, lastError: undefined, lastFailedMessage: undefined, retryCount: 0 } : t
+              ));
+              return; // Exit the function on success
+            }
+
+            // Handle error response
+            lastError = data.error || 'Send failed';
+            const errorType = classifyError(lastError);
+
+            // Session errors: recreate session and retry
+            if (errorType === 'session') {
+              console.log(`[Console] Session error, recreating session (attempt ${attempt + 1})`);
+              setTerminals(prev => prev.map(t =>
+                t.id === terminalId ? {
+                  ...t,
+                  lines: [...t.lines, {
+                    id: `retry-${Date.now()}`,
+                    type: 'system' as ConsoleLineType,
+                    content: `Session disconnected. Reconnecting...`,
+                    timestamp: makeTimestamp(),
+                  }],
+                } : t
+              ));
+              await createSession(true);
+              attempt++;
+              continue;
+            }
+
+            // Transient errors: backoff and retry
+            if (errorType === 'transient' && attempt < MAX_RETRIES.transient) {
+              const delay = getBackoffDelay(attempt);
+              console.log(`[Console] Transient error, retrying in ${delay}ms (attempt ${attempt + 1})`);
+              setTerminals(prev => prev.map(t =>
+                t.id === terminalId ? {
+                  ...t,
+                  lines: [...t.lines, {
+                    id: `retry-${Date.now()}`,
+                    type: 'system' as ConsoleLineType,
+                    content: `Connection issue. Retrying in ${Math.round(delay / 1000)}s...`,
+                    timestamp: makeTimestamp(),
+                  }],
+                } : t
+              ));
+              await sleep(delay);
+              attempt++;
+              continue;
+            }
+
+            // Auth or permanent errors: don't retry
+            throw new Error(lastError);
+
+          } catch (fetchError) {
+            // Network-level errors (fetch failed)
+            lastError = fetchError instanceof Error ? fetchError.message : String(fetchError);
+            const errorType = classifyError(lastError);
+
+            if (errorType === 'transient' && attempt < MAX_RETRIES.transient) {
+              const delay = getBackoffDelay(attempt);
+              console.log(`[Console] Network error, retrying in ${delay}ms (attempt ${attempt + 1})`);
+              setTerminals(prev => prev.map(t =>
+                t.id === terminalId ? {
+                  ...t,
+                  lines: [...t.lines, {
+                    id: `retry-${Date.now()}`,
+                    type: 'system' as ConsoleLineType,
+                    content: `Network error. Retrying in ${Math.round(delay / 1000)}s...`,
+                    timestamp: makeTimestamp(),
+                  }],
+                } : t
+              ));
+              await sleep(delay);
+              attempt++;
+              continue;
+            }
+
+            throw fetchError;
+          }
         }
 
-        if (!data.ok) {
-          throw new Error(data.error || 'Send failed');
-        }
+        // All retries exhausted
+        throw new Error(lastError || 'Send failed after multiple retries');
       }
 
     } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorType = classifyError(errorMessage);
+
+      // Store error state for potential manual retry
       setTerminals(prev => prev.map(t =>
         t.id === terminalId ? {
           ...t,
           isStreaming: false,
           currentStepId: undefined,
-          lines: [...t.lines, { id: `${Date.now()}`, type: 'error', content: `Error: ${err}`, timestamp: makeTimestamp() }]
+          lastError: errorMessage,
+          lastFailedMessage: message,
+          retryCount: (t.retryCount || 0) + 1,
+          lines: [...t.lines, {
+            id: `error-${Date.now()}`,
+            type: 'error' as ConsoleLineType,
+            content: errorType === 'auth'
+              ? `Authentication error: ${errorMessage}`
+              : errorType === 'session'
+              ? `Session error: ${errorMessage}. Click "Retry" to reconnect.`
+              : `Error: ${errorMessage}`,
+            timestamp: makeTimestamp(),
+          }]
         } : t
       ));
       setPlanSteps(prev => prev.map(s =>
@@ -4905,6 +5138,7 @@ export function Workspace() {
                 onWorktreeEnabled={handleWorktreeEnabled}
                 onWorktreeMerged={handleWorktreeMerged}
                 onOpenTerminal={(cwd) => useWorkspaceStore.getState().createTerminal(cwd)}
+                onRetry={handleRetry}
                 onExecute={handleExecute}
                 isExecuting={isExecuting}
                 onStepAgentChange={handleStepAgentChange}
@@ -5068,6 +5302,7 @@ export function Workspace() {
                   onWorktreeEnabled={handleWorktreeEnabled}
                   onWorktreeMerged={handleWorktreeMerged}
                   onOpenTerminal={(cwd) => useWorkspaceStore.getState().createTerminal(cwd)}
+                  onRetry={handleRetry}
                   workspacePath={workspacePath ?? undefined}
                   isFocused={true}
                 />

@@ -20,6 +20,8 @@ export interface ConsoleResumeOptions {
   resume: boolean;        // Whether to resume the session
   sessionId?: string;     // Claude Code SDK session ID
   projectPath?: string;   // Original project path (CWD) for the session
+  worktreePath?: string;  // Git worktree path (if using isolated worktree)
+  worktreeBranch?: string; // Git worktree branch name
 }
 
 // ============================================================================
