@@ -22,6 +22,8 @@ import {
   History,
   Send,
   GitBranch,
+  FolderOpen,
+  ExternalLink,
 } from 'lucide-react';
 import type { Command } from './types';
 import { useWorkspaceStore, type LayoutWidgetInfo } from '../../stores/workspace';
@@ -31,8 +33,8 @@ import { useShortcutsStore } from '../../stores/shortcuts';
 /**
  * Format a date as a relative time string (e.g., "5 min ago", "2 hours ago")
  */
-function getTimeAgo(dateString: string): string {
-  const date = new Date(dateString);
+function getTimeAgo(dateInput: string | number | Date): string {
+  const date = new Date(dateInput);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffMins = Math.floor(diffMs / 60000);
@@ -751,6 +753,76 @@ export function createDefaultCommands(): Command[] {
         type: 'execute',
         handler: () => {
           useWorkspaceStore.getState().navigateTo('workspace-real');
+        },
+      },
+    },
+    {
+      id: 'recent-directories',
+      label: 'Recent Directories',
+      description: 'Open a recently used project directory',
+      category: 'navigation',
+      icon: FolderOpen,
+      shortcut: '⌘⇧O',
+      keywords: ['recent', 'project', 'directory', 'folder', 'open', 'switch'],
+      action: {
+        type: 'subcommand',
+        getCommands: (): Command[] => {
+          const { recentProjects } = useAppStore.getState();
+
+          if (recentProjects.length === 0) {
+            return [{
+              id: 'no-recent-projects',
+              label: 'No recent projects',
+              description: 'Open a project to add it to recents',
+              category: 'navigation',
+              action: { type: 'execute', handler: () => {} },
+            }];
+          }
+
+          const commands: Command[] = [];
+
+          for (const project of recentProjects) {
+            const timeAgo = project.lastOpened ? getTimeAgo(project.lastOpened) : '';
+            const isCurrentProject = useWorkspaceStore.getState().workspacePath === project.path;
+
+            // Open in current window
+            commands.push({
+              id: `recent-project-current-${project.path}`,
+              label: project.name,
+              description: `${project.path}${timeAgo ? ` • ${timeAgo}` : ''}${isCurrentProject ? ' (current)' : ''}`,
+              category: 'navigation',
+              icon: FolderOpen,
+              keywords: [project.name.toLowerCase(), project.path.toLowerCase()],
+              action: {
+                type: 'execute',
+                handler: () => {
+                  useAppStore.getState().setProject(project);
+                  useWorkspaceStore.getState().setWorkspacePath(project.path);
+                  useWorkspaceStore.getState().navigateTo('workspace-real');
+                },
+              },
+            });
+
+            // Open in new window (only in Electron)
+            if (window.electronAPI?.window?.create) {
+              commands.push({
+                id: `recent-project-new-${project.path}`,
+                label: `${project.name} (New Window)`,
+                description: `Open in new window • ${project.path}`,
+                category: 'navigation',
+                icon: ExternalLink,
+                keywords: [project.name.toLowerCase(), 'new', 'window'],
+                action: {
+                  type: 'execute',
+                  handler: async () => {
+                    await window.electronAPI!.window.create(project.path);
+                  },
+                },
+              });
+            }
+          }
+
+          return commands;
         },
       },
     },
