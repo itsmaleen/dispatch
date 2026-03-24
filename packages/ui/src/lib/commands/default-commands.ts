@@ -173,6 +173,10 @@ export function createDefaultCommands(): Command[] {
       icon: Search,
       shortcut: '⌘⇧F',
       keywords: ['search', 'find', 'session', 'resume', 'history', 'previous', 'load', 'open'],
+      isVisible: () => {
+        const { workspacePath } = useWorkspaceStore.getState();
+        return !!workspacePath;
+      },
       action: {
         type: 'subcommand',
         getCommands: (): Command[] => {
@@ -456,7 +460,7 @@ export function createDefaultCommands(): Command[] {
     },
 
     // ========================================
-    // Console Actions (always visible, operate on focused widget)
+    // Console Actions (contextual - only visible when relevant widget is focused)
     // ========================================
     {
       id: 'close-console',
@@ -466,6 +470,10 @@ export function createDefaultCommands(): Command[] {
       icon: X,
       shortcut: '⌘W',
       keywords: ['close', 'console', 'kill', 'exit'],
+      isVisible: () => {
+        const { focusedWidgetType } = useWorkspaceStore.getState();
+        return focusedWidgetType === 'agent-console';
+      },
       action: {
         type: 'execute',
         handler: () => {
@@ -483,6 +491,10 @@ export function createDefaultCommands(): Command[] {
       category: 'console',
       icon: Minus,
       keywords: ['minimize', 'console', 'hide', 'dock'],
+      isVisible: () => {
+        const { focusedWidgetType } = useWorkspaceStore.getState();
+        return focusedWidgetType === 'agent-console';
+      },
       action: {
         type: 'execute',
         handler: () => {
@@ -501,6 +513,10 @@ export function createDefaultCommands(): Command[] {
       icon: Maximize2,
       shortcut: '⌘↵',
       keywords: ['maximize', 'fullscreen', 'expand', 'restore', 'minimize'],
+      isVisible: () => {
+        const { focusedWidgetId } = useWorkspaceStore.getState();
+        return focusedWidgetId !== null;
+      },
       action: {
         type: 'execute',
         handler: () => {
@@ -515,6 +531,10 @@ export function createDefaultCommands(): Command[] {
       category: 'console',
       icon: Trash2,
       keywords: ['clear', 'console', 'clean', 'reset', 'output'],
+      isVisible: () => {
+        const { focusedWidgetType } = useWorkspaceStore.getState();
+        return focusedWidgetType === 'agent-console';
+      },
       action: {
         type: 'execute',
         handler: () => {
@@ -785,6 +805,10 @@ export function createDefaultCommands(): Command[] {
       category: 'terminal',
       icon: X,
       keywords: ['close', 'terminal', 'kill', 'exit', 'shell'],
+      isVisible: () => {
+        const { focusedWidgetType } = useWorkspaceStore.getState();
+        return focusedWidgetType === 'terminal';
+      },
       action: {
         type: 'execute',
         handler: async () => {
@@ -809,6 +833,10 @@ export function createDefaultCommands(): Command[] {
       category: 'terminal',
       icon: GitBranch,
       keywords: ['terminal', 'worktree', 'git', 'branch', 'shell'],
+      isVisible: () => {
+        const { workspacePath } = useWorkspaceStore.getState();
+        return !!workspacePath;
+      },
       action: {
         type: 'subcommand',
         getCommands: (): Command[] => {
