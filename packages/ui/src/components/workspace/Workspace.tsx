@@ -3658,20 +3658,36 @@ export function Workspace() {
         const errorMessage = msg.result || 'An error occurred';
         console.error('[WS] Session result error:', errorMessage);
 
-        updateAllTerminals(t => ({
-          ...t,
-          isStreaming: false,
-          currentStepId: undefined,
-          lines: [
-            ...t.lines.map(l => ({ ...l, isStreaming: false })),
-            {
-              id: `error-${Date.now()}`,
-              type: 'error' as const,
-              content: errorMessage,
-              timestamp: makeTimestamp(),
-            },
-          ],
-        }));
+        // Classify the error to determine if retry is appropriate
+        const errorType = classifyError(errorMessage);
+
+        updateAllTerminals(t => {
+          // Find the last prompt (user message) for potential retry
+          const lastPrompt = [...t.lines].reverse().find(l => l.type === 'prompt');
+          const lastMessage = lastPrompt?.content;
+
+          return {
+            ...t,
+            isStreaming: false,
+            currentStepId: undefined,
+            // Store error state for retry functionality (only for retryable errors)
+            lastError: errorType !== 'permanent' ? errorMessage : undefined,
+            lastFailedMessage: errorType !== 'permanent' ? lastMessage : undefined,
+            lines: [
+              ...t.lines.map(l => ({ ...l, isStreaming: false })),
+              {
+                id: `error-${Date.now()}`,
+                type: 'error' as const,
+                content: errorType === 'auth'
+                  ? `Authentication error: ${errorMessage}`
+                  : errorType === 'transient'
+                  ? `${errorMessage} (click Retry to try again)`
+                  : errorMessage,
+                timestamp: makeTimestamp(),
+              },
+            ],
+          };
+        });
         return;
       }
 
