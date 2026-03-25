@@ -1534,6 +1534,18 @@ function AgentConsoleWidget({
 
   const settings = { ...DEFAULT_CONSOLE_SETTINGS, ...consoleState.settings };
 
+  // Log when component mounts with console state
+  useEffect(() => {
+    console.log('[AgentConsoleWidget] Mounted', {
+      consoleId: consoleState.id,
+      threadId: consoleState.threadId,
+      hasMoreHistory: consoleState.hasMoreHistory,
+      oldestSequence: consoleState.oldestSequence,
+      hasOnLoadOlderLines: !!onLoadOlderLines,
+      lineCount: consoleState.lines.length,
+    });
+  }, []);
+
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     setContextMenu({ x: e.clientX, y: e.clientY });
@@ -1614,7 +1626,21 @@ function AgentConsoleWidget({
     if (!scrollContainer) return;
     if (!consoleState.hasMoreHistory || !consoleState.oldestSequence) return;
     // Skip if onLoadOlderLines handler is not provided
-    if (!onLoadOlderLines) return;
+    if (!onLoadOlderLines) {
+      console.warn('[AgentConsoleWidget] onLoadOlderLines not provided, skipping lazy loading setup', {
+        consoleId: consoleState.id,
+        hasMoreHistory: consoleState.hasMoreHistory,
+        oldestSequence: consoleState.oldestSequence,
+      });
+      return;
+    }
+
+    console.log('[AgentConsoleWidget] Setting up lazy loading scroll listener', {
+      consoleId: consoleState.id,
+      hasMoreHistory: consoleState.hasMoreHistory,
+      oldestSequence: consoleState.oldestSequence,
+      hasHandler: !!onLoadOlderLines,
+    });
 
     const handleScroll = () => {
       // Disable auto-scroll when user scrolls manually
@@ -1625,6 +1651,13 @@ function AgentConsoleWidget({
       const nearTop = scrollContainer.scrollTop < 200;
 
       if (nearTop && consoleState.hasMoreHistory && !isLoadingOlderLines && consoleState.threadId) {
+        console.log('[AgentConsoleWidget] Triggering lazy load', {
+          consoleId: consoleState.id,
+          oldestSequence: consoleState.oldestSequence,
+          hasHandler: !!onLoadOlderLines,
+          handlerType: typeof onLoadOlderLines,
+        });
+
         setIsLoadingOlderLines(true);
 
         // Store current scroll height to restore scroll position after prepending
@@ -1633,7 +1666,11 @@ function AgentConsoleWidget({
         // Load older lines
         const loadOlderLines = async () => {
           try {
-            const data = await onLoadOlderLines?.(consoleState.id, consoleState.oldestSequence!);
+            if (!onLoadOlderLines) {
+              console.error('[AgentConsoleWidget] onLoadOlderLines is undefined when trying to call it!');
+              throw new Error('onLoadOlderLines is not defined');
+            }
+            const data = await onLoadOlderLines(consoleState.id, consoleState.oldestSequence!);
 
             if (data && data.ok && data.lines && data.lines.length > 0) {
               // Wait for next frame to ensure DOM has updated
@@ -5097,9 +5134,11 @@ export function Workspace() {
    * Load older console lines (lazy loading on scroll)
    */
   const handleLoadOlderLines = useCallback(async (consoleId: string, beforeSequence: number) => {
+    console.log('[Workspace] handleLoadOlderLines called', { consoleId, beforeSequence });
     try {
       const terminal = terminals.find(t => t.id === consoleId);
       if (!terminal || !terminal.threadId) {
+        console.warn('[Workspace] Terminal not found or missing threadId', { consoleId, hasTerminal: !!terminal });
         return { ok: false, lines: [], hasMore: false };
       }
 
