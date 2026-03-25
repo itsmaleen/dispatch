@@ -3,7 +3,7 @@
   "checkpoint_id": "6ff7eb5a5330",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 23,
+  "checkpoints_count": 25,
   "files_touched": [
     "bun.lock",
     "packages/contracts/src/agent-console.ts",
@@ -27,13 +27,19 @@
       "transcript": "/6f/f7eb5a5330/1/full.jsonl",
       "content_hash": "/6f/f7eb5a5330/1/content_hash.txt",
       "prompt": "/6f/f7eb5a5330/1/prompt.txt"
+    },
+    {
+      "metadata": "/6f/f7eb5a5330/2/metadata.json",
+      "transcript": "/6f/f7eb5a5330/2/full.jsonl",
+      "content_hash": "/6f/f7eb5a5330/2/content_hash.txt",
+      "prompt": "/6f/f7eb5a5330/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 4664,
-    "cache_creation_tokens": 2416874,
-    "cache_read_tokens": 31285947,
-    "output_tokens": 138383,
-    "api_call_count": 365
+    "input_tokens": 4720,
+    "cache_creation_tokens": 2421826,
+    "cache_read_tokens": 31366605,
+    "output_tokens": 139052,
+    "api_call_count": 370
   }
 }

@@ -1,0 +1,5 @@
+can you access a previous session where we were working on console-line-persistence
+
+---
+
+how can I get a list of claude sessions, grep for console-line-persistence.md, get the ID and then resume that session?
