@@ -20,8 +20,11 @@ set +a
 export APPLE_APP_SPECIFIC_PASSWORD="$APPLE_PASSWORD"
 unset APPLE_PASSWORD
 
+echo "🧹 Cleaning dist directories..."
+rm -rf packages/ui/dist packages/server/dist packages/contracts/dist packages/analytics/dist
+
 echo "📦 Building (signed + notarized for macOS)..."
-bun run build
+npx turbo build --force
 
 echo "🔐 Signing and notarizing DMG..."
 cd packages/ui && bun run build:electron:sign

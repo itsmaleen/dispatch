@@ -24,7 +24,10 @@ npx @electron/rebuild -m node_modules/node-pty
 
 cd "$PROJECT_DIR"
 
-echo "📦 Building application (force rebuild)..."
+echo "🧹 Cleaning dist directories..."
+rm -rf packages/ui/dist packages/server/dist packages/contracts/dist packages/analytics/dist
+
+echo "📦 Building application (force clean rebuild)..."
 npx turbo build --force
 
 echo "💿 Installing to /Applications..."

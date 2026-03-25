@@ -5094,15 +5094,16 @@ export function Workspace() {
    * Load older console lines (lazy loading on scroll)
    */
   const handleLoadOlderLines = useCallback(async (consoleId: string, beforeSequence: number) => {
-    const terminal = terminals.find(t => t.id === consoleId);
-    if (!terminal || !terminal.threadId) {
-      return { ok: false, lines: [], hasMore: false };
-    }
+    try {
+      const terminal = terminals.find(t => t.id === consoleId);
+      if (!terminal || !terminal.threadId) {
+        return { ok: false, lines: [], hasMore: false };
+      }
 
-    console.log('[Workspace] Loading older lines:', { consoleId, beforeSequence, threadId: terminal.threadId });
+      console.log('[Workspace] Loading older lines:', { consoleId, beforeSequence, threadId: terminal.threadId });
 
-    // Fetch older lines
-    const data = await fetchOlderConsoleLines(terminal.threadId, beforeSequence, 500);
+      // Fetch older lines
+      const data = await fetchOlderConsoleLines(terminal.threadId, beforeSequence, 500);
 
     if (data.ok && data.lines && data.lines.length > 0) {
       // Convert persisted lines to ConsoleLine format
@@ -5161,7 +5162,11 @@ export function Workspace() {
       }));
     }
 
-    return data;
+      return data;
+    } catch (error) {
+      console.error('[Workspace] Error loading older lines:', error);
+      return { ok: false, lines: [], hasMore: false };
+    }
   }, [terminals, fetchOlderConsoleLines]);
 
   const handleSendStepToTerminal = (step: PlanStep, terminalId?: string) => {
