@@ -4161,6 +4161,22 @@ export function Workspace() {
         blockIndexToIdRef.current = {};
       }
       const matchedTerminal = terminalsRef.current.find(matchesTerminal);
+
+      console.log('[turn.completed] Debug info:', {
+        hasMatchedTerminal: !!matchedTerminal,
+        matchedId: matchedTerminal?.id,
+        matchedThreadId: matchedTerminal?.threadId,
+        eventThreadId: threadId,
+        eventAdapterId: adapterId,
+        terminalsCount: terminalsRef.current.length,
+        allTerminals: terminalsRef.current.map(t => ({
+          id: t.id,
+          threadId: t.threadId,
+          agentId: t.agent?.id,
+          isStreaming: t.isStreaming
+        })),
+      });
+
       const stepIdToComplete = matchedTerminal?.currentStepId;
       const usage = event.type === 'turn.completed' ? event.payload?.usage : undefined;
       const queuedMsg = matchedTerminal?.queuedMessage;
@@ -4170,23 +4186,31 @@ export function Workspace() {
       const isError = event.payload?.status === 'failed';
       const errorMessage = event.payload?.reason || event.payload?.result;
 
-      updateAllTerminals(t => ({
-        ...t,
-        isStreaming: false,
-        currentStepId: undefined,
-        lines: [
-          ...t.lines.map(l => ({ ...l, isStreaming: false })),
-          // Add error line if turn completed with failed status
-          ...(isError && errorMessage ? [{
-            id: `error-${Date.now()}`,
-            type: 'error' as const,
-            content: errorMessage,
-            timestamp: makeTimestamp(),
-          }] : []),
-        ],
-        // Clear queued message since we'll send it (only if not an error)
-        queuedMessage: (queuedMsg && !isError) ? null : t.queuedMessage,
-      }));
+      updateAllTerminals(t => {
+        const updated = {
+          ...t,
+          isStreaming: false,
+          currentStepId: undefined,
+          lines: [
+            ...t.lines.map(l => ({ ...l, isStreaming: false })),
+            // Add error line if turn completed with failed status
+            ...(isError && errorMessage ? [{
+              id: `error-${Date.now()}`,
+              type: 'error' as const,
+              content: errorMessage,
+              timestamp: makeTimestamp(),
+            }] : []),
+          ],
+          // Clear queued message since we'll send it (only if not an error)
+          queuedMessage: (queuedMsg && !isError) ? null : t.queuedMessage,
+        };
+        console.log('[turn.completed] Updating terminal:', {
+          id: t.id,
+          wasStreaming: t.isStreaming,
+          nowStreaming: updated.isStreaming,
+        });
+        return updated;
+      });
 
       if (stepIdToComplete && usage) {
         setPlanSteps(prev => prev.map(s =>
