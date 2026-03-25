@@ -1,0 +1,18 @@
+I tried to launch app with a project that I guess had consoles opened and getting this error
+handleLoadOlderLines is not defined
+
+---
+
+can we setup a command from root for install:app that forces clean rebuild (same for sign:mac)
+
+---
+
+still getting this error on launching previous project "onLoadOlderLines is not defined"
+
+---
+
+still seeing the same error, is there a cache that isn't being cleared? Noticed similar issue when running bun run dev in worktree branches
+
+---
+
+still seeing the error
