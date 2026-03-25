@@ -8,6 +8,7 @@ import { ShortcutsMenu } from "./components/shortcuts/ShortcutsMenu";
 import { WidgetDemo } from "./components/demo/WidgetDemo";
 import { WorkspaceDemo } from "./components/demo/WorkspaceDemo";
 import { Workspace } from "./components/workspace/Workspace";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { useAppStore, api, getServerUrl, discoverServerPort, type Task } from "./stores/app";
 import { useCommandPaletteStore } from "./stores/command-palette";
 import { useWorkspaceStore } from "./stores/workspace";
@@ -422,7 +423,9 @@ export function App() {
             from the Merry repo.
           </div>
         )}
-        <Workspace />
+        <ErrorBoundary>
+          <Workspace />
+        </ErrorBoundary>
         <CommandPalette />
         <ShortcutsMenu />
       </div>

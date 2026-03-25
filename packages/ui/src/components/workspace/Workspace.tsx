@@ -1468,7 +1468,7 @@ function AgentConsoleWidget({
     return 'bg-zinc-900 border-zinc-800';
   };
 
-  const displayName = settings.label || consoleState.agent.name;
+  const displayName = settings.label || consoleState.agent?.name || 'Console';
 
   return (
     <div
@@ -1518,7 +1518,7 @@ function AgentConsoleWidget({
               <Maximize2 className="w-2 h-2 text-green-900 opacity-0 group-hover:opacity-100" />
             </button>
           </div>
-          <span className="text-sm">{consoleState.agent.icon}</span>
+          <span className="text-sm">{consoleState.agent?.icon}</span>
           {/* Inline editable name */}
           {isEditingName ? (
             <form
@@ -1538,7 +1538,7 @@ function AgentConsoleWidget({
                     handleNameCancel();
                   }
                 }}
-                placeholder={consoleState.agent.name}
+                placeholder={consoleState.agent?.name || 'Console'}
                 className="w-32 px-1 py-0.5 text-xs bg-zinc-800 border border-zinc-600 rounded text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-violet-500"
               />
             </form>
@@ -1557,7 +1557,7 @@ function AgentConsoleWidget({
             </button>
           )}
           {settings.label && (
-            <span className="text-[10px] text-zinc-600">({consoleState.agent.name})</span>
+            <span className="text-[10px] text-zinc-600">({consoleState.agent?.name || 'Console'})</span>
           )}
           {consoleState.isStreaming && <Loader2 className="w-3 h-3 text-violet-400 animate-spin" />}
         </div>
@@ -1566,7 +1566,7 @@ function AgentConsoleWidget({
             <span className="text-[10px] text-zinc-500 truncate max-w-[200px]">{consoleState.currentTask}</span>
           )}
           {/* Worktree button - show for Claude Code consoles (even before thread exists) */}
-          {consoleState.agent.type === 'claude-code' && (
+          {consoleState.agent?.type === 'claude-code' && (
             <WorktreeButton
               threadId={consoleState.threadId || consoleState.id}
               hasWorktree={!!consoleState.worktreePath}
@@ -1664,7 +1664,7 @@ function AgentConsoleWidget({
       {/* Enable Worktree Dialog - works even before thread exists */}
       <EnableWorktreeDialog
         threadId={consoleState.threadId || `thread-${consoleState.id}`}
-        threadName={settings.label || consoleState.agent.name}
+        threadName={settings.label || consoleState.agent?.name || 'Console'}
         cwd={consoleState.path || workspacePath}
         hasExistingSession={consoleState.lines.some(l => l.type === 'output' || l.type === 'prompt')}
         isOpen={showEnableWorktreeDialog}
@@ -1711,7 +1711,7 @@ function UnifiedAgentStatusWidget({
   onMouseLeave?: () => void;
   panelId?: string;
 }) {
-  const getConsoleCount = (agentId: string) => consoles.filter(c => c.agent.id === agentId).length;
+  const getConsoleCount = (agentId: string) => consoles.filter(c => c.agent?.id === agentId).length;
 
   const getBorderClass = () => {
     if (isFocused) return 'border-blue-400/60 ring-1 ring-blue-400/30';
@@ -1776,7 +1776,7 @@ function UnifiedAgentStatusWidget({
         ) : (
           agents.map(agent => {
             const consoleCount = getConsoleCount(agent.id);
-            const isBusy = consoles.some(c => c.agent.id === agent.id && c.isStreaming);
+            const isBusy = consoles.some(c => c.agent?.id === agent.id && c.isStreaming);
             const status = isBusy ? 'busy' : agent.status;
 
             return (
@@ -2660,8 +2660,8 @@ export function Workspace() {
   useEffect(() => {
     useWorkspaceStore.getState().setConsoles(terminals.map(t => ({
       id: t.id,
-      agentId: t.agent.id,
-      agentName: t.agent.name,
+      agentId: t.agent?.id ?? '',
+      agentName: t.agent?.name ?? '',
     })));
   }, [terminals]);
 
@@ -2776,7 +2776,7 @@ export function Workspace() {
     useWorkspaceStore.getState().registerDataGetters({
       getConsoles: () => terminals.map(t => ({
         id: t.id,
-        agentId: t.agent.id,
+        agentId: t.agent?.id ?? '',
         threadId: t.threadId,
         sessionId: t.resumeSessionId,
         label: t.settings?.label,
@@ -3440,7 +3440,7 @@ export function Workspace() {
         return terminals.find(t => t.threadId === threadId);
       }
       if (adapterId) {
-        return terminals.find(t => t.agent.id === adapterId);
+        return terminals.find(t => t.agent?.id === adapterId);
       }
       return null;
     };
@@ -3453,7 +3453,7 @@ export function Workspace() {
         if (mappedTerminalId && t.id === mappedTerminalId) return true;
         return false;
       }
-      if (adapterId) return t.agent.id === adapterId;
+      if (adapterId) return t.agent?.id === adapterId;
       return false;
     };
 
@@ -3467,7 +3467,7 @@ export function Workspace() {
         if (mappedTerminalId && t.id === mappedTerminalId) return true;
         return false;
       }
-      if (adapterId) return t.agent.id === adapterId;
+      if (adapterId) return t.agent?.id === adapterId;
       return false;
     };
 
@@ -3885,7 +3885,11 @@ export function Workspace() {
       ws.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data);
-          handleWsEvent(data);
+          try {
+            handleWsEvent(data);
+          } catch (err) {
+            console.error('[WS] Event handler error:', err, 'Event:', data?.type);
+          }
         } catch (err) {
           console.error('[WS] Parse error:', err);
         }
@@ -4172,7 +4176,7 @@ export function Workspace() {
   }, []);
 
   const handleMinimizeTerminal = (terminal: TerminalState) => {
-    setMinimizedWidgets(prev => [...prev, { id: terminal.id, type: 'agent-console', title: terminal.agent.name, icon: terminal.agent.icon, data: terminal }]);
+    setMinimizedWidgets(prev => [...prev, { id: terminal.id, type: 'agent-console', title: terminal.agent?.name ?? 'Console', icon: terminal.agent?.icon, data: terminal }]);
     setTerminals(prev => prev.filter(t => t.id !== terminal.id));
     // Clear focus if this terminal was focused
     if (focusedWidgetId === terminal.id) {
@@ -4482,7 +4486,7 @@ export function Workspace() {
     setPlanSteps(prev => [...prev, {
       id: extractedStepId,
       text: message,
-      agent: terminal.agent.id,
+      agent: terminal.agent?.id ?? '',
       status: 'running',
       source: 'extracted',
     }]);
@@ -4498,7 +4502,7 @@ export function Workspace() {
 
     try {
       // Route based on agent type: OpenClaw uses agent task API, Claude Code uses thread/session API
-      if (terminal.agent.type === 'openclaw') {
+      if (terminal.agent?.type === 'openclaw') {
         // OpenClaw: Send via agent task API (WebSocket-connected agents)
         let threadId = terminal.threadId;
         if (!threadId) {
@@ -4510,7 +4514,7 @@ export function Workspace() {
         }
 
         // Use /agents/:name/task for WebSocket-connected OpenClaw agents
-        const res = await fetch(`${getApiUrl()}/agents/${terminal.agent.id}/task`, {
+        const res = await fetch(`${getApiUrl()}/agents/${terminal.agent?.id}/task`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message, cwd, threadId }),
@@ -4522,7 +4526,7 @@ export function Workspace() {
           const errorMsg = data.error || 'Send failed';
           if (errorMsg.includes('not connected') || errorMsg.includes('Agent not connected')) {
             throw new Error(
-              `Agent "${terminal.agent.name}" is not connected.\n\n` +
+              `Agent "${terminal.agent?.name ?? 'Unknown'}" is not connected.\n\n` +
               `To connect this agent:\n` +
               `1. Install the ACC channel plugin on the OpenClaw instance\n` +
               `2. Configure it to point to this Merry server\n` +
@@ -4550,7 +4554,7 @@ export function Workspace() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               cwd,
-              name: `${terminal.agent.name} - ${new Date().toLocaleString()}`,
+              name: `${terminal.agent?.name ?? 'Console'} - ${new Date().toLocaleString()}`,
               // Pass resume flag and session ID if resuming a previous session (only on first create)
               resume: !forceNew && !!resumeSessionId,
               sessionId: !forceNew ? resumeSessionId : undefined,
@@ -4874,7 +4878,7 @@ export function Workspace() {
     // Tasks widget restore: right panel is always tasks; no mode to set
   };
 
-  const getTerminalCount = (agentId: string) => terminals.filter(t => t.agent.id === agentId).length;
+  const getTerminalCount = (agentId: string) => terminals.filter(t => t.agent?.id === agentId).length;
 
   return (
     <div className="h-full flex flex-col bg-zinc-950">
