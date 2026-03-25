@@ -1482,6 +1482,7 @@ function AgentConsoleWidget({
   onWorktreeMerged,
   onOpenTerminal,
   onRetry,
+  onLoadOlderLines,
   workspacePath,
   isHighlighted,
   isFocused,
