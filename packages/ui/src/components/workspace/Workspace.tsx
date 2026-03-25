@@ -2426,6 +2426,8 @@ interface LayoutRendererProps {
   onCloseRealTerminal: (id: string) => void;
   onMinimizeRealTerminal: (terminal: TerminalInstance) => void;
   onRenameRealTerminal: (id: string, name: string) => void;
+  // Console line persistence
+  onLoadOlderLines: (consoleId: string, beforeSequence: number) => Promise<any>;
   // Focus/hover state
   focusedWidgetId: string | null;
   hoveredWidgetId: string | null;
@@ -2492,6 +2494,7 @@ function LayoutRenderer({
   onCloseRealTerminal,
   onMinimizeRealTerminal,
   onRenameRealTerminal,
+  onLoadOlderLines,
   focusedWidgetId,
   hoveredWidgetId,
   highlightedTerminalId,
@@ -2572,7 +2575,7 @@ function LayoutRenderer({
               onWorktreeMerged={onWorktreeMerged}
               onOpenTerminal={onOpenTerminal}
               onRetry={onRetry}
-              onLoadOlderLines={handleLoadOlderLines}
+              onLoadOlderLines={onLoadOlderLines}
               workspacePath={workspacePath ?? undefined}
               isHighlighted={highlightedTerminalId === terminal.id}
               isFocused={focusedWidgetId === terminal.id}
@@ -2729,6 +2732,7 @@ function LayoutRenderer({
               onCloseRealTerminal={onCloseRealTerminal}
               onMinimizeRealTerminal={onMinimizeRealTerminal}
               onRenameRealTerminal={onRenameRealTerminal}
+              onLoadOlderLines={onLoadOlderLines}
               focusedWidgetId={focusedWidgetId}
               hoveredWidgetId={hoveredWidgetId}
               highlightedTerminalId={highlightedTerminalId}
@@ -5628,6 +5632,7 @@ export function Workspace() {
                 onCloseRealTerminal={handleCloseRealTerminal}
                 onMinimizeRealTerminal={handleMinimizeRealTerminal}
                 onRenameRealTerminal={handleRenameRealTerminal}
+                onLoadOlderLines={handleLoadOlderLines}
                 focusedWidgetId={focusedWidgetId}
                 hoveredWidgetId={hoveredWidgetId}
                 highlightedTerminalId={highlightedTerminalId}
