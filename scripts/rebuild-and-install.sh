@@ -24,8 +24,14 @@ npx @electron/rebuild -m node_modules/node-pty
 
 cd "$PROJECT_DIR"
 
-echo "🧹 Cleaning dist directories..."
+echo "🧹 Cleaning ALL caches and build artifacts..."
 rm -rf packages/ui/dist packages/server/dist packages/contracts/dist packages/analytics/dist
+rm -rf .turbo packages/ui/.turbo packages/server/.turbo packages/contracts/.turbo packages/analytics/.turbo
+rm -rf node_modules/.cache packages/ui/node_modules/.cache packages/server/node_modules/.cache
+rm -rf packages/ui/.vite
+
+echo "🗑️  Removing existing app from /Applications..."
+rm -rf /Applications/Merry.app
 
 echo "📦 Building application (force clean rebuild)..."
 npx turbo build --force

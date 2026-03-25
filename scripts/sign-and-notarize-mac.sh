@@ -20,8 +20,11 @@ set +a
 export APPLE_APP_SPECIFIC_PASSWORD="$APPLE_PASSWORD"
 unset APPLE_PASSWORD
 
-echo "🧹 Cleaning dist directories..."
+echo "🧹 Cleaning ALL caches and build artifacts..."
 rm -rf packages/ui/dist packages/server/dist packages/contracts/dist packages/analytics/dist
+rm -rf .turbo packages/ui/.turbo packages/server/.turbo packages/contracts/.turbo packages/analytics/.turbo
+rm -rf node_modules/.cache packages/ui/node_modules/.cache packages/server/node_modules/.cache
+rm -rf packages/ui/.vite
 
 echo "📦 Building (signed + notarized for macOS)..."
 npx turbo build --force
