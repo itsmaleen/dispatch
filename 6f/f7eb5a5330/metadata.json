@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "6ff7eb5a5330",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 18,
+  "files_touched": [
+    "bun.lock",
+    "packages/contracts/src/agent-console.ts",
+    "packages/server/src/persistence/schema.sql",
+    "packages/server/src/persistence/sqlite-store.ts",
+    "packages/server/src/server.ts",
+    "packages/server/src/services/console-line-store.ts",
+    "packages/ui/package.json",
+    "packages/ui/src/components/workspace/Workspace.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6f/f7eb5a5330/0/metadata.json",
+      "transcript": "/6f/f7eb5a5330/0/full.jsonl",
+      "content_hash": "/6f/f7eb5a5330/0/content_hash.txt",
+      "prompt": "/6f/f7eb5a5330/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3325,
+    "cache_creation_tokens": 1606920,
+    "cache_read_tokens": 18583321,
+    "output_tokens": 88108,
+    "api_call_count": 226
+  }
+}

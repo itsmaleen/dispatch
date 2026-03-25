@@ -1,0 +1,79 @@
+see the recent changes made? Having issues with agent console not being able to scroll
+
+---
+
+Now the consoles seem to be infinitely glitching when scrolled to the bottom 
+Let's go back to the drawing board - look at the commit that limits the lines in console and let's rethink if we should keep it and if we should how to build it without beraking the frontend
+
+---
+
+so what happens if I try to scroll past the limit?
+
+---
+
+look into how this project https://github.com/pingdotgg/t3code does memory management with their threads that can grow and see what we can pull / use on our side
+I'm leaning towards some kind of lazy load
+
+---
+
+let's go with option 1 but yes I do think we need persistence so let's plan to implement that next
+
+---
+
+start planning
+
+---
+
+let me review the plan for
+
+---
+
+1. seems ok for now
+2. keep indefinitely for now
+3. why do we need an export functions?
+4. not yet, not seeing a reason to
+5. yes need to be able to search for a few reasons like resuming a session or turning it into memory
+6. yes
+
+---
+
+yes update the plan
+
+---
+
+where's the plan so I can review
+
+---
+
+start implementing
+
+---
+
+how can I test phase 1?
+
+---
+
+start with option 1
+
+---
+
+yes continue with phase 2
+
+---
+
+how can we test this phase before moving on to phase 3?
+
+---
+
+can you run the queries
+
+---
+
+I sent a simple message "Hi" and
+marlin@Marlins-MacBook-Pro agent-command-center % sqlite3 ~/.acc/threads.db "SELECT COUNT(*) FROM console_lines;"
+0
+seeing no console lines, do I need to have it message way more?
+
+---
+
+wait what's the difference between agent consoles and regular chats? The only way to interact with an agent / claude code in this app is through agent consoles
