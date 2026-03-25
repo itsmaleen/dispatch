@@ -1,0 +1,2 @@
+I tried to launch app with a project that I guess had consoles opened and getting this error
+handleLoadOlderLines is not defined
