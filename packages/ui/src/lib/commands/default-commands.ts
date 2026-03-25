@@ -24,11 +24,13 @@ import {
   GitBranch,
   FolderOpen,
   ExternalLink,
+  Settings,
 } from 'lucide-react';
 import type { Command } from './types';
 import { useWorkspaceStore, type LayoutWidgetInfo } from '../../stores/workspace';
 import { useAppStore, api, getServerUrl, getRecentProjects } from '../../stores/app';
 import { useShortcutsStore } from '../../stores/shortcuts';
+import { useSettingsStore } from '../../stores/settings';
 
 /**
  * Format a date as a relative time string (e.g., "5 min ago", "2 hours ago")
@@ -1009,6 +1011,21 @@ export function createDefaultCommands(): Command[] {
         type: 'execute',
         handler: () => {
           useShortcutsStore.getState().setMenuOpen(true);
+        },
+      },
+    },
+    {
+      id: 'open-settings',
+      label: 'Settings',
+      description: 'Open application settings',
+      category: 'navigation',
+      icon: Settings,
+      shortcut: '⌘,',
+      keywords: ['settings', 'preferences', 'options', 'configure', 'notifications', 'config'],
+      action: {
+        type: 'execute',
+        handler: () => {
+          useSettingsStore.getState().setSettingsOpen(true);
         },
       },
     },

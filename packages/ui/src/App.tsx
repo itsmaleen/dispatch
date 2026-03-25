@@ -5,6 +5,7 @@ import { ExecutionView } from "./components/execution/ExecutionView";
 import { AgentsPanel } from "./components/agents/AgentsPanel";
 import { CommandPalette } from "./components/command-palette";
 import { ShortcutsMenu } from "./components/shortcuts/ShortcutsMenu";
+import { SettingsPanel } from "./components/settings";
 import { WidgetDemo } from "./components/demo/WidgetDemo";
 import { WorkspaceDemo } from "./components/demo/WorkspaceDemo";
 import { Workspace } from "./components/workspace/Workspace";
@@ -12,6 +13,7 @@ import { useAppStore, api, getServerUrl, discoverServerPort, type Task } from ".
 import { useCommandPaletteStore } from "./stores/command-palette";
 import { useWorkspaceStore } from "./stores/workspace";
 import { useShortcutsStore, matchesShortcut } from "./stores/shortcuts";
+import { useSettingsStore } from "./stores/settings";
 import { commandRegistry } from "./lib/commands/registry";
 import { createDefaultCommands } from "./lib/commands/default-commands";
 import { initSemanticSearch } from "./hooks/useSemanticSearch";
@@ -110,6 +112,17 @@ export function App() {
       });
     }
   }, [serverReady]);
+
+  // Listen for menu:open-settings from Electron menu
+  useEffect(() => {
+    if (!window.electronAPI?.menu?.onOpenSettings) return;
+
+    const unsubscribe = window.electronAPI.menu.onOpenSettings(() => {
+      useSettingsStore.getState().setSettingsOpen(true);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // Register navigation callback for command palette
   const handleNavigate = useCallback((targetView: string) => {
@@ -213,6 +226,20 @@ export function App() {
           commandPalette.close();
         }
         shortcutsStore.toggleMenu();
+        return;
+      }
+
+      // Show settings panel (works even when in input)
+      const showSettingsShortcut = getShortcut('show-settings');
+      if (showSettingsShortcut && matchesShortcut(e, showSettingsShortcut)) {
+        e.preventDefault();
+        if (commandPalette.isOpen) {
+          commandPalette.close();
+        }
+        if (shortcutsStore.isMenuOpen) {
+          shortcutsStore.setMenuOpen(false);
+        }
+        useSettingsStore.getState().setSettingsOpen(true);
         return;
       }
 
@@ -425,6 +452,7 @@ export function App() {
         <Workspace />
         <CommandPalette />
         <ShortcutsMenu />
+        <SettingsPanel />
       </div>
     );
   }
@@ -581,6 +609,9 @@ export function App() {
 
       {/* Keyboard Shortcuts Menu */}
       <ShortcutsMenu />
+
+      {/* Settings Panel */}
+      <SettingsPanel />
     </div>
   );
 }

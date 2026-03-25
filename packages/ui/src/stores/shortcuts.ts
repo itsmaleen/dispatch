@@ -287,6 +287,17 @@ export const DEFAULT_SHORTCUTS: Shortcut[] = [
     modifiers: ['meta'],
     customizable: true,
   },
+
+  // View settings
+  {
+    id: 'show-settings',
+    label: 'Settings',
+    description: 'Open application settings',
+    category: 'general',
+    key: ',',
+    modifiers: ['meta'],
+    customizable: true,
+  },
 ];
 
 // ============================================================================
