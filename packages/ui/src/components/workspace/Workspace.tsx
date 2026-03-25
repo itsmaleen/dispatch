@@ -1612,6 +1612,8 @@ function AgentConsoleWidget({
     const scrollContainer = outputRef.current;
     if (!scrollContainer) return;
     if (!consoleState.hasMoreHistory || !consoleState.oldestSequence) return;
+    // Skip if onLoadOlderLines handler is not provided
+    if (!onLoadOlderLines) return;
 
     const handleScroll = () => {
       // Disable auto-scroll when user scrolls manually
