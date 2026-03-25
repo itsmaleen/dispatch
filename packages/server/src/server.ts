@@ -64,6 +64,7 @@ export class CommandCenterServer {
   private tasks = new Map<string, Task>();
   private terminalManager: TerminalManager | null = null;
   private agentConsoleLauncher: AgentConsoleLauncher | null = null;
+  private compressionInterval: NodeJS.Timeout | null = null;
   private _port: number;
   
   /** Actual port the server is listening on (may differ from requested if port was in use) */
@@ -1986,6 +1987,154 @@ Format your response as plain text only:
       }
     });
 
+    // ============ Console Line Persistence Routes ============
+
+    // Get recent console lines (on console open/resume)
+    this.app.get('/api/consoles/:consoleId/lines', async (c) => {
+      const consoleId = c.req.param('consoleId');
+      const limit = parseInt(c.req.query('limit') || '1000');
+
+      try {
+        const { getConsoleLineStore } = await import('./persistence/sqlite-store');
+        const store = getConsoleLineStore();
+        const result = store.getRecentLines(consoleId, limit);
+        return c.json({ ok: true, ...result });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to get console lines',
+        }, 500);
+      }
+    });
+
+    // Get older lines (lazy loading)
+    this.app.get('/api/consoles/:consoleId/lines/before/:sequence', async (c) => {
+      const consoleId = c.req.param('consoleId');
+      const sequence = parseInt(c.req.param('sequence'));
+      const limit = parseInt(c.req.query('limit') || '500');
+
+      if (isNaN(sequence)) {
+        return c.json({ ok: false, error: 'Invalid sequence parameter' }, 400);
+      }
+
+      try {
+        const { getConsoleLineStore } = await import('./persistence/sqlite-store');
+        const store = getConsoleLineStore();
+        const result = store.getLinesBefore(consoleId, sequence, limit);
+        return c.json({ ok: true, ...result });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to get console lines',
+        }, 500);
+      }
+    });
+
+    // Get newer lines (for loading updates)
+    this.app.get('/api/consoles/:consoleId/lines/after/:sequence', async (c) => {
+      const consoleId = c.req.param('consoleId');
+      const sequence = parseInt(c.req.param('sequence'));
+      const limit = parseInt(c.req.query('limit') || '500');
+
+      if (isNaN(sequence)) {
+        return c.json({ ok: false, error: 'Invalid sequence parameter' }, 400);
+      }
+
+      try {
+        const { getConsoleLineStore } = await import('./persistence/sqlite-store');
+        const store = getConsoleLineStore();
+        const result = store.getLinesAfter(consoleId, sequence, limit);
+        return c.json({ ok: true, ...result });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to get console lines',
+        }, 500);
+      }
+    });
+
+    // Search console lines (for session resumption, memory creation)
+    this.app.get('/api/consoles/search', async (c) => {
+      const query = c.req.query('q');
+      const consoleId = c.req.query('consoleId');
+      const type = c.req.query('type');
+      const limit = parseInt(c.req.query('limit') || '50');
+
+      if (!query) {
+        return c.json({ ok: false, error: 'Query parameter "q" is required' }, 400);
+      }
+
+      try {
+        const { getConsoleLineStore } = await import('./persistence/sqlite-store');
+        const store = getConsoleLineStore();
+        const results = store.searchLines(query, {
+          consoleId,
+          type,
+          limit,
+        });
+        return c.json({ ok: true, results });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to search console lines',
+        }, 500);
+      }
+    });
+
+    // Export console to text file
+    this.app.get('/api/consoles/:consoleId/export', async (c) => {
+      const consoleId = c.req.param('consoleId');
+
+      try {
+        const { getConsoleLineStore } = await import('./persistence/sqlite-store');
+        const store = getConsoleLineStore();
+        const text = store.exportToText(consoleId);
+
+        c.header('Content-Type', 'text/plain');
+        c.header('Content-Disposition', `attachment; filename="console-${consoleId}.txt"`);
+        return c.text(text);
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to export console',
+        }, 500);
+      }
+    });
+
+    // Clear console lines
+    this.app.delete('/api/consoles/:consoleId/lines', async (c) => {
+      const consoleId = c.req.param('consoleId');
+
+      try {
+        const { getConsoleLineStore } = await import('./persistence/sqlite-store');
+        const store = getConsoleLineStore();
+        const deleted = store.clearConsole(consoleId);
+        return c.json({ ok: true, deleted });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to clear console',
+        }, 500);
+      }
+    });
+
+    // Get console line count
+    this.app.get('/api/consoles/:consoleId/lines/count', async (c) => {
+      const consoleId = c.req.param('consoleId');
+
+      try {
+        const { getConsoleLineStore } = await import('./persistence/sqlite-store');
+        const store = getConsoleLineStore();
+        const count = store.getLineCount(consoleId);
+        return c.json({ ok: true, count });
+      } catch (error) {
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to get line count',
+        }, 500);
+      }
+    });
+
     // =========================================================================
     // PROJECT STATE ENDPOINTS
     // =========================================================================
@@ -2289,6 +2438,168 @@ Format your response as plain text only:
         },
       });
     });
+  }
+
+  /**
+   * Start background job to compress old console lines
+   * Runs every 10 minutes
+   */
+  private startCompressionJob(): void {
+    const COMPRESSION_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+    const COMPRESS_OLDER_THAN = 1000; // Compress lines older than 1000 sequences
+
+    // Run compression immediately on startup
+    this.runCompression(COMPRESS_OLDER_THAN);
+
+    // Then run every 10 minutes
+    this.compressionInterval = setInterval(() => {
+      this.runCompression(COMPRESS_OLDER_THAN);
+    }, COMPRESSION_INTERVAL_MS);
+  }
+
+  /**
+   * Run compression on all consoles
+   */
+  private async runCompression(olderThan: number): Promise<void> {
+    try {
+      const { getConsoleLineStore } = await import('./persistence/sqlite-store');
+      const store = getConsoleLineStore();
+      const consoleIds = store.getAllConsoleIds();
+
+      if (consoleIds.length === 0) {
+        console.log('[Compression] No consoles to compress');
+        return;
+      }
+
+      let totalCompressed = 0;
+      for (const consoleId of consoleIds) {
+        try {
+          const count = store.compressOldLines(consoleId, olderThan);
+          if (count > 0) {
+            totalCompressed += count;
+            console.log(`[Compression] Compressed ${count} lines for console ${consoleId}`);
+          }
+        } catch (error) {
+          console.error(`[Compression] Failed to compress console ${consoleId}:`, error);
+        }
+      }
+
+      if (totalCompressed > 0) {
+        console.log(`[Compression] Total compressed: ${totalCompressed} lines across ${consoleIds.length} consoles`);
+      }
+    } catch (error) {
+      console.error('[Compression] Failed to run compression job:', error);
+    }
+  }
+
+  /**
+   * Persist SDK message to console line store
+   * Converts SDK stream events into console lines for persistence
+   * Works for both regular threads and worktree-based agent consoles
+   */
+  private async persistConsoleLine(threadId: string, message: any): Promise<void> {
+    // Determine console ID:
+    // - For worktree-based agent consoles, use the console ID
+    // - For regular threads, use the thread ID as the console ID
+    let consoleId = threadId;
+    if (this.agentConsoleLauncher) {
+      const agentConsole = this.agentConsoleLauncher.getByThreadId(threadId);
+      if (agentConsole) {
+        consoleId = agentConsole.id;
+      }
+    }
+
+    try {
+      const { getConsoleLineStore } = await import('./persistence/sqlite-store');
+      const store = getConsoleLineStore();
+      const timestamp = new Date().toISOString();
+
+      // Parse SDK stream_event messages
+      if (message.type === 'stream_event') {
+        const streamEvent = message.event;
+        const blockIndex = streamEvent?.index;
+        const blockId = streamEvent?.content_block?.id ?? message.uuid;
+
+        // content_block_start: thinking or tool_use
+        if (streamEvent?.type === 'content_block_start') {
+          const block = streamEvent.content_block;
+          const blockType = block?.type;
+
+          if (blockType === 'thinking') {
+            store.appendLines(consoleId, [{
+              lineId: `thinking-${blockId}`,
+              type: 'thinking',
+              content: '',
+              timestamp,
+              isStreaming: true,
+              blockIndex,
+              blockId,
+            }]);
+          } else if (blockType === 'tool_use' || blockType === 'server_tool_use') {
+            const toolName = block?.name ?? 'Tool';
+            store.appendLines(consoleId, [{
+              lineId: `tool-${blockId}`,
+              type: 'tool_call',
+              content: toolName,
+              timestamp,
+              isStreaming: true,
+              blockIndex,
+              blockId,
+              toolName,
+            }]);
+          } else if (blockType === 'text') {
+            // Regular text block (assistant response)
+            store.appendLines(consoleId, [{
+              lineId: `text-${blockId}`,
+              type: 'output',
+              content: '',
+              timestamp,
+              isStreaming: true,
+              blockIndex,
+              blockId,
+            }]);
+          }
+        }
+
+        // content_block_delta: text_delta, thinking_delta, or input_json_delta
+        if (streamEvent?.type === 'content_block_delta') {
+          const delta = streamEvent.delta;
+          const deltaType = delta?.type;
+
+          if (deltaType === 'text_delta' && delta.text) {
+            // Append text to the corresponding text block
+            store.appendToLine(`text-${blockId}`, delta.text);
+          } else if (deltaType === 'thinking_delta' && delta.thinking) {
+            // Append thinking text
+            store.appendToLine(`thinking-${blockId}`, delta.thinking);
+          } else if (deltaType === 'input_json_delta' && delta.partial_json != null) {
+            // Append tool input JSON
+            store.appendToLine(`tool-${blockId}`, delta.partial_json);
+          }
+        }
+
+        // content_block_stop: mark streaming complete
+        if (streamEvent?.type === 'content_block_stop') {
+          // Try marking each possible line type as complete
+          store.markLineComplete(`thinking-${blockId}`);
+          store.markLineComplete(`tool-${blockId}`);
+          store.markLineComplete(`text-${blockId}`);
+        }
+      }
+
+      // Handle SDK result errors
+      if (message.type === 'result' && message.is_error) {
+        const errorMessage = message.result || 'An error occurred';
+        store.appendLines(consoleId, [{
+          lineId: `error-${Date.now()}-${Math.random()}`,
+          type: 'error',
+          content: errorMessage,
+          timestamp,
+        }]);
+      }
+    } catch (error) {
+      console.error('[Persistence] Failed to persist console line:', error);
+    }
   }
 
   // ============ Agent Channel Methods ============
@@ -2736,6 +3047,12 @@ Format your response as plain text only:
 
     // Forward session manager events to WebSocket clients
     sessionManager.on('message', (threadId, message) => {
+      // Persist console line to database (async, non-blocking)
+      this.persistConsoleLine(threadId, message).catch(err => {
+        console.error('[Persistence] Failed to persist console line:', err);
+      });
+
+      // Forward to WebSocket clients
       this.broadcastRaw({
         type: 'event',
         event: {
@@ -2982,6 +3299,11 @@ Format your response as plain text only:
                 // Ignore port file write errors
               }
             }
+
+            // Start console line compression background job
+            // Runs every 10 minutes to compress old console lines
+            this.startCompressionJob();
+
             resolve();
             return;
           } catch (err) {
@@ -3012,6 +3334,12 @@ Format your response as plain text only:
     // Cleanup terminals
     if (this.terminalManager) {
       this.terminalManager.cleanup();
+    }
+
+    // Stop compression background job
+    if (this.compressionInterval) {
+      clearInterval(this.compressionInterval);
+      this.compressionInterval = null;
     }
 
     // Cleanup adapters

@@ -292,6 +292,89 @@ export class SqliteThreadStore {
 
       this.recordMigration(4, 'Add session_cwd column for correct session resume path');
     }
+
+    // Migration 5: Add console_lines table with FTS5 search and compression
+    if (currentVersion < 5) {
+      console.log('[SqliteThreadStore] Running migration 5: Console lines with search');
+
+      // Main table
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS console_lines (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          line_id TEXT NOT NULL UNIQUE,
+          console_id TEXT NOT NULL,
+          sequence INTEGER NOT NULL,
+          type TEXT NOT NULL,
+          content TEXT NOT NULL,
+          timestamp TEXT NOT NULL,
+          is_streaming BOOLEAN DEFAULT FALSE,
+          is_compressed BOOLEAN DEFAULT FALSE,
+          block_index INTEGER,
+          block_id TEXT,
+          tool_name TEXT,
+          item_id TEXT,
+          tool_input_json TEXT,
+          tool_result_json TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+
+      // Indexes
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_console_lines_console_id
+        ON console_lines(console_id, sequence DESC);
+      `);
+
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_console_lines_timestamp
+        ON console_lines(timestamp DESC);
+      `);
+
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_console_lines_line_id
+        ON console_lines(line_id);
+      `);
+
+      // FTS5 for search
+      this.db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS console_lines_fts USING fts5(
+          console_id UNINDEXED,
+          type UNINDEXED,
+          content,
+          content='console_lines',
+          content_rowid='id'
+        );
+      `);
+
+      // FTS triggers
+      this.db.exec(`
+        CREATE TRIGGER IF NOT EXISTS console_lines_fts_insert AFTER INSERT ON console_lines
+        BEGIN
+          INSERT INTO console_lines_fts(rowid, console_id, type, content)
+          VALUES (new.id, new.console_id, new.type, new.content);
+        END;
+      `);
+
+      this.db.exec(`
+        CREATE TRIGGER IF NOT EXISTS console_lines_fts_delete AFTER DELETE ON console_lines
+        BEGIN
+          INSERT INTO console_lines_fts(console_lines_fts, rowid, console_id, type, content)
+          VALUES('delete', old.id, old.console_id, old.type, old.content);
+        END;
+      `);
+
+      this.db.exec(`
+        CREATE TRIGGER IF NOT EXISTS console_lines_fts_update AFTER UPDATE OF content ON console_lines
+        BEGIN
+          INSERT INTO console_lines_fts(console_lines_fts, rowid, console_id, type, content)
+          VALUES('delete', old.id, old.console_id, old.type, old.content);
+          INSERT INTO console_lines_fts(rowid, console_id, type, content)
+          VALUES (new.id, new.console_id, new.type, new.content);
+        END;
+      `);
+
+      this.recordMigration(5, 'Add console_lines table with FTS5 search and compression');
+    }
   }
 
   // ==================== Thread Operations ====================
@@ -756,4 +839,24 @@ export function getThreadStore(): SqliteThreadStore {
 // Async version for compatibility (just wraps sync)
 export async function getThreadStoreAsync(): Promise<SqliteThreadStore> {
   return getThreadStore();
+}
+
+// ============================================================================
+// CONSOLE LINE STORE
+// ============================================================================
+
+import { ConsoleLineStore } from '../services/console-line-store';
+
+let _consoleLineStore: ConsoleLineStore | null = null;
+
+export function getConsoleLineStore(): ConsoleLineStore {
+  if (!_consoleLineStore) {
+    const threadStore = getThreadStore();
+    _consoleLineStore = new ConsoleLineStore(threadStore['db']); // Access private db field
+  }
+  return _consoleLineStore;
+}
+
+export async function getConsoleLineStoreAsync(): Promise<ConsoleLineStore> {
+  return getConsoleLineStore();
 }

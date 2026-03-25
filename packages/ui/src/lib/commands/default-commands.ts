@@ -298,6 +298,121 @@ export function createDefaultCommands(): Command[] {
       },
     },
 
+    // Search Console Output
+    {
+      id: 'search-console-output',
+      label: 'Search Console Output',
+      description: 'Search through all agent console output using full-text search',
+      category: 'console',
+      icon: Search,
+      shortcut: '⌘⇧O',
+      keywords: ['search', 'find', 'output', 'console', 'log', 'history', 'grep', 'fts'],
+      isVisible: () => {
+        const { workspacePath } = useWorkspaceStore.getState();
+        return !!workspacePath;
+      },
+      action: {
+        type: 'input',
+        placeholder: 'Search console output...',
+        onSubmit: async (query: string) => {
+          if (!query.trim()) return;
+
+          try {
+            // Search using FTS5
+            const response = await fetch(`${getServerUrl()}/api/consoles/search?q=${encodeURIComponent(query)}&limit=20`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+            const data = await response.json();
+
+            if (!data.ok || !data.results || data.results.length === 0) {
+              // Show no results
+              const store = useWorkspaceStore.getState();
+              if (store.showNotification) {
+                store.showNotification({
+                  type: 'info',
+                  title: 'No Results',
+                  message: `No console output found matching "${query}"`,
+                });
+              }
+              return;
+            }
+
+            // Show results in a subcommand view
+            const store = useWorkspaceStore.getState();
+            const palette = (await import('../../stores/command-palette')).useCommandPaletteStore.getState();
+
+            // Create result commands
+            const resultCommands: Command[] = data.results.map((result: any, index: number) => {
+              const line = result.line;
+              const snippet = result.snippet;
+
+              return {
+                id: `search-result-${index}`,
+                label: snippet.replace(/<mark>/g, '').replace(/<\/mark>/g, '').substring(0, 80),
+                description: `${line.type} • ${new Date(line.timestamp).toLocaleString()}`,
+                category: 'console',
+                keywords: [query],
+                action: {
+                  type: 'execute',
+                  handler: () => {
+                    // Find and focus the console with this output
+                    const consoles = store.consoles;
+                    const targetConsole = consoles.find(c => c.threadId === line.consoleId);
+
+                    if (targetConsole) {
+                      // Focus the console
+                      const focusWidget = store.focusWidget || useWorkspaceStore.getState().focusWidget;
+                      if (focusWidget) {
+                        focusWidget(targetConsole.id, 'agent-console');
+                      }
+
+                      // TODO: Scroll to the specific line (future enhancement)
+                    } else {
+                      // Console not currently open - could resume it
+                      if (store.showNotification) {
+                        store.showNotification({
+                          type: 'info',
+                          title: 'Console Not Open',
+                          message: 'The console containing this output is not currently open.',
+                        });
+                      }
+                    }
+                  },
+                },
+              };
+            });
+
+            // Push results as subcommands
+            if (resultCommands.length > 0) {
+              const searchCommand: Command = {
+                id: 'search-results-parent',
+                label: `Search Results for "${query}"`,
+                description: `Found ${resultCommands.length} matches`,
+                category: 'console',
+                icon: Search,
+                action: {
+                  type: 'subcommand',
+                  getCommands: () => resultCommands,
+                },
+              };
+
+              palette.pushSubcommand(searchCommand);
+            }
+          } catch (error) {
+            console.error('[Search] Failed to search console output:', error);
+            const store = useWorkspaceStore.getState();
+            if (store.showNotification) {
+              store.showNotification({
+                type: 'error',
+                title: 'Search Failed',
+                message: error instanceof Error ? error.message : 'Unknown error',
+              });
+            }
+          }
+        },
+      },
+    },
+
     // Send Prompt to Console
     {
       id: 'send-prompt-to-console',

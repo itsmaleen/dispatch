@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef, useCallback, Fragment, useLayoutEffect } from 'react';
+import { useState, useEffect, useRef, useCallback, Fragment, useLayoutEffect, useMemo } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelGroupHandle } from 'react-resizable-panels';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   DndContext,
   DragOverlay,
@@ -144,6 +145,129 @@ const ACCENT_COLORS = [
 ];
 
 // ============================================================================
+// CONSOLE OUTPUT LIMITS (prevent memory exhaustion from high-volume output)
+// ============================================================================
+
+/** Maximum number of lines to keep in a console (older lines are dropped) */
+const MAX_CONSOLE_LINES = 50000;
+
+/** Maximum character length for a single line (longer lines are truncated) */
+const MAX_LINE_LENGTH = 50000;
+
+/** Truncation indicator appended to truncated lines */
+const TRUNCATION_INDICATOR = '\n... [output truncated]';
+
+/**
+ * Truncate a line's content if it exceeds MAX_LINE_LENGTH.
+ * Returns the line unchanged if within limits.
+ */
+function truncateLineContent(line: ConsoleLine): ConsoleLine {
+  if (line.content.length <= MAX_LINE_LENGTH) {
+    return line;
+  }
+  return {
+    ...line,
+    content: line.content.slice(0, MAX_LINE_LENGTH) + TRUNCATION_INDICATOR,
+    isStreaming: false, // Stop accumulating to this line
+  };
+}
+
+/**
+ * Apply limits to console lines array:
+ * 1. Truncate any lines exceeding MAX_LINE_LENGTH
+ * 2. Keep only the last MAX_CONSOLE_LINES lines
+ */
+function applyLineLimits(lines: ConsoleLine[]): ConsoleLine[] {
+  // First truncate any over-length lines
+  let processed = lines.map(truncateLineContent);
+
+  // Then limit total line count (keep most recent)
+  if (processed.length > MAX_CONSOLE_LINES) {
+    processed = processed.slice(-MAX_CONSOLE_LINES);
+  }
+
+  return processed;
+}
+
+// ============================================================================
+// TEXT DELTA BATCHING (prevent render thrashing from high-frequency updates)
+// ============================================================================
+
+/**
+ * Batch interval for text delta updates (ms).
+ * Updates are accumulated and flushed at this interval to prevent render thrashing.
+ */
+const TEXT_DELTA_BATCH_INTERVAL = 32; // ~30fps, good balance between responsiveness and performance
+
+/**
+ * Batched text delta accumulator.
+ * Key: terminal identifier (adapterId or threadId)
+ * Value: accumulated text to append
+ */
+type TextDeltaBatch = Map<string, { text: string; isThinking: boolean }>;
+
+/**
+ * Create a batched text delta handler.
+ * Returns functions to queue deltas and a cleanup function.
+ */
+function createTextDeltaBatcher(
+  onFlush: (batch: TextDeltaBatch) => void
+): {
+  queueTextDelta: (terminalKey: string, text: string, isThinking: boolean) => void;
+  cleanup: () => void;
+} {
+  let batch: TextDeltaBatch = new Map();
+  let flushScheduled = false;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  const flush = () => {
+    flushScheduled = false;
+    if (batch.size === 0) return;
+
+    const currentBatch = batch;
+    batch = new Map();
+    onFlush(currentBatch);
+  };
+
+  const queueTextDelta = (terminalKey: string, text: string, isThinking: boolean) => {
+    const existing = batch.get(terminalKey);
+    if (existing) {
+      // Accumulate text for same terminal, but don't mix thinking with output
+      if (existing.isThinking === isThinking) {
+        existing.text += text;
+      } else {
+        // Flush existing and start new batch for different type
+        flush();
+        batch.set(terminalKey, { text, isThinking });
+      }
+    } else {
+      batch.set(terminalKey, { text, isThinking });
+    }
+
+    // Schedule flush if not already scheduled
+    if (!flushScheduled) {
+      flushScheduled = true;
+      timeoutId = setTimeout(flush, TEXT_DELTA_BATCH_INTERVAL);
+    }
+  };
+
+  const cleanup = () => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+    // Flush any remaining batch on cleanup
+    if (batch.size > 0) {
+      flush();
+    }
+  };
+
+  return { queueTextDelta, cleanup };
+}
+
+// Windowed console output removed - caused infinite render loops.
+// For 50k lines max, simple rendering is sufficient and more reliable.
+
+// ============================================================================
 // ERROR HANDLING AND RETRY UTILITIES
 // ============================================================================
 
@@ -251,6 +375,9 @@ interface ConsoleState {
   lastError?: string;
   lastFailedMessage?: string;
   retryCount?: number;
+  // Console line persistence - lazy loading metadata
+  oldestSequence?: number;
+  hasMoreHistory?: boolean;
 }
 
 interface MinimizedWidget {
@@ -1381,6 +1508,7 @@ function AgentConsoleWidget({
   onWorktreeMerged?: (consoleId: string) => void;
   onOpenTerminal?: (cwd: string) => void;
   onRetry?: (consoleId: string) => void;
+  onLoadOlderLines?: (consoleId: string, beforeSequence: number) => Promise<any>;
   workspacePath?: string;
   isHighlighted?: boolean;
   isFocused?: boolean;
@@ -1409,12 +1537,6 @@ function AgentConsoleWidget({
     e.preventDefault();
     setContextMenu({ x: e.clientX, y: e.clientY });
   };
-
-  useEffect(() => {
-    if (autoScroll && outputRef.current) {
-      outputRef.current.scrollTop = outputRef.current.scrollHeight;
-    }
-  }, [consoleState.lines, autoScroll]);
 
   // Focus name input when editing starts
   useEffect(() => {
@@ -1448,6 +1570,91 @@ function AgentConsoleWidget({
     if (line.type === 'tool_result' && settings.showToolResults === false) return false;
     return true;
   });
+
+  // Virtual scrolling setup
+  // Keep last N lines unvirtualized for smooth streaming and interaction
+  const UNVIRTUALIZED_TAIL_LINES = 20;
+  const virtualizedLineCount = Math.max(0, filteredLines.length - UNVIRTUALIZED_TAIL_LINES);
+  const nonVirtualizedLines = filteredLines.slice(virtualizedLineCount);
+
+  // Estimate line height - most lines are single height, but some can be taller
+  const estimateLineSize = useCallback((index: number) => {
+    const line = filteredLines[index];
+    if (!line) return 22;
+    // Tool results and multi-line content tend to be taller
+    if (line.type === 'tool_result') return 60;
+    // Estimate based on content length (rough heuristic)
+    const lines = Math.ceil(line.content.length / 100);
+    return Math.max(22, Math.min(lines * 22, 200));
+  }, [filteredLines]);
+
+  const rowVirtualizer = useVirtualizer({
+    count: virtualizedLineCount,
+    getScrollElement: () => outputRef.current,
+    estimateSize: estimateLineSize,
+    overscan: 10,
+    // Use stable keys to prevent measurement leaks across state changes
+    getItemKey: (index) => filteredLines[index]?.id ?? index,
+  });
+
+  // Auto-scroll to bottom when new lines are added and autoScroll is enabled
+  useEffect(() => {
+    if (autoScroll && outputRef.current) {
+      // Simple approach: just scroll to bottom
+      outputRef.current.scrollTop = outputRef.current.scrollHeight;
+    }
+  }, [filteredLines.length, autoScroll]);
+
+  // Lazy loading: Load older lines when scrolling near the top
+  const [isLoadingOlderLines, setIsLoadingOlderLines] = useState(false);
+
+  useEffect(() => {
+    const scrollContainer = outputRef.current;
+    if (!scrollContainer) return;
+    if (!consoleState.hasMoreHistory || !consoleState.oldestSequence) return;
+
+    const handleScroll = () => {
+      // Disable auto-scroll when user scrolls manually
+      const isAtBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight < 50;
+      setAutoScroll(isAtBottom);
+
+      // Check if user scrolled near the top (within 200px)
+      const nearTop = scrollContainer.scrollTop < 200;
+
+      if (nearTop && consoleState.hasMoreHistory && !isLoadingOlderLines && consoleState.threadId) {
+        setIsLoadingOlderLines(true);
+
+        // Store current scroll height to restore scroll position after prepending
+        const oldScrollHeight = scrollContainer.scrollHeight;
+
+        // Load older lines
+        const loadOlderLines = async () => {
+          try {
+            const data = await onLoadOlderLines?.(consoleState.id, consoleState.oldestSequence!);
+
+            if (data && data.ok && data.lines && data.lines.length > 0) {
+              // Wait for next frame to ensure DOM has updated
+              requestAnimationFrame(() => {
+                // Restore scroll position (maintain same visible content)
+                const newScrollHeight = scrollContainer.scrollHeight;
+                const scrollDiff = newScrollHeight - oldScrollHeight;
+                scrollContainer.scrollTop += scrollDiff;
+              });
+            }
+          } catch (error) {
+            console.error('[Workspace] Failed to load older lines:', error);
+          } finally {
+            setIsLoadingOlderLines(false);
+          }
+        };
+
+        loadOlderLines();
+      }
+    };
+
+    scrollContainer.addEventListener('scroll', handleScroll);
+    return () => scrollContainer.removeEventListener('scroll', handleScroll);
+  }, [consoleState.hasMoreHistory, consoleState.oldestSequence, consoleState.threadId, consoleState.id, isLoadingOlderLines, onLoadOlderLines]);
 
   // Get accent color class for border
   const accentColor = ACCENT_COLORS.find(c => c.id === settings.accentColor);
@@ -1604,11 +1811,43 @@ function AgentConsoleWidget({
         </div>
       </div>
 
-      {/* Output */}
-      <div ref={outputRef} className="flex-1 overflow-y-auto p-3 font-mono text-sm space-y-0.5">
-        {filteredLines.map((line) => (
-          <ConsoleLineItem key={line.id} line={line} showTimestamp={settings.showTimestamps !== false} />
-        ))}
+      {/* Output - virtualized for performance with large outputs */}
+      <div ref={outputRef} className="flex-1 overflow-y-auto p-3 font-mono text-sm">
+        {/* Loading indicator for lazy loading */}
+        {isLoadingOlderLines && (
+          <div className="flex items-center justify-center gap-2 py-2 mb-2 text-xs text-zinc-500">
+            <Loader2 className="w-3 h-3 animate-spin" />
+            <span>Loading older lines...</span>
+          </div>
+        )}
+
+        {virtualizedLineCount > 0 && (
+          <div className="relative" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const line = filteredLines[virtualRow.index];
+              if (!line) return null;
+
+              return (
+                <div
+                  key={virtualRow.key}
+                  data-index={virtualRow.index}
+                  ref={rowVirtualizer.measureElement}
+                  className="absolute left-0 top-0 w-full mb-0.5"
+                  style={{ transform: `translateY(${virtualRow.start}px)` }}
+                >
+                  <ConsoleLineItem line={line} showTimestamp={settings.showTimestamps !== false} />
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Non-virtualized tail lines for smooth streaming */}
+        <div className="space-y-0.5">
+          {nonVirtualizedLines.map((line) => (
+            <ConsoleLineItem key={line.id} line={line} showTimestamp={settings.showTimestamps !== false} />
+          ))}
+        </div>
       </div>
 
       {/* Retry Bar - show when there's a failed message that can be retried */}
@@ -2293,6 +2532,7 @@ function LayoutRenderer({
               onWorktreeMerged={onWorktreeMerged}
               onOpenTerminal={onOpenTerminal}
               onRetry={onRetry}
+              onLoadOlderLines={handleLoadOlderLines}
               workspacePath={workspacePath ?? undefined}
               isHighlighted={highlightedTerminalId === terminal.id}
               isFocused={focusedWidgetId === terminal.id}
@@ -2577,6 +2817,12 @@ export function Workspace() {
   /** Map blockIndex → blockId for current message (reset on message_start) */
   const blockIndexToIdRef = useRef<Record<number, string>>({});
 
+  /**
+   * Text delta batcher ref - batches rapid text updates to prevent render thrashing.
+   * Initialized in useEffect to access setTerminals.
+   */
+  const textDeltaBatcherRef = useRef<ReturnType<typeof createTextDeltaBatcher> | null>(null);
+
   // Fetch agents on mount
   const fetchAgents = useCallback(async () => {
     setIsLoadingAgents(true);
@@ -2621,6 +2867,98 @@ export function Workspace() {
     const interval = setInterval(fetchAgents, 10000);
     return () => clearInterval(interval);
   }, [fetchAgents]);
+
+  // ============================================================================
+  // CONSOLE LINE PERSISTENCE API
+  // ============================================================================
+
+  /**
+   * Fetch recent console lines from persistence
+   */
+  const fetchConsoleLines = useCallback(async (consoleId: string, limit: number = 1000) => {
+    try {
+      const res = await fetch(`${getApiUrl()}/api/consoles/${consoleId}/lines?limit=${limit}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      return data as {
+        ok: boolean;
+        lines: Array<{
+          id: number;
+          lineId: string;
+          consoleId: string;
+          sequence: number;
+          type: ConsoleLineType;
+          content: string;
+          timestamp: string;
+          isStreaming: boolean;
+          blockIndex?: number;
+          blockId?: string;
+          toolName?: string;
+          itemId?: string;
+          toolInput?: unknown;
+          toolResult?: unknown;
+          createdAt: string;
+        }>;
+        hasMore: boolean;
+        oldestSequence: number;
+        newestSequence: number;
+      };
+    } catch (error) {
+      console.error('[Persistence] Failed to fetch console lines:', error);
+      return { ok: false, lines: [], hasMore: false, oldestSequence: 0, newestSequence: 0 };
+    }
+  }, []);
+
+  /**
+   * Fetch older console lines (for lazy loading on scroll)
+   */
+  const fetchOlderConsoleLines = useCallback(async (
+    consoleId: string,
+    beforeSequence: number,
+    limit: number = 500
+  ) => {
+    try {
+      const res = await fetch(
+        `${getApiUrl()}/api/consoles/${consoleId}/lines/before/${beforeSequence}?limit=${limit}`
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      return data;
+    } catch (error) {
+      console.error('[Persistence] Failed to fetch older lines:', error);
+      return { ok: false, lines: [], hasMore: false, oldestSequence: 0, newestSequence: 0 };
+    }
+  }, []);
+
+  /**
+   * Search console lines using FTS5
+   */
+  const searchConsoleLines = useCallback(async (
+    query: string,
+    options?: { consoleId?: string; type?: string; limit?: number }
+  ) => {
+    try {
+      const params = new URLSearchParams({ q: query });
+      if (options?.consoleId) params.set('consoleId', options.consoleId);
+      if (options?.type) params.set('type', options.type);
+      if (options?.limit) params.set('limit', String(options.limit));
+
+      const res = await fetch(`${getApiUrl()}/api/consoles/search?${params}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      return data as {
+        ok: boolean;
+        results: Array<{
+          line: any;
+          rank: number;
+          snippet: string;
+        }>;
+      };
+    } catch (error) {
+      console.error('[Persistence] Failed to search console lines:', error);
+      return { ok: false, results: [] };
+    }
+  }, []);
 
   // Fetch existing real terminals on mount (filtered by browser session)
   useEffect(() => {
@@ -3473,11 +3811,21 @@ export function Workspace() {
 
     // Helper to update both visible terminals AND minimized widgets
     // Takes a function that receives the full previous array and returns the new array
+    // Automatically applies line limits to prevent memory exhaustion
     const updateAllTerminalsRaw = (
       terminalUpdater: (prev: TerminalState[]) => TerminalState[],
       minimizedUpdater?: (prev: MinimizedWidget[]) => MinimizedWidget[]
     ) => {
-      setTerminals(terminalUpdater);
+      // Wrap updater to apply line limits after each update
+      const limitedUpdater = (prev: TerminalState[]): TerminalState[] => {
+        const updated = terminalUpdater(prev);
+        return updated.map(t => ({
+          ...t,
+          lines: applyLineLimits(t.lines),
+        }));
+      };
+
+      setTerminals(limitedUpdater);
       if (minimizedUpdater) {
         setMinimizedWidgets(minimizedUpdater);
       } else {
@@ -3485,7 +3833,7 @@ export function Workspace() {
         setMinimizedWidgets(prev => prev.map(w => {
           if (!matchesMinimizedWidget(w) || !w.data) return w;
           // Create a single-element array, run the updater, extract the result
-          const updated = terminalUpdater([w.data]);
+          const updated = limitedUpdater([w.data]);
           return updated.length > 0 && updated[0] !== w.data
             ? { ...w, data: updated[0] }
             : w;
@@ -3556,65 +3904,17 @@ export function Workspace() {
           const deltaType = delta?.type;
 
           if (deltaType === 'text_delta' && delta.text) {
-            // Append text delta to terminal output
-            updateAllTerminalsRaw(prev => prev.map(t => {
-              if (!matchesTerminal(t)) return t;
-              const lastLine = t.lines[t.lines.length - 1];
-              if (lastLine?.type === 'output' && lastLine.isStreaming) {
-                return {
-                  ...t,
-                  lines: t.lines.map((l, i) =>
-                    i === t.lines.length - 1
-                      ? { ...l, content: l.content + delta.text }
-                      : l
-                  ),
-                };
-              }
-              return {
-                ...t,
-                lines: [...t.lines, {
-                  id: msg.uuid ?? crypto.randomUUID(),
-                  type: 'output' as const,
-                  content: delta.text,
-                  timestamp: makeTimestamp(),
-                  isStreaming: true,
-                }],
-              };
-            }));
+            // Batch text deltas to prevent render thrashing from high-frequency output
+            const terminalKey = threadId || adapterId;
+            if (terminalKey && textDeltaBatcherRef.current) {
+              textDeltaBatcherRef.current.queueTextDelta(terminalKey, delta.text, false);
+            }
           } else if (deltaType === 'thinking_delta' && delta.thinking) {
-            // Append to last thinking line or create one
-            updateAllTerminalsRaw(prev => prev.map(t => {
-              if (!matchesTerminal(t)) return t;
-              let idx = -1;
-              for (let i = t.lines.length - 1; i >= 0; i--) {
-                if (t.lines[i].type === 'thinking') {
-                  idx = i;
-                  break;
-                }
-              }
-              if (idx >= 0) {
-                return {
-                  ...t,
-                  lines: t.lines.map((l, i) =>
-                    i === idx
-                      ? { ...l, content: l.content + delta.thinking, isStreaming: true }
-                      : l
-                  ),
-                  isStreaming: true,
-                };
-              }
-              return {
-                ...t,
-                lines: [...t.lines, {
-                  id: `thinking-${msg.uuid ?? crypto.randomUUID()}`,
-                  type: 'thinking' as const,
-                  content: delta.thinking,
-                  timestamp: makeTimestamp(),
-                  isStreaming: true,
-                }],
-                isStreaming: true,
-              };
-            }));
+            // Batch thinking deltas to prevent render thrashing
+            const terminalKey = threadId || adapterId;
+            if (terminalKey && textDeltaBatcherRef.current) {
+              textDeltaBatcherRef.current.queueTextDelta(terminalKey, delta.thinking, true);
+            }
           } else if (deltaType === 'input_json_delta' && delta.partial_json != null) {
             // Accumulate tool input JSON and update tool_call line with human-readable detail
             const blockIdx = streamEvent?.index;
@@ -3865,6 +4165,59 @@ export function Workspace() {
     }
   }, []);
 
+  // Initialize text delta batcher for high-frequency streaming output
+  useEffect(() => {
+    const batcher = createTextDeltaBatcher((batch) => {
+      // Apply all batched text deltas in a single state update
+      setTerminals(prev => {
+        let updated = prev;
+        for (const [terminalKey, { text, isThinking }] of batch) {
+          updated = updated.map(t => {
+            // Match by either adapterId or threadId
+            const matches = t.agent?.id === terminalKey || t.threadId === terminalKey;
+            if (!matches) return t;
+
+            const lineType = isThinking ? 'thinking' : 'output';
+            const lastLine = t.lines[t.lines.length - 1];
+
+            // Append to existing streaming line of same type
+            if (lastLine?.type === lineType && lastLine.isStreaming) {
+              return {
+                ...t,
+                lines: applyLineLimits(t.lines.map((l, i) =>
+                  i === t.lines.length - 1
+                    ? { ...l, content: l.content + text }
+                    : l
+                )),
+              };
+            }
+
+            // Create new line
+            return {
+              ...t,
+              lines: applyLineLimits([...t.lines, {
+                id: crypto.randomUUID(),
+                type: lineType as ConsoleLine['type'],
+                content: text,
+                timestamp: makeTimestamp(),
+                isStreaming: true,
+              }]),
+              isStreaming: true,
+            };
+          });
+        }
+        return updated;
+      });
+    });
+
+    textDeltaBatcherRef.current = batcher;
+
+    return () => {
+      batcher.cleanup();
+      textDeltaBatcherRef.current = null;
+    };
+  }, []);
+
   // WebSocket connection for streaming events with reconnection
   useEffect(() => {
     let isCleaningUp = false;
@@ -3980,79 +4333,91 @@ export function Workspace() {
       worktreeBranch: resumeOptions?.worktreeBranch,
     }]);
 
-    // If we have a threadId, load previous conversation history
+    // If we have a threadId, load previous console lines from persistence
     // This applies both when resuming a session (with sessionId) and when restoring a console (threadId only)
     if (resumeOptions?.threadId) {
-      // Fetch last N messages from the thread to show conversation context
-      const HISTORY_LIMIT = 10; // Last 5 exchanges (user + assistant)
-      const historyUrl = `${getApiUrl()}/threads/${resumeOptions.threadId}/messages?limit=${HISTORY_LIMIT}`;
-      console.log('[Workspace] Loading conversation history:', {
+      const HISTORY_LIMIT = 1000; // Load last 1000 lines
+      console.log('[Workspace] Loading persisted console lines:', {
         threadId: resumeOptions.threadId,
-        url: historyUrl,
         terminalId: newTerminalId,
+        limit: HISTORY_LIMIT,
       });
 
-      fetch(historyUrl)
-        .then(res => {
-          console.log('[Workspace] History fetch response status:', res.status);
-          return res.json();
-        })
+      // Load persisted console lines (threadId is used as consoleId for regular threads)
+      fetchConsoleLines(resumeOptions.threadId, HISTORY_LIMIT)
         .then(data => {
-          console.log('[Workspace] History fetch response data:', {
+          console.log('[Workspace] Console lines fetch response:', {
             ok: data.ok,
-            messageCount: data.messages?.length ?? 0,
-            error: data.error,
-            rawData: data,
+            lineCount: data.lines?.length ?? 0,
+            hasMore: data.hasMore,
+            oldestSequence: data.oldestSequence,
+            newestSequence: data.newestSequence,
           });
 
-          if (data.ok && data.messages && data.messages.length > 0) {
-            // Convert server messages to console lines
-            const historyLines: ConsoleLine[] = data.messages.map((msg: { id: number; role: 'user' | 'assistant'; content: string; timestamp: string }) => ({
-              id: `history-${msg.id}`,
-              type: msg.role === 'user' ? 'prompt' as ConsoleLineType : 'output' as ConsoleLineType,
-              content: msg.content,
-              timestamp: new Date(msg.timestamp).toLocaleTimeString(),
+          if (data.ok && data.lines && data.lines.length > 0) {
+            // Convert persisted lines to ConsoleLine format
+            const historyLines: ConsoleLine[] = data.lines.map(line => ({
+              id: line.lineId,
+              type: line.type,
+              content: line.content,
+              timestamp: new Date(line.timestamp).toLocaleTimeString(),
+              isStreaming: line.isStreaming,
+              blockIndex: line.blockIndex,
+              blockId: line.blockId,
+              toolName: line.toolName,
+              itemId: line.itemId,
+              toolInput: line.toolInput,
+              toolResult: line.toolResult,
             }));
 
-            console.log('[Workspace] Converted history lines:', historyLines.length, historyLines);
+            console.log('[Workspace] Converted persisted lines:', historyLines.length);
 
-            // Add a separator line to indicate this is history
+            // Add a separator line if there's more history available
             const separatorLine: ConsoleLine = {
               id: `history-separator-${Date.now()}`,
               type: 'system' as ConsoleLineType,
-              content: `── Previous conversation (${data.messages.length} messages) ──`,
+              content: data.hasMore
+                ? `── Previous output (${data.lines.length}+ lines, scroll up to load more) ──`
+                : `── Previous output (${data.lines.length} lines) ──`,
               timestamp: makeTimestamp(),
             };
 
             // Insert history before the "Session resumed" message
             setTerminals(prev => {
-              console.log('[Workspace] Updating terminals with history. Current terminals:', prev.map(t => ({ id: t.id, lineCount: t.lines.length })));
-              const updated = prev.map(t => {
+              return prev.map(t => {
                 if (t.id === newTerminalId) {
                   // Get the system message (last line)
                   const systemLine = t.lines[t.lines.length - 1];
                   const newLines = [separatorLine, ...historyLines, systemLine];
-                  console.log('[Workspace] Terminal found, updating lines:', {
+                  console.log('[Workspace] Terminal found, updating with persisted lines:', {
                     terminalId: t.id,
                     oldLineCount: t.lines.length,
                     newLineCount: newLines.length,
+                    hasMore: data.hasMore,
+                    oldestSequence: data.oldestSequence,
                   });
                   // Prepend history + separator, then the system message
+                  // Store metadata for lazy loading
                   return {
                     ...t,
                     lines: newLines,
+                    // Store oldest sequence for lazy loading more lines
+                    ...(data.hasMore && {
+                      // We'll add a custom property to track pagination state
+                      oldestSequence: data.oldestSequence,
+                      hasMoreHistory: data.hasMore,
+                    } as any),
                   };
                 }
                 return t;
               });
-              return updated;
             });
           } else {
-            console.log('[Workspace] No messages to load or response not ok:', { ok: data.ok, hasMessages: !!data.messages });
+            console.log('[Workspace] No persisted lines to load:', { ok: data.ok, hasLines: !!data.lines });
           }
         })
         .catch(err => {
-          console.error('[Workspace] Failed to load conversation history:', err);
+          console.error('[Workspace] Failed to load persisted console lines:', err);
         });
     } else {
       console.log('[Workspace] Not loading history - no threadId in resumeOptions:', {
@@ -4725,6 +5090,80 @@ export function Workspace() {
   // Keep ref updated for use in WebSocket callback
   handleTerminalMessageRef.current = handleTerminalMessage;
 
+  /**
+   * Load older console lines (lazy loading on scroll)
+   */
+  const handleLoadOlderLines = useCallback(async (consoleId: string, beforeSequence: number) => {
+    const terminal = terminals.find(t => t.id === consoleId);
+    if (!terminal || !terminal.threadId) {
+      return { ok: false, lines: [], hasMore: false };
+    }
+
+    console.log('[Workspace] Loading older lines:', { consoleId, beforeSequence, threadId: terminal.threadId });
+
+    // Fetch older lines
+    const data = await fetchOlderConsoleLines(terminal.threadId, beforeSequence, 500);
+
+    if (data.ok && data.lines && data.lines.length > 0) {
+      // Convert persisted lines to ConsoleLine format
+      const olderLines: ConsoleLine[] = data.lines.map(line => ({
+        id: line.lineId,
+        type: line.type,
+        content: line.content,
+        timestamp: new Date(line.timestamp).toLocaleTimeString(),
+        isStreaming: line.isStreaming,
+        blockIndex: line.blockIndex,
+        blockId: line.blockId,
+        toolName: line.toolName,
+        itemId: line.itemId,
+        toolInput: line.toolInput,
+        toolResult: line.toolResult,
+      }));
+
+      console.log('[Workspace] Loaded older lines:', olderLines.length, 'hasMore:', data.hasMore);
+
+      // Prepend older lines to the console
+      setTerminals(prev => prev.map(t => {
+        if (t.id === consoleId) {
+          // Find the separator line index
+          const separatorIndex = t.lines.findIndex(l => l.id.startsWith('history-separator'));
+
+          if (separatorIndex >= 0) {
+            // Insert older lines right after the separator
+            const newLines = [
+              ...t.lines.slice(0, separatorIndex + 1),
+              ...olderLines,
+              ...t.lines.slice(separatorIndex + 1),
+            ];
+
+            // Update separator message if there's still more
+            if (data.hasMore) {
+              newLines[separatorIndex] = {
+                ...newLines[separatorIndex],
+                content: `── Previous output (${newLines.length - 2}+ lines, scroll up to load more) ──`,
+              };
+            } else {
+              newLines[separatorIndex] = {
+                ...newLines[separatorIndex],
+                content: `── Previous output (${newLines.length - 2} lines) ──`,
+              };
+            }
+
+            return {
+              ...t,
+              lines: newLines,
+              oldestSequence: data.hasMore ? data.oldestSequence : undefined,
+              hasMoreHistory: data.hasMore,
+            };
+          }
+        }
+        return t;
+      }));
+    }
+
+    return data;
+  }, [terminals, fetchOlderConsoleLines]);
+
   const handleSendStepToTerminal = (step: PlanStep, terminalId?: string) => {
     const agent = step.agent ? agents.find(a => a.id === step.agent) : agents[0];
     if (!agent) return;
@@ -5209,6 +5648,7 @@ export function Workspace() {
                           onWorktreeEnabled={handleWorktreeEnabled}
                           onWorktreeMerged={handleWorktreeMerged}
                           onOpenTerminal={(cwd) => useWorkspaceStore.getState().createTerminal(cwd)}
+                          onLoadOlderLines={handleLoadOlderLines}
                           workspacePath={workspacePath ?? undefined}
                           isHighlighted={highlightedTerminalId === terminal.id}
                           isFocused={focusedWidgetId === terminal.id}
@@ -5330,6 +5770,7 @@ export function Workspace() {
                   onWorktreeMerged={handleWorktreeMerged}
                   onOpenTerminal={(cwd) => useWorkspaceStore.getState().createTerminal(cwd)}
                   onRetry={handleRetry}
+                  onLoadOlderLines={handleLoadOlderLines}
                   onDraftInputChange={handleDraftInputChange}
                   onDraftFilesChange={handleDraftFilesChange}
                   workspacePath={workspacePath ?? undefined}

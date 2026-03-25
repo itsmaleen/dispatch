@@ -132,3 +132,72 @@ export type AgentConsoleEvent =
   | AgentConsoleFailedEvent
   | AgentConsoleStatusChangedEvent
   | AgentConsoleRemovedEvent;
+
+// ============================================================================
+// CONSOLE LINE PERSISTENCE
+// ============================================================================
+
+/** Console line type */
+export type ConsoleLineType =
+  | 'prompt'
+  | 'thinking'
+  | 'tool_call'
+  | 'tool_result'
+  | 'output'
+  | 'error'
+  | 'info'
+  | 'command'
+  | 'system';
+
+/** Persisted console line */
+export interface PersistedConsoleLine {
+  id: number;                    // DB auto-increment ID
+  lineId: string;                // UUID from UI
+  consoleId: string;             // Console/thread identifier
+  sequence: number;              // Order within console
+  type: ConsoleLineType;
+  content: string;
+  timestamp: string;             // ISO date string
+  isStreaming: boolean;
+
+  // Optional fields
+  blockIndex?: number;
+  blockId?: string;
+  toolName?: string;
+  itemId?: string;
+  toolInput?: unknown;           // Parsed from JSON
+  toolResult?: unknown;          // Parsed from JSON
+
+  createdAt: string;             // When persisted
+}
+
+/** Options for querying console lines */
+export interface GetConsoleLinesOptions {
+  consoleId: string;
+  limit?: number;                // Default: 1000
+  beforeSequence?: number;       // Cursor-based pagination
+  afterSequence?: number;        // For loading newer lines
+}
+
+/** Result of console lines query */
+export interface ConsoleLinesResult {
+  lines: PersistedConsoleLine[];
+  hasMore: boolean;              // More lines available
+  oldestSequence: number;        // For pagination
+  newestSequence: number;
+}
+
+/** Search result for console lines */
+export interface ConsoleLineSearchResult {
+  line: PersistedConsoleLine;
+  rank: number;                  // FTS5 relevance score
+  snippet: string;               // Highlighted snippet
+}
+
+/** Options for searching console lines */
+export interface SearchConsoleLinesOptions {
+  query: string;                 // FTS5 search query
+  consoleId?: string;            // Filter by console (optional)
+  type?: ConsoleLineType;        // Filter by type (optional)
+  limit?: number;                // Default: 50
+}
