@@ -22,6 +22,8 @@ import { getWorktreeManager } from '../services/worktree-manager';
 import { getThreadNamer } from '../services/thread-namer';
 import { getOverlapDetector, type OverlapWarning } from '../services/overlap-detector';
 import { getMergeMessageGenerator } from '../services/merge-message-generator';
+import { parseSessionFile, getSessionFilePath, sessionFileExists } from '../services/claude-session-parser';
+import { getConsoleLineStore } from '../services/console-line-store';
 import type { WorktreeInfo, WorktreeChanges, MergeResult, ConsoleThread } from '@acc/contracts';
 
 /** Active session bound to a thread */
@@ -174,6 +176,86 @@ export class SessionManager extends EventEmitter {
     return this.store;
   }
 
+  /**
+   * Sync console lines from Claude Code SDK .jsonl session file
+   *
+   * Approach 2 (Hybrid): SDK .jsonl files are the source of truth
+   * - Parse .jsonl file to extract content blocks
+   * - Populate database with parsed lines (if not already there)
+   * - Database serves as fast cache for display and search
+   *
+   * See: .plans/console-persistence-architecture.md
+   */
+  private async syncConsoleFromSessionFile(
+    projectPath: string,
+    threadId: string,
+    sessionId: string
+  ): Promise<void> {
+    try {
+      const sessionFilePath = getSessionFilePath(projectPath, sessionId);
+
+      // Check if session file exists
+      if (!sessionFileExists(projectPath, sessionId)) {
+        console.warn(
+          `[SessionManager] SDK session file not found, skipping sync: ${sessionFilePath}\n` +
+          '  This is expected if the session was created recently and not yet persisted by SDK,\n' +
+          '  or if the session was deleted. Console will use database if available.'
+        );
+        return;
+      }
+
+      console.log(`[SessionManager] Syncing console lines from SDK session file: ${sessionFilePath}`);
+
+      // Parse .jsonl file
+      const { lines, stats } = await parseSessionFile(sessionFilePath);
+
+      if (lines.length === 0) {
+        console.log('[SessionManager] No console lines found in session file (empty or user-only messages)');
+        return;
+      }
+
+      // Get console line store
+      const consoleLineStore = getConsoleLineStore();
+
+      // Check if we've already synced this session
+      // (avoid re-parsing on every resume - database may already have the data)
+      const existingLines = consoleLineStore.getLatestLines(threadId, 1);
+      if (existingLines.lines.length > 0) {
+        console.log(
+          `[SessionManager] Console already has ${existingLines.lines.length} lines, skipping sync.\n` +
+          '  Use force=true to re-sync from SDK file.'
+        );
+        return;
+      }
+
+      // Store in database
+      const linesToStore = lines.map(line => ({
+        lineId: line.lineId,
+        type: line.type,
+        content: line.content,
+        timestamp: line.timestamp,
+        isStreaming: line.isStreaming,
+        blockIndex: line.blockIndex,
+        blockId: line.blockId,
+        toolName: line.toolName,
+        itemId: line.itemId,
+        toolInput: line.toolInput,
+        toolResult: line.toolResult,
+      }));
+
+      consoleLineStore.appendLines(threadId, linesToStore);
+
+      console.log(
+        `[SessionManager] Synced ${lines.length} console lines from SDK to database\n` +
+        `  Stats: ${stats.assistantMessages} assistant messages, ${stats.errors} parse errors, ${stats.parseTimeMs}ms`
+      );
+    } catch (err) {
+      console.error('[SessionManager] Failed to sync console from session file:', err);
+      // Don't throw - graceful degradation
+      // Database may already have content, or client can continue without history
+    }
+  }
+
   /** Resolve path to Claude Code executable so the SDK uses the user's Claude auth (claude auth login). */
   private resolveClaudeExecutablePath(): string | undefined {
     if (this.sdkOptions.pathToClaudeCodeExecutable) {
@@ -268,6 +350,13 @@ export class SessionManager extends EventEmitter {
       // Mark the thread as active when resuming
       this.getStore().activateSession(threadId);
       console.log(`[SessionManager] Reactivated thread ${threadId} for resume`);
+    }
+
+    // Sync console lines from SDK .jsonl file when sessionId exists (Approach 2: Hybrid)
+    // This works for both explicit resume AND layout restoration
+    // See: .plans/console-persistence-architecture.md
+    if (sessionId) {
+      await this.syncConsoleFromSessionFile(cwd, threadId, sessionId);
     }
 
     // Create session (query created lazily on first message)

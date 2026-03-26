@@ -2492,6 +2492,9 @@ Format your response as plain text only:
     }
   }
 
+  // Map blockIndex → blockId for tracking content blocks across events
+  private blockIndexToId = new Map<string, Record<number, string>>();
+
   /**
    * Persist SDK message to console line store
    * Converts SDK stream events into console lines for persistence
@@ -2514,16 +2517,28 @@ Format your response as plain text only:
       const store = getConsoleLineStore();
       const timestamp = new Date().toISOString();
 
+      // Ensure we have a blockIndex map for this thread
+      if (!this.blockIndexToId.has(threadId)) {
+        this.blockIndexToId.set(threadId, {});
+      }
+      const blockIdMap = this.blockIndexToId.get(threadId)!;
+
       // Parse SDK stream_event messages
       if (message.type === 'stream_event') {
         const streamEvent = message.event;
         const blockIndex = streamEvent?.index;
-        const blockId = streamEvent?.content_block?.id ?? message.uuid;
 
         // content_block_start: thinking or tool_use
         if (streamEvent?.type === 'content_block_start') {
           const block = streamEvent.content_block;
           const blockType = block?.type;
+          const blockId = block?.id ?? message.uuid;
+
+          // Store blockId mapping for delta events
+          if (typeof blockIndex === 'number') {
+            blockIdMap[blockIndex] = blockId;
+            console.log('[Persistence] Stored blockId mapping:', { threadId, blockIndex, blockId, blockType });
+          }
 
           if (blockType === 'thinking') {
             store.appendLines(consoleId, [{
@@ -2566,9 +2581,20 @@ Format your response as plain text only:
           const delta = streamEvent.delta;
           const deltaType = delta?.type;
 
+          // Look up blockId from blockIndex
+          const blockId = typeof blockIndex === 'number' ? blockIdMap[blockIndex] : undefined;
+          if (!blockId) {
+            console.warn('[Persistence] Delta event missing blockId mapping:', { blockIndex, threadId, availableIndices: Object.keys(blockIdMap) });
+            return;
+          }
+
           if (deltaType === 'text_delta' && delta.text) {
             // Append text to the corresponding text block
-            store.appendToLine(`text-${blockId}`, delta.text);
+            const lineId = `text-${blockId}`;
+            const success = store.appendToLine(lineId, delta.text);
+            if (!success) {
+              console.warn('[Persistence] Failed to append text delta:', { lineId, textLength: delta.text.length });
+            }
           } else if (deltaType === 'thinking_delta' && delta.thinking) {
             // Append thinking text
             store.appendToLine(`thinking-${blockId}`, delta.thinking);
@@ -2580,11 +2606,20 @@ Format your response as plain text only:
 
         // content_block_stop: mark streaming complete
         if (streamEvent?.type === 'content_block_stop') {
-          // Try marking each possible line type as complete
-          store.markLineComplete(`thinking-${blockId}`);
-          store.markLineComplete(`tool-${blockId}`);
-          store.markLineComplete(`text-${blockId}`);
+          // Look up blockId from blockIndex
+          const blockId = typeof blockIndex === 'number' ? blockIdMap[blockIndex] : undefined;
+          if (blockId) {
+            // Try marking each possible line type as complete
+            store.markLineComplete(`thinking-${blockId}`);
+            store.markLineComplete(`tool-${blockId}`);
+            store.markLineComplete(`text-${blockId}`);
+          }
         }
+      }
+
+      // Clear blockId mapping on turn completion to prevent memory leaks
+      if (message.type === 'turn_complete' || message.type === 'message_stop') {
+        this.blockIndexToId.delete(threadId);
       }
 
       // Handle SDK result errors

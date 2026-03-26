@@ -214,6 +214,7 @@ function createTextDeltaBatcher(
   onFlush: (batch: TextDeltaBatch) => void
 ): {
   queueTextDelta: (terminalKey: string, text: string, isThinking: boolean) => void;
+  flush: () => void;
   cleanup: () => void;
 } {
   let batch: TextDeltaBatch = new Map();
@@ -221,6 +222,10 @@ function createTextDeltaBatcher(
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
   const flush = () => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
     flushScheduled = false;
     if (batch.size === 0) return;
 
@@ -261,7 +266,7 @@ function createTextDeltaBatcher(
     }
   };
 
-  return { queueTextDelta, cleanup };
+  return { queueTextDelta, flush, cleanup };
 }
 
 // Windowed console output removed - caused infinite render loops.
@@ -1613,10 +1618,16 @@ function AgentConsoleWidget({
   // Auto-scroll to bottom when new lines are added and autoScroll is enabled
   useEffect(() => {
     if (autoScroll && outputRef.current) {
+      console.log('[Auto-scroll] Scrolling to bottom:', {
+        consoleId: consoleState.id,
+        lineCount: filteredLines.length,
+        scrollHeight: outputRef.current.scrollHeight,
+        currentScrollTop: outputRef.current.scrollTop,
+      });
       // Simple approach: just scroll to bottom
       outputRef.current.scrollTop = outputRef.current.scrollHeight;
     }
-  }, [filteredLines.length, autoScroll]);
+  }, [filteredLines.length, autoScroll, consoleState.id]);
 
   // Lazy loading: Load older lines when scrolling near the top
   const [isLoadingOlderLines, setIsLoadingOlderLines] = useState(false);
@@ -2806,6 +2817,10 @@ export function Workspace() {
   const [minimizedWidgets, setMinimizedWidgets] = useState<MinimizedWidget[]>([]);
   const [highlightedTerminalId, setHighlightedTerminalId] = useState<string | null>(null);
 
+  // Track consoles that are in resume phase (skip SDK event replay)
+  // See: .plans/console-persistence-architecture.md (Approach 2: Hybrid)
+  const [resumingConsoles, setResumingConsoles] = useState<Set<string>>(new Set());
+
   // Real PTY terminals
   const [realTerminals, setRealTerminals] = useState<TerminalInstance[]>([]);
 
@@ -3212,12 +3227,33 @@ export function Workspace() {
 
       // Restore consoles (agent consoles) using the ref for latest handler
       for (const savedConsole of state.consoles) {
+        // Fetch thread from database to get sessionId (not stored in layout state)
+        // This enables .jsonl parsing on layout restore
+        let sessionId = savedConsole.sessionId; // May be undefined from old saves
+        if (savedConsole.threadId && !sessionId) {
+          try {
+            const threadRes = await fetch(`${getApiUrl()}/api/threads/${savedConsole.threadId}`);
+            if (threadRes.ok) {
+              const threadData = await threadRes.json();
+              if (threadData.ok && threadData.thread) {
+                sessionId = threadData.thread.sessionId;
+                console.log('[Workspace] Fetched sessionId from database:', {
+                  threadId: savedConsole.threadId,
+                  sessionId,
+                });
+              }
+            }
+          } catch (err) {
+            console.warn('[Workspace] Failed to fetch thread for sessionId:', err);
+          }
+        }
+
         // Create console with resume options if thread exists
         const options: ConsoleResumeOptions | undefined = savedConsole.threadId
           ? {
               threadId: savedConsole.threadId,
-              resume: !!savedConsole.sessionId,
-              sessionId: savedConsole.sessionId,
+              resume: !!sessionId,
+              sessionId,
               projectPath: savedConsole.cwd || state.projectPath,
               worktreePath: savedConsole.worktreePath,
               worktreeBranch: savedConsole.worktreeBranch,
@@ -3228,7 +3264,7 @@ export function Workspace() {
           savedConsole,
           options,
           hasThreadId: !!savedConsole.threadId,
-          hasSessionId: !!savedConsole.sessionId,
+          hasSessionId: !!sessionId,
           hasWorktree: !!savedConsole.worktreePath,
         });
 
@@ -3899,11 +3935,35 @@ export function Workspace() {
     // Handle session.message (raw SDK events from thread)
     if (event.type === 'session.message' && event.payload) {
       const msg = event.payload;
-      
+
       // Process SDK message types for thread sessions
       if (msg.type === 'stream_event') {
         const streamEvent = msg.event;
         const blockIndex = streamEvent?.index;
+
+        // Skip SDK event replay during resume phase (Approach 2: Hybrid)
+        // Database already has history from .jsonl, SDK events would create duplicates
+        // See: .plans/console-persistence-architecture.md
+        const terminalId = threadId || adapterId;
+        if (terminalId && resumingConsoles.has(terminalId)) {
+          // Watch for message_start to know when new (non-replay) messages begin
+          if (streamEvent?.type === 'message_start') {
+            console.log('[Workspace] First new message started, exiting resume phase:', terminalId);
+            setResumingConsoles(prev => {
+              const next = new Set(prev);
+              next.delete(terminalId);
+              return next;
+            });
+            // Fall through to process this message_start event
+          } else {
+            // Skip all other events during resume (these are replays)
+            console.log('[Workspace] Skipping SDK event during resume phase:', {
+              terminalId,
+              eventType: streamEvent?.type,
+            });
+            return;
+          }
+        }
 
         // content_block_start: thinking or tool_use → add terminal line
         if (streamEvent?.type === 'content_block_start') {
@@ -3913,14 +3973,39 @@ export function Workspace() {
           const blockId = block?.id ?? eventId;
 
           if (blockType === 'thinking') {
-            const line: TerminalLine = {
-              id: `thinking-${blockId}`,
-              type: 'thinking',
-              content: 'Thinking...',
-              timestamp: makeTimestamp(),
-              isStreaming: true,
-            };
-            updateAllTerminals(t => ({ ...t, lines: [...t.lines, line], isStreaming: true }));
+            // Create or update thinking line
+            // When resuming a session, the line may already exist from database restoration
+            const lineId = `thinking-${blockId}`;
+
+            updateAllTerminals(t => {
+              const existingLineIndex = t.lines.findIndex(l => l.id === lineId);
+
+              if (existingLineIndex >= 0) {
+                // Line already exists (from database) - just mark it as streaming
+                console.log('[Workspace] Thinking block line already exists, marking as streaming:', {
+                  lineId,
+                  existingContentLength: t.lines[existingLineIndex].content?.length ?? 0,
+                });
+                return {
+                  ...t,
+                  lines: t.lines.map((l, i) =>
+                    i === existingLineIndex ? { ...l, isStreaming: true } : l
+                  ),
+                  isStreaming: true,
+                };
+              } else {
+                // Create new thinking line (normal streaming case)
+                console.log('[Workspace] Creating new thinking block line:', { lineId });
+                const line: TerminalLine = {
+                  id: lineId,
+                  type: 'thinking',
+                  content: 'Thinking...',
+                  timestamp: makeTimestamp(),
+                  isStreaming: true,
+                };
+                return { ...t, lines: [...t.lines, line], isStreaming: true };
+              }
+            });
           } else if (blockType === 'tool_use' || blockType === 'server_tool_use') {
             const toolName = block?.name ?? 'Tool';
             const idx = blockIndex ?? 0;
@@ -3939,6 +4024,44 @@ export function Workspace() {
               toolName: toolName,
             };
             updateAllTerminals(t => ({ ...t, lines: [...t.lines, line], isStreaming: true }));
+          } else if (blockType === 'text') {
+            // Create or update output line for text blocks
+            // When resuming a session, the line may already exist from database restoration
+            const lineId = `text-${blockId}`;
+
+            updateAllTerminals(t => {
+              const existingLineIndex = t.lines.findIndex(l => l.id === lineId);
+
+              if (existingLineIndex >= 0) {
+                // Line already exists (from database) - just mark it as streaming
+                console.log('[Workspace] Text block line already exists, marking as streaming:', {
+                  lineId,
+                  existingContentLength: t.lines[existingLineIndex].content?.length ?? 0,
+                });
+                return {
+                  ...t,
+                  lines: t.lines.map((l, i) =>
+                    i === existingLineIndex
+                      ? { ...l, isStreaming: true, blockIndex, blockId }
+                      : l
+                  ),
+                  isStreaming: true,
+                };
+              } else {
+                // Create new empty line (normal streaming case)
+                console.log('[Workspace] Creating new text block line:', { lineId, blockIndex });
+                const line: TerminalLine = {
+                  id: lineId,
+                  type: 'output',
+                  content: '',
+                  timestamp: makeTimestamp(),
+                  isStreaming: true,
+                  blockIndex,
+                  blockId,
+                };
+                return { ...t, lines: [...t.lines, line], isStreaming: true };
+              }
+            });
           }
         }
 
@@ -4260,7 +4383,10 @@ export function Workspace() {
               };
             }
 
-            // Create new line
+            // Create new line (fallback when no existing line to append to)
+            // NOTE: Do NOT set isStreaming here - streaming state is managed by
+            // content_block_start (sets true) and turn.completed (sets false)
+            // Text deltas should only update content, not control streaming state
             return {
               ...t,
               lines: applyLineLimits([...t.lines, {
@@ -4268,9 +4394,9 @@ export function Workspace() {
                 type: lineType as ConsoleLine['type'],
                 content: text,
                 timestamp: makeTimestamp(),
-                isStreaming: true,
+                isStreaming: false,
               }]),
-              isStreaming: true,
+              // Keep terminal's existing streaming state - don't override it
             };
           });
         }
@@ -4401,6 +4527,17 @@ export function Workspace() {
       worktreeBranch: resumeOptions?.worktreeBranch,
     }]);
 
+    // Mark console as resuming to skip SDK event replay (Approach 2: Hybrid)
+    // This applies to BOTH explicit resume AND layout restoration with sessionId
+    // See: .plans/console-persistence-architecture.md
+    if (resumeOptions?.sessionId) {
+      setResumingConsoles(prev => new Set(prev).add(newTerminalId));
+      console.log('[Workspace] Marked console as resuming (will skip SDK event replay):', {
+        terminalId: newTerminalId,
+        sessionId: resumeOptions.sessionId,
+      });
+    }
+
     // If we have a threadId, load previous console lines from persistence
     // This applies both when resuming a session (with sessionId) and when restoring a console (threadId only)
     if (resumeOptions?.threadId) {
@@ -4422,6 +4559,13 @@ export function Workspace() {
             newestSequence: data.newestSequence,
           });
 
+          console.log('[Workspace] Raw API response first 3 lines:', data.lines?.slice(0, 3).map(l => ({
+            lineId: l.lineId,
+            type: l.type,
+            contentLength: l.content?.length ?? 0,
+            contentPreview: l.content?.substring(0, 50),
+          })));
+
           if (data.ok && data.lines && data.lines.length > 0) {
             // Convert persisted lines to ConsoleLine format
             const historyLines: ConsoleLine[] = data.lines.map(line => ({
@@ -4437,6 +4581,12 @@ export function Workspace() {
               toolInput: line.toolInput,
               toolResult: line.toolResult,
             }));
+
+            console.log('[Workspace] First 3 history lines sample:', historyLines.slice(0, 3).map(l => ({
+              type: l.type,
+              contentLength: l.content?.length ?? 0,
+              contentPreview: l.content?.substring(0, 50),
+            })));
 
             console.log('[Workspace] Converted persisted lines:', historyLines.length);
 

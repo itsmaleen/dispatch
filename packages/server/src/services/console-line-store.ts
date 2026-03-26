@@ -395,3 +395,18 @@ export class ConsoleLineStore {
     };
   }
 }
+
+/**
+ * Singleton instance
+ * Shares the same database connection as thread store
+ */
+let _consoleLineStoreInstance: ConsoleLineStore | null = null;
+
+export function getConsoleLineStore(): ConsoleLineStore {
+  if (!_consoleLineStoreInstance) {
+    const { getThreadStore } = require('../persistence/sqlite-store');
+    const db = getThreadStore().getDatabase();
+    _consoleLineStoreInstance = new ConsoleLineStore(db);
+  }
+  return _consoleLineStoreInstance;
+}
