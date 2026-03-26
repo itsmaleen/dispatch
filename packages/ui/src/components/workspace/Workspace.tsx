@@ -49,6 +49,7 @@ import {
 } from 'lucide-react';
 import { AgentsPanel } from '../agents/AgentsPanel';
 import { api, getServerUrl, getWsUrl } from '../../stores/app';
+import { showNotification } from '../../hooks/useNotifications';
 import { useWorkspaceStore, type LayoutNode, type LayoutLeaf, type LayoutGroup, type WidgetType, type ConsoleResumeOptions, layoutHelpers, getBrowserSessionId } from '../../stores/workspace';
 import { ChatInput, type UploadedFile } from './ChatInput';
 import { TasksWidgetContainer } from './TasksWidgetContainer';
@@ -3823,6 +3824,13 @@ export function Workspace() {
           ? { ...t, status: 'exited' as const, exitCode: data.code, exitSignal: data.signal }
           : t
       ));
+      // Trigger desktop notification for terminal exit
+      const exitCode = data.code ?? 0;
+      showNotification({
+        type: 'terminal-exit',
+        title: 'Terminal Exited',
+        body: exitCode === 0 ? 'Terminal completed successfully' : `Terminal exited with code ${exitCode}`,
+      });
       return;
     }
 
@@ -4349,6 +4357,17 @@ export function Workspace() {
         setTimeout(() => {
           handleTerminalMessageRef.current(terminalIdForQueue, queuedMsg.message, queuedMsg.files);
         }, 100);
+      }
+
+      // Trigger desktop notification for agent console completion (turn.completed only)
+      if (event.type === 'turn.completed') {
+        const agentName = matchedTerminal?.agent?.name || 'Agent';
+        showNotification({
+          type: 'console-complete',
+          title: isError ? 'Agent Error' : 'Agent Completed',
+          body: isError ? `${agentName} encountered an error` : `${agentName} has finished`,
+          consoleId: matchedTerminal?.id,
+        });
       }
 
       // Do NOT auto-extract tasks from assistant result here — heuristic added list items and
@@ -5525,6 +5544,24 @@ export function Workspace() {
       console.log('[Workspace] No terminal found for threadId:', threadId);
     }
   }, [terminals, handleFocusWidget]);
+
+  // Handle notification click - highlight the console that completed
+  useEffect(() => {
+    if (!window.electronAPI?.notifications?.onClicked) return;
+
+    const unsubscribe = window.electronAPI.notifications.onClicked(({ consoleId }) => {
+      if (consoleId) {
+        // Highlight the console briefly
+        setHighlightedTerminalId(consoleId);
+        // Focus the console
+        handleFocusWidget(consoleId, 'agent-console');
+        // Clear highlight after 2 seconds
+        setTimeout(() => setHighlightedTerminalId(null), 2000);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [handleFocusWidget]);
 
   // Update ref for command palette
   useEffect(() => {

@@ -89,6 +89,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
     },
   },
 
+  // Menu events
+  menu: {
+    onOpenSettings: (callback: () => void) => {
+      ipcRenderer.on("menu:open-settings", callback);
+      return () => ipcRenderer.removeListener("menu:open-settings", callback);
+    },
+  },
+
   // Server info - URLs available immediately (no race condition)
   server: {
     getInfo: () => ipcRenderer.invoke("server:info"),
@@ -139,6 +147,24 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // Project
   openFolder: (defaultPath?: string) => ipcRenderer.invoke("dialog:openFolder", defaultPath),
+
+  // Notifications - centralized in main process to prevent duplicates across windows
+  notifications: {
+    show: (options: {
+      title: string;
+      body: string;
+      sound?: boolean;
+      onlyWhenUnfocused?: boolean;
+      consoleId?: string;
+    }) => ipcRenderer.invoke("notification:show", options),
+    isAppFocused: () => ipcRenderer.invoke("app:is-focused"),
+    requestPermission: () => ipcRenderer.invoke("notification:request-permission"),
+    onClicked: (callback: (data: { consoleId: string }) => void) => {
+      const handler = (_event: unknown, data: { consoleId: string }) => callback(data);
+      ipcRenderer.on("notification:clicked", handler);
+      return () => ipcRenderer.removeListener("notification:clicked", handler);
+    },
+  },
 });
 
 // Type declaration for renderer is in src/types/electron.d.ts

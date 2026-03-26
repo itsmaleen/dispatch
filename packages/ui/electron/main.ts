@@ -8,7 +8,7 @@
  * - Works identically in dev and packaged builds
  */
 
-import { app, BrowserWindow, ipcMain, dialog, Menu, nativeImage } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, Menu, nativeImage, Notification, shell } from "electron";
 import * as path from "path";
 import * as fs from "fs";
 import * as net from "net";
@@ -542,6 +542,17 @@ function createApplicationMenu(): void {
       submenu: [
         { label: `About ${APP_NAME}`, role: 'about' },
         { type: 'separator' },
+        {
+          label: 'Settings...',
+          accelerator: 'CmdOrCtrl+,',
+          click: () => {
+            const focusedWindow = BrowserWindow.getFocusedWindow();
+            if (focusedWindow) {
+              focusedWindow.webContents.send('menu:open-settings');
+            }
+          }
+        },
+        { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
         { role: 'hide' },
@@ -831,3 +842,82 @@ ipcMain.handle("window:create", async (_event, folderPath?: string) => {
   windowManager.create(folderPath);
   return { ok: true };
 });
+
+// ============ Notification Handlers ============
+
+// Check if any app window is focused
+ipcMain.handle("app:is-focused", () => {
+  return BrowserWindow.getFocusedWindow() !== null;
+});
+
+// Request notification permission (macOS requires user interaction to trigger permission prompt)
+ipcMain.handle("notification:request-permission", async () => {
+  if (!Notification.isSupported()) {
+    return { ok: false, error: "notifications-not-supported" };
+  }
+
+  // On macOS, showing a notification will trigger the permission prompt if not already granted
+  // Create a test notification to trigger the prompt
+  const notification = new Notification({
+    title: "Notifications Enabled",
+    body: "You'll receive notifications when agents complete their tasks.",
+    silent: true,
+  });
+  notification.show();
+
+  return { ok: true };
+});
+
+// Show native desktop notification (centralized to prevent duplicates across windows)
+ipcMain.handle(
+  "notification:show",
+  async (
+    _event,
+    options: {
+      title: string;
+      body: string;
+      sound?: boolean;
+      onlyWhenUnfocused?: boolean;
+      consoleId?: string;
+    }
+  ) => {
+    // If onlyWhenUnfocused is true, skip notification when any window is focused
+    if (options.onlyWhenUnfocused && BrowserWindow.getFocusedWindow() !== null) {
+      return { ok: true, skipped: true, reason: "app-focused" };
+    }
+
+    // Check if notifications are supported
+    if (!Notification.isSupported()) {
+      return { ok: false, error: "notifications-not-supported" };
+    }
+
+    const notification = new Notification({
+      title: options.title,
+      body: options.body,
+      // Use native macOS notification sound when sound is enabled
+      silent: !options.sound,
+    });
+
+    // Handle notification click - focus app and highlight the console
+    notification.on("click", () => {
+      // Focus the first window (or any available window)
+      const windows = BrowserWindow.getAllWindows();
+      if (windows.length > 0) {
+        const win = windows[0];
+        if (win.isMinimized()) {
+          win.restore();
+        }
+        win.focus();
+
+        // Send message to renderer to highlight the console
+        if (options.consoleId) {
+          win.webContents.send("notification:clicked", { consoleId: options.consoleId });
+        }
+      }
+    });
+
+    notification.show();
+
+    return { ok: true };
+  }
+);

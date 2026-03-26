@@ -42,6 +42,21 @@ declare global {
       };
       platform: NodeJS.Platform;
       openFolder: (defaultPath?: string) => Promise<string | null>;
+      menu: {
+        onOpenSettings: (callback: () => void) => () => void;
+      };
+      notifications: {
+        show: (options: {
+          title: string;
+          body: string;
+          sound?: boolean;
+          onlyWhenUnfocused?: boolean;
+          consoleId?: string;
+        }) => Promise<{ ok: boolean; skipped?: boolean; reason?: string; error?: string }>;
+        isAppFocused: () => Promise<boolean>;
+        requestPermission: () => Promise<{ ok: boolean; error?: string }>;
+        onClicked: (callback: (data: { consoleId: string }) => void) => () => void;
+      };
     };
   }
 }
