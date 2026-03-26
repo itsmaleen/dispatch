@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS threads (
   name TEXT,
   project_path TEXT NOT NULL,
   worktree_path TEXT,
+  worktree_branch TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   last_active_at TEXT NOT NULL DEFAULT (datetime('now')),
   session_id TEXT,
@@ -58,6 +59,7 @@ export interface ThreadRow {
   name: string | null;
   project_path: string;
   worktree_path: string | null;
+  worktree_branch: string | null;  // Migration 6: git branch name for worktree
   created_at: string;
   last_active_at: string;
   session_id: string | null;
@@ -88,6 +90,7 @@ export interface Thread {
   name?: string;
   projectPath: string;
   worktreePath?: string;
+  worktreeBranch?: string;  // Git branch name for worktree isolation
   createdAt: Date;
   lastActiveAt: Date;
   sessionId?: string;
@@ -375,6 +378,17 @@ export class SqliteThreadStore {
 
       this.recordMigration(5, 'Add console_lines table with FTS5 search and compression');
     }
+
+    // Migration 6: Add worktree_branch column to store git branch name for worktrees
+    if (currentVersion < 6) {
+      console.log('[SqliteThreadStore] Running migration 6: Add worktree_branch column');
+
+      if (!this.hasColumn('threads', 'worktree_branch')) {
+        this.db.exec(`ALTER TABLE threads ADD COLUMN worktree_branch TEXT`);
+      }
+
+      this.recordMigration(6, 'Add worktree_branch column for worktree isolation');
+    }
   }
 
   // ==================== Thread Operations ====================
@@ -382,8 +396,8 @@ export class SqliteThreadStore {
   createThread(thread: Omit<Thread, 'createdAt' | 'lastActiveAt'>): Thread {
     const now = new Date().toISOString();
     const stmt = this.db.prepare(`
-      INSERT INTO threads (id, name, project_path, worktree_path, created_at, last_active_at, session_id, metadata_json, status, last_prompt, message_count, layout_panel_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO threads (id, name, project_path, worktree_path, worktree_branch, created_at, last_active_at, session_id, metadata_json, status, last_prompt, message_count, layout_panel_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -391,6 +405,7 @@ export class SqliteThreadStore {
       thread.name ?? null,
       thread.projectPath,
       thread.worktreePath ?? null,
+      thread.worktreeBranch ?? null,
       now,
       now,
       thread.sessionId ?? null,
@@ -429,7 +444,7 @@ export class SqliteThreadStore {
 
   updateThread(
     threadId: string,
-    update: Partial<Pick<Thread, 'name' | 'metadata' | 'worktreePath' | 'status' | 'lastPrompt' | 'layoutPanelId'>> & {
+    update: Partial<Pick<Thread, 'name' | 'metadata' | 'worktreePath' | 'worktreeBranch' | 'status' | 'lastPrompt' | 'layoutPanelId'>> & {
       sessionId?: string | null;
       sessionCwd?: string | null;
       closedAt?: Date | null;
@@ -458,6 +473,10 @@ export class SqliteThreadStore {
     if ('worktreePath' in update) {
       sets.push('worktree_path = ?');
       values.push(update.worktreePath === undefined ? null : update.worktreePath);
+    }
+    if ('worktreeBranch' in update) {
+      sets.push('worktree_branch = ?');
+      values.push(update.worktreeBranch === undefined ? null : update.worktreeBranch);
     }
     // Session resume fields
     if (update.status !== undefined) {
@@ -786,6 +805,7 @@ export class SqliteThreadStore {
       name: row.name ?? undefined,
       projectPath: row.project_path,
       worktreePath: row.worktree_path ?? undefined,
+      worktreeBranch: row.worktree_branch ?? undefined,
       createdAt: new Date(row.created_at),
       lastActiveAt: new Date(row.last_active_at),
       sessionId: row.session_id ?? undefined,

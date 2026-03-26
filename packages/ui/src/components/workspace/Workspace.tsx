@@ -1655,9 +1655,14 @@ function AgentConsoleWidget({
     });
 
     const handleScroll = () => {
-      // Disable auto-scroll when user scrolls manually
+      // Check if we're at the bottom
       const isAtBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight < 50;
-      setAutoScroll(isAtBottom);
+
+      // Only disable auto-scroll if user manually scrolled away from bottom
+      // (Don't disable if they're AT the bottom, as that might be from auto-scroll itself)
+      if (!isAtBottom && autoScroll) {
+        setAutoScroll(false);
+      }
 
       // Check if user scrolled near the top (within 200px)
       const nearTop = scrollContainer.scrollTop < 200;
@@ -3228,24 +3233,37 @@ export function Workspace() {
 
       // Restore consoles (agent consoles) using the ref for latest handler
       for (const savedConsole of state.consoles) {
-        // Fetch thread from database to get sessionId (not stored in layout state)
-        // This enables .jsonl parsing on layout restore
+        // Fetch thread from database to get sessionId and worktreeBranch (not stored in layout state)
+        // This enables .jsonl parsing on layout restore and proper worktree display
         let sessionId = savedConsole.sessionId; // May be undefined from old saves
-        if (savedConsole.threadId && !sessionId) {
+        let worktreePath = savedConsole.worktreePath;
+        let worktreeBranch = savedConsole.worktreeBranch;
+
+        if (savedConsole.threadId) {
           try {
             const threadRes = await fetch(`${getApiUrl()}/api/threads/${savedConsole.threadId}`);
             if (threadRes.ok) {
               const threadData = await threadRes.json();
               if (threadData.ok && threadData.thread) {
-                sessionId = threadData.thread.sessionId;
-                console.log('[Workspace] Fetched sessionId from database:', {
+                // Fetch sessionId if not in layout state
+                if (!sessionId) {
+                  sessionId = threadData.thread.sessionId;
+                }
+                // Always fetch worktree info from database (source of truth)
+                if (threadData.thread.worktreePath) {
+                  worktreePath = threadData.thread.worktreePath;
+                  worktreeBranch = threadData.thread.worktreeBranch;
+                }
+                console.log('[Workspace] Fetched thread data from database:', {
                   threadId: savedConsole.threadId,
                   sessionId,
+                  worktreePath,
+                  worktreeBranch,
                 });
               }
             }
           } catch (err) {
-            console.warn('[Workspace] Failed to fetch thread for sessionId:', err);
+            console.warn('[Workspace] Failed to fetch thread data:', err);
           }
         }
 
@@ -3256,8 +3274,8 @@ export function Workspace() {
               resume: !!sessionId,
               sessionId,
               projectPath: savedConsole.cwd || state.projectPath,
-              worktreePath: savedConsole.worktreePath,
-              worktreeBranch: savedConsole.worktreeBranch,
+              worktreePath,
+              worktreeBranch,
             }
           : undefined;
 

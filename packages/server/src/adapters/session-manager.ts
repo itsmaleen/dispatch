@@ -1267,16 +1267,16 @@ Do NOT write any code or make any changes until your plan is approved by the use
       worktreePath = result.worktree.path;
     }
 
-    // Update thread with worktree path and clear sessionId
+    // Update thread with worktree path and branch, and clear sessionId
     // We clear sessionId because Claude Code sessions are tied to a specific cwd,
     // so we need a fresh session in the new worktree directory
     this.getStore().updateThread(threadId, {
       worktreePath,
+      worktreeBranch: branch,  // Store branch in dedicated column (not metadata)
       sessionId: null, // Clear so next message starts fresh session in worktree
       metadata: {
         ...thread.metadata,
-        worktreeBranch: branch,
-        worktreeBaseBranch: baseBranch,
+        worktreeBaseBranch: baseBranch,  // Keep base branch in metadata for reference
       },
     });
 
@@ -1336,7 +1336,8 @@ Do NOT write any code or make any changes until your plan is approved by the use
     }
 
     const metadata = thread.metadata as any;
-    const branch = metadata?.worktreeBranch;
+    // Try dedicated column first, fall back to metadata for backwards compatibility
+    const branch = thread.worktreeBranch ?? metadata?.worktreeBranch;
 
     if (!branch) {
       return null;
@@ -1357,7 +1358,8 @@ Do NOT write any code or make any changes until your plan is approved by the use
     }
 
     const metadata = thread.metadata as any;
-    const branch = metadata?.worktreeBranch;
+    // Try dedicated column first, fall back to metadata for backwards compatibility
+    const branch = thread.worktreeBranch ?? metadata?.worktreeBranch;
     const baseBranch = metadata?.worktreeBaseBranch;
 
     if (!branch) {
@@ -1412,10 +1414,11 @@ Do NOT write any code or make any changes until your plan is approved by the use
       // Update thread: clear worktree info and sessionId so next message creates fresh session
       this.getStore().updateThread(threadId, {
         worktreePath: undefined,
+        worktreeBranch: undefined,  // Clear dedicated column
         sessionId: null, // Clear so next message starts fresh session in project path
         metadata: {
           ...metadata,
-          worktreeBranch: undefined,
+          worktreeBranch: undefined,  // Clear metadata for backwards compatibility
           worktreeBaseBranch: undefined,
           worktreeMergedAt: new Date().toISOString(),
         },
@@ -1435,7 +1438,8 @@ Do NOT write any code or make any changes until your plan is approved by the use
     }
 
     const metadata = thread.metadata as any;
-    const branch = metadata?.worktreeBranch;
+    // Try dedicated column first, fall back to metadata for backwards compatibility
+    const branch = thread.worktreeBranch ?? metadata?.worktreeBranch;
 
     if (branch) {
       const worktreeManager = getWorktreeManager(thread.projectPath);
@@ -1448,10 +1452,11 @@ Do NOT write any code or make any changes until your plan is approved by the use
     // Update thread: clear worktree info and sessionId so next message creates fresh session
     this.getStore().updateThread(threadId, {
       worktreePath: undefined,
+      worktreeBranch: undefined,  // Clear dedicated column
       sessionId: null, // Clear so next message starts fresh session in project path
       metadata: {
         ...metadata,
-        worktreeBranch: undefined,
+        worktreeBranch: undefined,  // Clear metadata for backwards compatibility
         worktreeBaseBranch: undefined,
       },
     });
