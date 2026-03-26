@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "fdfa8651670e",
+  "session_id": "6bafbeea-d7b3-4c07-988b-2d438e21bed3",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-26T15:08:46.098739Z",
+  "branch": "main",
+  "checkpoints_count": 22,
+  "files_touched": [
+    ".plans/README-console-persistence.md",
+    ".plans/console-line-persistence.md",
+    ".plans/console-persistence-architecture.md",
+    ".plans/console-persistence-final-implementation.md",
+    "packages/server/src/adapters/session-manager.ts",
+    "packages/server/src/server.ts",
+    "packages/server/src/services/claude-session-parser.ts",
+    "packages/server/src/services/console-line-store.ts",
+    "packages/ui/src/components/workspace/Workspace.tsx"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "34169d37dbb2",
+  "token_usage": {
+    "input_tokens": 4172,
+    "cache_creation_tokens": 4418944,
+    "cache_read_tokens": 42012090,
+    "output_tokens": 159519,
+    "api_call_count": 460
+  },
+  "session_metrics": {
+    "turn_count": 40
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-26T15:08:38.012005Z",
+    "agent_lines": 0,
+    "human_added": 12719,
+    "human_modified": 7,
+    "human_removed": 0,
+    "total_committed": 12719,
+    "agent_percentage": 0
+  }
+}

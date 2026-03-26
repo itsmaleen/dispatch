@@ -3,9 +3,17 @@
   "checkpoint_id": "fdfa8651670e",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 1,
+  "checkpoints_count": 23,
   "files_touched": [
-    ".plans/console-line-persistence.md"
+    ".plans/README-console-persistence.md",
+    ".plans/console-line-persistence.md",
+    ".plans/console-persistence-architecture.md",
+    ".plans/console-persistence-final-implementation.md",
+    "packages/server/src/adapters/session-manager.ts",
+    "packages/server/src/server.ts",
+    "packages/server/src/services/claude-session-parser.ts",
+    "packages/server/src/services/console-line-store.ts",
+    "packages/ui/src/components/workspace/Workspace.tsx"
   ],
   "sessions": [
     {
@@ -13,13 +21,19 @@
       "transcript": "/fd/fa8651670e/0/full.jsonl",
       "content_hash": "/fd/fa8651670e/0/content_hash.txt",
       "prompt": "/fd/fa8651670e/0/prompt.txt"
+    },
+    {
+      "metadata": "/fd/fa8651670e/1/metadata.json",
+      "transcript": "/fd/fa8651670e/1/full.jsonl",
+      "content_hash": "/fd/fa8651670e/1/content_hash.txt",
+      "prompt": "/fd/fa8651670e/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 3325,
-    "cache_creation_tokens": 1606920,
-    "cache_read_tokens": 18583321,
-    "output_tokens": 88108,
-    "api_call_count": 226
+    "input_tokens": 7497,
+    "cache_creation_tokens": 6025864,
+    "cache_read_tokens": 60595411,
+    "output_tokens": 247627,
+    "api_call_count": 686
   }
 }
