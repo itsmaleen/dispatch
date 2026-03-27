@@ -3,14 +3,18 @@
   "checkpoint_id": "846982fb6b2b",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 54,
+  "checkpoints_count": 53,
   "files_touched": [
+    ".plans/console-history-ordering-issue.md",
+    ".plans/console-history-t3code-approach.md",
+    ".plans/worktree-detection-issues.md",
     "packages/contracts/src/agent-console.ts",
     "packages/server/src/adapters/session-manager.ts",
     "packages/server/src/persistence/sqlite-store.ts",
     "packages/server/src/server.ts",
     "packages/server/src/services/claude-session-parser.ts",
     "packages/server/src/services/console-line-store.ts",
+    "packages/server/src/services/test-parser.ts",
     "packages/ui/src/components/workspace/Workspace.tsx"
   ],
   "sessions": [
@@ -30,7 +34,7 @@
       "metadata": "/84/6982fb6b2b/2/metadata.json",
       "transcript": "/84/6982fb6b2b/2/full.jsonl",
       "content_hash": "/84/6982fb6b2b/2/content_hash.txt",
-      "prompt": "/84/6982fb6b2b/2/prompt.txt"
+      "prompt": ""
     },
     {
       "metadata": "/84/6982fb6b2b/3/metadata.json",
@@ -40,10 +44,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 11780,
-    "cache_creation_tokens": 9993718,
-    "cache_read_tokens": 105878996,
-    "output_tokens": 397264,
-    "api_call_count": 1200
+    "input_tokens": 11391,
+    "cache_creation_tokens": 9891891,
+    "cache_read_tokens": 105376647,
+    "output_tokens": 391889,
+    "api_call_count": 1183
   }
 }
