@@ -1,0 +1,75 @@
+the last bit of bun run sign:mac is failing (bun run dev and bun run install:app seem to work fine)
+
+  • building block map  blockMapFile=release/Merry-0.1.1-arm64-mac.zip.blockmap
+node:internal/modules/cjs/loader:1247
+  throw err;
+  ^
+
+Error: Cannot find module './packages/ui/package.json'
+Require stack:
+- /Users/marlin/agent-command-center/packages/ui/[eval]
+    at Function._resolveFilename (node:internal/modules/cjs/loader:1244:15)
+    at Function._load (node:internal/modules/cjs/loader:1070:27)
+    at TracingChannel.traceSync (node:diagnostics_channel:322:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:217:24)
+    at Module.require (node:internal/modules/cjs/loader:1335:12)
+    at require (node:internal/modules/helpers:136:16)
+    at [eval]:1:1
+    at runScriptInThisContext (node:internal/vm:209:10)
+    at node:internal/process/execution:118:14
+    at [eval]-wrapper:6:24 {
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [ '/Users/marlin/agent-command-center/packages/ui/[eval]' ]
+}
+
+Node.js v22.13.1
+error: script "sign:mac" exited with code 1
+
+---
+
+some reason the installed versions (sign:mac and install:app) aren't connecting to claude code but the bun run dev version does
+
+---
+
+no this is incorrect, shouldn't use the cmux version
+
+How does the dev version connect to claude code that is different?
+
+---
+
+can you look at changes from last commit where the install:app worked?
+What's different and what might have broken claude code connection?
+
+---
+
+instead of doing all this because it seems like it will incorrectly work only fo my computer
+Look at how that function worked 5 commits ago and compare
+
+---
+
+ok but if I run install:app or sign:mac
+will it use the path from when I built or will it properly infer from "which claude"
+
+---
+
+all of this seems like overkill because it was previously working
+Investigate what changed between now and the last release v0.1.1 (check git tags) and see what might have "broken"
+
+Don't implement a fix, just give me your findings
+
+---
+
+maybe investigate how t3code is doing this setup now that they've added claude code
+
+---
+
+no look at the t3code repo https://github.com/pingdotgg/t3code
+
+---
+
+let's try that
+
+---
+
+getting a js error alert when trying to launch app from either dev or installed app
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/Users/marlin/agent-command-center/packages/ui/dist-electron/shell-env' imported from /Users/marlin/agent-command-center/packages/ui/dist-electron/main.js
