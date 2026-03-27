@@ -46,6 +46,8 @@ import {
   GitBranch,
   Terminal as TerminalIcon, // Keep for command line icon usage
   Link2,
+  Info,
+  Copy,
 } from 'lucide-react';
 import { AgentsPanel } from '../agents/AgentsPanel';
 import { api, getServerUrl, getWsUrl } from '../../stores/app';
@@ -67,7 +69,7 @@ const getApiUrl = () => getServerUrl();
 const getWebSocketUrl = () => `${getWsUrl()}/events`;
 
 type AgentStatus = 'ready' | 'busy' | 'offline';
-type ConsoleLineType = 'prompt' | 'thinking' | 'tool_call' | 'tool_result' | 'output' | 'error' | 'info' | 'command' | 'system';
+type ConsoleLineType = 'user' | 'prompt' | 'thinking' | 'tool_call' | 'tool_result' | 'output' | 'error' | 'info' | 'command' | 'system';
 
 // Backwards compatibility aliases (internal use only - external APIs use new names)
 type TerminalLineType = ConsoleLineType;
@@ -509,6 +511,7 @@ function PlanStepText({ text }: { text: string }) {
 function ConsoleLineItem({ line, showTimestamp = true }: { line: ConsoleLine; showTimestamp?: boolean }) {
   const getLineStyle = () => {
     switch (line.type) {
+      case 'user':
       case 'prompt':
         return 'text-blue-400 font-medium';
       case 'thinking':
@@ -534,6 +537,9 @@ function ConsoleLineItem({ line, showTimestamp = true }: { line: ConsoleLine; sh
 
   const getIcon = () => {
     switch (line.type) {
+      case 'user':
+      case 'prompt':
+        return <span className="text-blue-400 font-bold flex-shrink-0 text-sm">&gt;</span>;
       case 'thinking':
         return <Brain className="w-3.5 h-3.5 text-violet-400 flex-shrink-0" />;
       case 'tool_call':
@@ -1469,6 +1475,246 @@ function WorkspaceEdgeDropZones({
 }
 
 // ============================================================================
+// CONSOLE DEBUG MODAL
+// ============================================================================
+
+function ConsoleDebugModal({
+  console: consoleState,
+  onClose,
+}: {
+  console: ConsoleState;
+  onClose: () => void;
+}) {
+  const [debugInfo, setDebugInfo] = useState<any>(null);
+  const [loadingFileInfo, setLoadingFileInfo] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(label);
+    setTimeout(() => setCopied(null), 2000);
+  };
+
+  // Fetch session file info when modal opens
+  useEffect(() => {
+    const fetchFileInfo = async () => {
+      if (!consoleState.threadId) return;
+
+      setLoadingFileInfo(true);
+      try {
+        const res = await fetch(`${getApiUrl()}/threads/${consoleState.threadId}/debug-info`);
+        const data = await res.json();
+        setDebugInfo(data);
+      } catch (err) {
+        console.error('[Debug] Failed to fetch session file info:', err);
+      } finally {
+        setLoadingFileInfo(false);
+      }
+    };
+
+    fetchFileInfo();
+  }, [consoleState.threadId]);
+
+  const InfoRow = ({ label, value, copyValue, highlight }: { label: string; value: any; copyValue?: string; highlight?: boolean }) => (
+    <div className={`flex items-start justify-between gap-4 py-2 border-b border-zinc-800/50 ${highlight ? 'bg-blue-950/20' : ''}`}>
+      <span className={`text-xs font-medium ${highlight ? 'text-blue-400' : 'text-zinc-500'} min-w-[140px]`}>{label}:</span>
+      <div className="flex items-center gap-2 flex-1">
+        <span className={`text-xs ${highlight ? 'text-blue-200' : 'text-zinc-300'} font-mono break-all flex-1`}>
+          {value !== undefined && value !== null ? String(value) : <span className="text-zinc-600">—</span>}
+        </span>
+        {copyValue && (
+          <button
+            onClick={() => copyToClipboard(copyValue, label)}
+            className="p-1 text-zinc-600 hover:text-zinc-300 hover:bg-zinc-800 rounded transition-colors flex-shrink-0"
+            title="Copy"
+          >
+            {copied === label ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  const SessionFileSection = ({ title, fileInfo }: { title: string; fileInfo: any }) => {
+    if (!fileInfo) return null;
+
+    return (
+      <div className="mb-4">
+        <h4 className="text-xs font-medium text-zinc-500 mb-2">{title}</h4>
+        <div className="bg-zinc-900/50 rounded p-2 border border-zinc-800/50">
+          <InfoRow label="Path" value={fileInfo.path} copyValue={fileInfo.path} />
+          <InfoRow
+            label="Exists"
+            value={fileInfo.exists ? '✅ Yes' : '❌ No'}
+            highlight={fileInfo.exists}
+          />
+          {fileInfo.exists && (
+            <>
+              <InfoRow label="Size" value={`${fileInfo.sizeKB} KB`} />
+              <InfoRow label="Events" value={fileInfo.eventCount} highlight={fileInfo.eventCount > 0} />
+              <InfoRow label="Modified" value={new Date(fileInfo.modifiedAt).toLocaleString()} />
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]"
+      onClick={onClose}
+    >
+      <div
+        className="bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+          <h2 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
+            <Info className="w-4 h-4" />
+            Console Debug Info - All IDs
+          </h2>
+          <button
+            onClick={onClose}
+            className="text-zinc-500 hover:text-zinc-300 p-1 rounded hover:bg-zinc-800 transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="p-4 overflow-y-auto max-h-[calc(90vh-60px)]">
+          {loadingFileInfo && (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="w-6 h-6 animate-spin text-zinc-500" />
+            </div>
+          )}
+
+          {debugInfo?.ok === false && (
+            <div className="text-red-400 text-sm p-4 bg-red-950/20 rounded-lg border border-red-800/50">
+              Error loading debug info: {debugInfo.error}
+            </div>
+          )}
+
+          {debugInfo?.ok && debugInfo.ids && (
+            <>
+              {/* All IDs Section */}
+              <div className="mb-6">
+                <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">
+                  All Session IDs (Check which one has the .jsonl file)
+                </h3>
+                <div className="bg-zinc-950/50 rounded-lg p-3 border border-zinc-800">
+                  <InfoRow label="Console ID (UI)" value={consoleState.id} copyValue={consoleState.id} />
+                  <InfoRow label="Thread ID" value={debugInfo.ids.threadId} copyValue={debugInfo.ids.threadId} />
+                  <InfoRow
+                    label="Thread Session ID"
+                    value={debugInfo.ids.threadSessionId}
+                    copyValue={debugInfo.ids.threadSessionId}
+                    highlight={!!debugInfo.ids.threadSessionId}
+                  />
+                  <InfoRow
+                    label="Active SDK Session ID"
+                    value={debugInfo.ids.activeSessionSdkId}
+                    copyValue={debugInfo.ids.activeSessionSdkId}
+                    highlight={!!debugInfo.ids.activeSessionSdkId}
+                  />
+                  <InfoRow
+                    label="Resume From Session ID"
+                    value={debugInfo.ids.activeSessionResumeFromId}
+                    copyValue={debugInfo.ids.activeSessionResumeFromId}
+                    highlight={!!debugInfo.ids.activeSessionResumeFromId}
+                  />
+                  <InfoRow label="Layout Panel ID" value={debugInfo.ids.layoutPanelId} copyValue={debugInfo.ids.layoutPanelId} />
+                </div>
+              </div>
+
+              {/* Active Session Details */}
+              {debugInfo.activeSession && (
+                <div className="mb-6">
+                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">Active Session</h3>
+                  <div className="bg-zinc-950/50 rounded-lg p-3 border border-zinc-800">
+                    <InfoRow label="Status" value={debugInfo.activeSession.status} highlight={true} />
+                    <InfoRow label="CWD" value={debugInfo.activeSession.cwd} copyValue={debugInfo.activeSession.cwd} />
+                    <InfoRow label="SDK Session ID" value={debugInfo.activeSession.sdkSessionId} copyValue={debugInfo.activeSession.sdkSessionId} />
+                    <InfoRow label="Resume From ID" value={debugInfo.activeSession.resumeFromSessionId} copyValue={debugInfo.activeSession.resumeFromSessionId} />
+                    <InfoRow label="Has Active Query" value={debugInfo.activeSession.hasQuery ? '✅ Yes' : '❌ No'} />
+                  </div>
+                </div>
+              )}
+
+              {/* Session Files */}
+              <div className="mb-6">
+                <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">
+                  Session Files (.jsonl) - Check which ones exist
+                </h3>
+                <div className="bg-zinc-950/50 rounded-lg p-3 border border-zinc-800">
+                  <SessionFileSection
+                    title="1️⃣ Thread Session ID File"
+                    fileInfo={debugInfo.sessionFiles.threadSessionId}
+                  />
+                  <SessionFileSection
+                    title="2️⃣ Active SDK Session ID File"
+                    fileInfo={debugInfo.sessionFiles.activeSessionSdkId}
+                  />
+                  <SessionFileSection
+                    title="3️⃣ Resume From Session ID File"
+                    fileInfo={debugInfo.sessionFiles.activeSessionResumeFromId}
+                  />
+                </div>
+              </div>
+
+              {/* Thread Info */}
+              <div className="mb-6">
+                <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">Thread Details</h3>
+                <div className="bg-zinc-950/50 rounded-lg p-3 border border-zinc-800">
+                  <InfoRow label="Name" value={debugInfo.thread.name} />
+                  <InfoRow label="Project Path" value={debugInfo.thread.projectPath} copyValue={debugInfo.thread.projectPath} />
+                  <InfoRow label="Worktree Path" value={debugInfo.thread.worktreePath} copyValue={debugInfo.thread.worktreePath} />
+                  <InfoRow label="Session CWD" value={debugInfo.thread.sessionCwd} copyValue={debugInfo.thread.sessionCwd} />
+                  <InfoRow label="Status" value={debugInfo.thread.status} />
+                  <InfoRow label="Message Count" value={debugInfo.thread.messageCount} />
+                  <InfoRow label="Created" value={new Date(debugInfo.thread.createdAt).toLocaleString()} />
+                </div>
+              </div>
+
+              {/* Console State */}
+              <div className="mb-6">
+                <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">UI Console State</h3>
+                <div className="bg-zinc-950/50 rounded-lg p-3 border border-zinc-800">
+                  <InfoRow label="Lines Count" value={consoleState.lines.length} />
+                  <InfoRow label="Is Streaming" value={consoleState.isStreaming ? '✅ Yes' : '❌ No'} />
+                  <InfoRow label="Session Active" value={consoleState.sessionActive ? '✅ Yes' : '❌ No'} />
+                  <InfoRow label="Agent Type" value={consoleState.agent?.type} />
+                </div>
+              </div>
+
+              {/* Database Stats */}
+              <div className="mb-6">
+                <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">Database (SQLite Cache)</h3>
+                <div className="bg-zinc-950/50 rounded-lg p-3 border border-zinc-800">
+                  <InfoRow label="Lines in DB" value={debugInfo.database.lineCount} />
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-4 py-3 border-t border-zinc-800 flex justify-end">
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
 // AGENT CONSOLE WIDGET
 // ============================================================================
 
@@ -1531,6 +1777,7 @@ function AgentConsoleWidget({
   const outputRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
+  const [showDebugModal, setShowDebugModal] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuPosition | null>(null);
   const [showWorktreePanel, setShowWorktreePanel] = useState(false);
   const [showEnableWorktreeDialog, setShowEnableWorktreeDialog] = useState(false);
@@ -1847,6 +2094,13 @@ function AgentConsoleWidget({
           >
             Auto-scroll
           </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowDebugModal(true); }}
+            className="p-1 text-zinc-600 hover:text-zinc-300 hover:bg-zinc-700 rounded transition-colors"
+            title="Debug Info"
+          >
+            <Info className="w-3.5 h-3.5" />
+          </button>
           <div className="relative">
             <button
               onClick={(e) => { e.stopPropagation(); setShowSettings(!showSettings); }}
@@ -1867,6 +2121,14 @@ function AgentConsoleWidget({
           </div>
         </div>
       </div>
+
+      {/* Debug Modal */}
+      {showDebugModal && (
+        <ConsoleDebugModal
+          console={consoleState}
+          onClose={() => setShowDebugModal(false)}
+        />
+      )}
 
       {/* Output - virtualized for performance with large outputs */}
       <div ref={outputRef} className="flex-1 overflow-y-auto p-3 font-mono text-sm">
@@ -3241,9 +3503,15 @@ export function Workspace() {
 
         if (savedConsole.threadId) {
           try {
-            const threadRes = await fetch(`${getApiUrl()}/api/threads/${savedConsole.threadId}`);
+            const threadRes = await fetch(`${getApiUrl()}/threads/${savedConsole.threadId}`);
+            console.log('[Workspace] Fetching thread data:', {
+              url: `${getApiUrl()}/threads/${savedConsole.threadId}`,
+              ok: threadRes.ok,
+              status: threadRes.status,
+            });
             if (threadRes.ok) {
               const threadData = await threadRes.json();
+              console.log('[Workspace] Thread data response:', threadData);
               if (threadData.ok && threadData.thread) {
                 // Fetch sessionId if not in layout state
                 if (!sessionId) {
@@ -3958,6 +4226,62 @@ export function Workspace() {
 
     console.log('[WS Event]', event.type, { adapterId, threadId }, event.payload);
 
+    // Handle console.session_resumed (T3 Code approach - structured data from server)
+    if (event.type === 'console.session_resumed' && event.payload?.snapshot) {
+      const snapshot = event.payload.snapshot;
+      const consoleId = snapshot.consoleId;
+
+      // Convert ParsedConsoleLine to ConsoleLine (they're almost identical)
+      const historyLines: ConsoleLine[] = (snapshot.lines || []).map((line, i) => ({
+        id: line.lineId || `history-${i}`,
+        type: line.type,
+        content: line.content,
+        timestamp: new Date(line.timestamp).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        isStreaming: false,
+        blockIndex: line.blockIndex,
+        blockId: line.blockId,
+        toolName: line.toolName,
+        itemId: line.itemId,
+        toolInput: line.toolInput as Record<string, unknown>,
+        toolResult: line.toolResult,
+      }));
+
+      // Add separator line
+      const separatorLine: ConsoleLine = {
+        id: `history-separator-${Date.now()}`,
+        type: 'system',
+        content: '── Previous output ──',
+        timestamp: makeTimestamp(),
+        isStreaming: false,
+      };
+
+      // Add resume message line
+      const resumeLine: ConsoleLine = {
+        id: `history-resume-${Date.now()}`,
+        type: 'system',
+        content: `Session resumed at ${new Date().toLocaleTimeString()}`,
+        timestamp: makeTimestamp(),
+        isStreaming: false,
+      };
+
+      // Update console state: prepend history before current lines
+      setTerminals(prev => prev.map(terminal => {
+        if (terminal.id === consoleId || terminal.threadId === consoleId) {
+          return {
+            ...terminal,
+            lines: [
+              separatorLine,
+              ...historyLines,
+              resumeLine,
+              ...terminal.lines, // Keep existing lines (like "Session resumed — Claude Code")
+            ],
+          };
+        }
+        return terminal;
+      }));
+      return;
+    }
+
     // Handle session.message (raw SDK events from thread)
     if (event.type === 'session.message' && event.payload) {
       const msg = event.payload;
@@ -4575,11 +4899,47 @@ export function Workspace() {
       });
     }
 
-    // If we have a threadId, load previous console lines from persistence
-    // This applies both when resuming a session (with sessionId) and when restoring a console (threadId only)
-    if (resumeOptions?.threadId) {
-      const HISTORY_LIMIT = 1000; // Load last 1000 lines
-      console.log('[Workspace] Loading persisted console lines:', {
+    // If we have a sessionId, create the server session immediately to load history (T3 Code approach)
+    // The server will emit console.session_resumed event with full history
+    if (resumeOptions?.sessionId && resumeOptions?.threadId) {
+      console.log('[Workspace] Creating session to load history:', {
+        threadId: resumeOptions.threadId,
+        sessionId: resumeOptions.sessionId,
+        terminalId: newTerminalId,
+      });
+
+      // Create session with resume=true to trigger history loading
+      fetch(`${getApiUrl()}/threads/${resumeOptions.threadId}/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cwd: resumeOptions.worktreePath || resumeOptions.projectPath,
+          name: `Resumed - ${new Date().toLocaleString()}`,
+          resume: true,
+          sessionId: resumeOptions.sessionId,
+        }),
+      })
+        .then(res => res.json())
+        .then(sessionData => {
+          if (sessionData.ok) {
+            console.log('[Workspace] Session created for history loading:', sessionData);
+            // Mark session as active so sendMessage doesn't recreate it
+            setTerminals(prev => prev.map(t =>
+              t.id === newTerminalId ? { ...t, sessionActive: true, threadId: resumeOptions.threadId } : t
+            ));
+          } else {
+            console.error('[Workspace] Failed to create session for history:', sessionData.error);
+          }
+        })
+        .catch(err => {
+          console.error('[Workspace] Error creating session for history:', err);
+        });
+    }
+    // Legacy: If we only have a threadId (no sessionId), try loading from old database
+    // This handles old consoles created before T3 Code approach
+    else if (resumeOptions?.threadId) {
+      const HISTORY_LIMIT = 1000;
+      console.log('[Workspace] Loading persisted console lines from database (legacy):', {
         threadId: resumeOptions.threadId,
         terminalId: newTerminalId,
         limit: HISTORY_LIMIT,

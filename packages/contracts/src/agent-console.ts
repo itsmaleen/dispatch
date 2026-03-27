@@ -124,6 +124,41 @@ export interface AgentConsoleRemovedEvent {
   timestamp: string;
 }
 
+/** Parsed console line from session file */
+export interface ParsedConsoleLine {
+  lineId: string;
+  blockId: string;
+  blockIndex: number;
+  type: 'user' | 'output' | 'thinking' | 'tool_call' | 'tool_result';
+  content: string;
+  timestamp: string;
+  isStreaming: boolean;
+  toolName?: string;
+  itemId?: string;
+  toolInput?: unknown;
+  toolResult?: unknown;
+}
+
+/** Console session snapshot (T3 Code approach) */
+export interface ConsoleSessionSnapshot {
+  consoleId: string;
+  threadId: string;
+  path: string;
+  lines: ParsedConsoleLine[];  // Structured parsed lines from .jsonl
+  status: 'idle' | 'running' | 'error';
+  sessionId?: string;  // SDK session ID
+  createdAt: string;
+}
+
+/** Console session resumed event with full history */
+export interface ConsoleSessionResumedEvent {
+  type: 'console.session_resumed';
+  payload: {
+    snapshot: ConsoleSessionSnapshot;
+  };
+  timestamp: string;
+}
+
 /** All agent console events */
 export type AgentConsoleEvent =
   | AgentConsoleCreatedEvent
@@ -131,7 +166,8 @@ export type AgentConsoleEvent =
   | AgentConsoleCompletedEvent
   | AgentConsoleFailedEvent
   | AgentConsoleStatusChangedEvent
-  | AgentConsoleRemovedEvent;
+  | AgentConsoleRemovedEvent
+  | ConsoleSessionResumedEvent;
 
 // ============================================================================
 // CONSOLE LINE PERSISTENCE

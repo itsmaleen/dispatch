@@ -841,6 +841,11 @@ export class SqliteThreadStore {
     return message;
   }
 
+  /** Get the underlying database instance for shared access */
+  getDatabase(): DatabaseSync {
+    return this.db;
+  }
+
   close(): void {
     this.db.close();
   }

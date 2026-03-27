@@ -22,9 +22,9 @@ import { getWorktreeManager } from '../services/worktree-manager';
 import { getThreadNamer } from '../services/thread-namer';
 import { getOverlapDetector, type OverlapWarning } from '../services/overlap-detector';
 import { getMergeMessageGenerator } from '../services/merge-message-generator';
-import { parseSessionFile, getSessionFilePath, sessionFileExists } from '../services/claude-session-parser';
+import { parseSessionFile, getSessionFilePath, sessionFileExists, parseSessionToHistoryString } from '../services/claude-session-parser';
 import { getConsoleLineStore } from '../services/console-line-store';
-import type { WorktreeInfo, WorktreeChanges, MergeResult, ConsoleThread } from '@acc/contracts';
+import type { WorktreeInfo, WorktreeChanges, MergeResult, ConsoleThread, ConsoleSessionSnapshot } from '@acc/contracts';
 
 /** Active session bound to a thread */
 export interface Session {
@@ -54,6 +54,8 @@ export interface SessionEvents {
   'turn.error': (threadId: string, turnId: string, error: Error) => void;
   'session.created': (threadId: string) => void;
   'session.closed': (threadId: string) => void;
+  // Console session resumed with history (T3 Code approach)
+  'console.session_resumed': (snapshot: ConsoleSessionSnapshot) => void;
   // Active session tracking (Tier 1)
   'prompt.started': (data: { sessionId: string; agentId: string; agentName: string; summary: string; promptText: string; projectPath?: string }) => void;
   'prompt.completed': (data: { sessionId: string; status: 'completed' | 'failed'; durationMs: number }) => void;
@@ -177,6 +179,72 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * Load console history from SDK session file and emit event (T3 Code approach)
+   *
+   * This parses the SDK's .jsonl file once and emits the complete history as a string.
+   * No database sync - just parse and send.
+   *
+   * See: .plans/console-history-t3code-approach.md
+   */
+  private async loadAndSendHistory(
+    projectPath: string,
+    threadId: string,
+    sessionId: string
+  ): Promise<void> {
+    try {
+      const sessionFilePath = getSessionFilePath(projectPath, sessionId);
+
+      // Check if session file exists
+      if (!sessionFileExists(projectPath, sessionId)) {
+        console.warn(
+          `[SessionManager] SDK session file not found: ${sessionFilePath}\n` +
+          '  This is expected if the session was created recently and not yet persisted by SDK.\n' +
+          '  Console will start with no history.'
+        );
+        return;
+      }
+
+      console.log(`[SessionManager] Loading console history from SDK session file: ${sessionFilePath}`);
+      console.log(`[SessionManager] Thread ID: ${threadId}, Session ID: ${sessionId}`);
+      console.log(`[SessionManager] Project path: ${projectPath}`);
+
+      // Parse .jsonl file into structured console lines
+      const { lines, stats } = await parseSessionFile(sessionFilePath);
+
+      console.log(`[SessionManager] Parsed history: ${lines.length} lines, ${stats.totalEvents} events`);
+
+      if (!lines || lines.length === 0) {
+        console.log('[SessionManager] No history found in session file (empty session)');
+        return;
+      }
+
+      // Create snapshot with structured lines
+      const snapshot: ConsoleSessionSnapshot = {
+        consoleId: threadId,
+        threadId,
+        path: projectPath,
+        lines, // Send structured data instead of formatted string
+        status: 'idle',
+        sessionId,
+        createdAt: new Date().toISOString(),
+      };
+
+      // Emit event with history
+      this.emit('console.session_resumed', snapshot);
+
+      console.log(
+        `[SessionManager] Console history loaded and sent\n` +
+        `  Thread: ${threadId}\n` +
+        `  Lines: ${lines.length}`
+      );
+    } catch (err) {
+      console.error('[SessionManager] Failed to load console history:', err);
+      // Don't throw - graceful degradation
+      // Client can continue without history
+    }
+  }
+
+  /**
    * Sync console lines from Claude Code SDK .jsonl session file
    *
    * Approach 2 (Hybrid): SDK .jsonl files are the source of truth
@@ -185,6 +253,8 @@ export class SessionManager extends EventEmitter {
    * - Database serves as fast cache for display and search
    *
    * See: .plans/console-persistence-architecture.md
+   *
+   * @deprecated Use loadAndSendHistory() instead (T3 Code approach)
    */
   private async syncConsoleFromSessionFile(
     projectPath: string,
@@ -219,11 +289,12 @@ export class SessionManager extends EventEmitter {
 
       // Check if we've already synced this session
       // (avoid re-parsing on every resume - database may already have the data)
-      const existingLines = consoleLineStore.getLatestLines(threadId, 1);
-      if (existingLines.lines.length > 0) {
+      const existingLineCount = consoleLineStore.getLineCount(threadId);
+      if (existingLineCount > 0) {
         console.log(
-          `[SessionManager] Console already has ${existingLines.lines.length} lines, skipping sync.\n` +
-          '  Use force=true to re-sync from SDK file.'
+          `[SessionManager] Console already has ${existingLineCount} lines in database, skipping sync.\n` +
+          '  Database was populated from previous SDK sync or streaming events.\n' +
+          '  To force re-sync from SDK file, clear console lines first.'
         );
         return;
       }
@@ -329,14 +400,7 @@ export class SessionManager extends EventEmitter {
   async createSession(options: CreateSessionOptions): Promise<Session> {
     const { threadId, cwd, name, worktreePath, resume, sessionId } = options;
 
-    // Check if session already exists
-    const existing = this.sessions.get(threadId);
-    if (existing) {
-      console.log(`[SessionManager] Session ${threadId} already exists`);
-      return existing;
-    }
-
-    // Get or create thread in SQLite
+    // Get or create thread in SQLite first (needed for pathForHistory)
     let thread = this.getStore().getThread(threadId);
     if (!thread) {
       thread = this.getStore().createThread({
@@ -352,11 +416,26 @@ export class SessionManager extends EventEmitter {
       console.log(`[SessionManager] Reactivated thread ${threadId} for resume`);
     }
 
-    // Sync console lines from SDK .jsonl file when sessionId exists (Approach 2: Hybrid)
-    // This works for both explicit resume AND layout restoration
-    // See: .plans/console-persistence-architecture.md
+    // Load and send console history from SDK .jsonl file (T3 Code approach)
+    // This must happen BEFORE checking for existing sessions, because:
+    // - Layout restoration may create sessions in memory first
+    // - This explicit resume request is the signal to load history
+    // See: .plans/console-history-t3code-approach.md
     if (sessionId) {
-      await this.syncConsoleFromSessionFile(cwd, threadId, sessionId);
+      const pathForHistory = thread.worktreePath || worktreePath || cwd;
+      console.log(`[SessionManager] About to load history for resume request:`, {
+        threadId,
+        sessionId,
+        pathForHistory,
+      });
+      await this.loadAndSendHistory(pathForHistory, threadId, sessionId);
+    }
+
+    // Check if session already exists (might have been created during layout restore)
+    const existing = this.sessions.get(threadId);
+    if (existing) {
+      console.log(`[SessionManager] Session ${threadId} already exists, returning existing (history already loaded if sessionId provided)`);
+      return existing;
     }
 
     // Create session (query created lazily on first message)

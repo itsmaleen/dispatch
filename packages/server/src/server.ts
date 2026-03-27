@@ -10,6 +10,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
 import { WebSocketServer, WebSocket } from 'ws';
+import fs from 'fs';
 import type { AdapterConfig, AdapterEvent } from '@acc/contracts';
 import type { AdapterImplementation, AdapterContext } from './adapters/types';
 import { AdapterEventEmitter } from './adapters/types';
@@ -25,6 +26,7 @@ import { getTerminalManager, type TerminalManager } from './services/terminal-ma
 import { executeTerminalTool, getTerminalToolSchema } from './services/terminal-tool';
 import { getAgentConsoleLauncher, type AgentConsoleLauncher, type AgentConsole, type LaunchAgentOptions } from './services/agent-console-launcher';
 import { getSemanticSearchService, type CommandInfo } from './services/semantic-search';
+import { getSessionFilePath } from './services/claude-session-parser';
 import type { TerminalClientMessage, CreateTerminalOptions, TerminalToolInput } from '@acc/contracts';
 import { initAnalytics, getAnalytics, shutdownAnalytics, MerryEvents } from './analytics';
 
@@ -692,6 +694,147 @@ export class CommandCenterServer {
         return c.json({
           ok: false,
           error: error instanceof Error ? error.message : 'Failed to remove worktree',
+        }, 500);
+      }
+    });
+
+    // Debug endpoint for console session info
+    this.app.get('/threads/:id/debug-info', async (c) => {
+      const threadId = c.req.param('id');
+      const manager = getSessionManager();
+
+      try {
+        const thread = manager.getThread(threadId);
+
+        if (!thread) {
+          return c.json({ ok: false, error: 'Thread not found' }, 404);
+        }
+
+        // Get active session if any
+        const activeSession = manager.getSession(threadId);
+
+        // Collect all IDs
+        const ids = {
+          threadId: thread.id,
+          threadSessionId: thread.sessionId,
+          threadSessionCwd: thread.sessionCwd,
+          activeSessionSdkId: activeSession?.sdkSessionId,
+          activeSessionResumeFromId: activeSession?.resumeFromSessionId,
+          activeSessionCwd: activeSession?.cwd,
+          activeSessionStatus: activeSession?.status,
+          layoutPanelId: thread.layoutPanelId,
+        };
+
+        // Get session file info for thread.sessionId
+        let threadSessionFile = null;
+        if (thread.sessionId) {
+          const path = getSessionFilePath(thread.worktreePath || thread.projectPath, thread.sessionId);
+          if (fs.existsSync(path)) {
+            const stats = fs.statSync(path);
+            const content = fs.readFileSync(path, 'utf-8');
+            threadSessionFile = {
+              path,
+              exists: true,
+              sizeKB: Math.round(stats.size / 1024),
+              eventCount: content.split('\n').filter(line => line.trim()).length,
+              modifiedAt: stats.mtime.toISOString(),
+            };
+          } else {
+            threadSessionFile = { path, exists: false };
+          }
+        }
+
+        // Get session file info for activeSession.sdkSessionId
+        let activeSessionFile = null;
+        if (activeSession?.sdkSessionId && activeSession.sdkSessionId !== thread.sessionId) {
+          const path = getSessionFilePath(activeSession.cwd, activeSession.sdkSessionId);
+          if (fs.existsSync(path)) {
+            const stats = fs.statSync(path);
+            const content = fs.readFileSync(path, 'utf-8');
+            activeSessionFile = {
+              path,
+              exists: true,
+              sizeKB: Math.round(stats.size / 1024),
+              eventCount: content.split('\n').filter(line => line.trim()).length,
+              modifiedAt: stats.mtime.toISOString(),
+            };
+          } else {
+            activeSessionFile = { path, exists: false };
+          }
+        }
+
+        // Get session file info for activeSession.resumeFromSessionId
+        let resumeSessionFile = null;
+        if (activeSession?.resumeFromSessionId &&
+            activeSession.resumeFromSessionId !== thread.sessionId &&
+            activeSession.resumeFromSessionId !== activeSession.sdkSessionId) {
+          const path = getSessionFilePath(activeSession.cwd, activeSession.resumeFromSessionId);
+          if (fs.existsSync(path)) {
+            const stats = fs.statSync(path);
+            const content = fs.readFileSync(path, 'utf-8');
+            resumeSessionFile = {
+              path,
+              exists: true,
+              sizeKB: Math.round(stats.size / 1024),
+              eventCount: content.split('\n').filter(line => line.trim()).length,
+              modifiedAt: stats.mtime.toISOString(),
+            };
+          } else {
+            resumeSessionFile = { path, exists: false };
+          }
+        }
+
+        // Get database line count
+        const { getConsoleLineStore } = await import('./services/console-line-store');
+        const store = getConsoleLineStore();
+        const dbLines = store.getRecentLines(threadId, 10000);
+        const dbLineCount = dbLines.lines.length;
+
+        // Get all thread fields
+        const threadInfo = {
+          id: thread.id,
+          name: thread.name,
+          projectPath: thread.projectPath,
+          worktreePath: thread.worktreePath,
+          worktreeBranch: thread.worktreeBranch,
+          createdAt: thread.createdAt.toISOString(),
+          lastActiveAt: thread.lastActiveAt.toISOString(),
+          sessionId: thread.sessionId,
+          sessionCwd: thread.sessionCwd,
+          status: thread.status,
+          lastPrompt: thread.lastPrompt,
+          messageCount: thread.messageCount,
+          layoutPanelId: thread.layoutPanelId,
+          closedAt: thread.closedAt?.toISOString(),
+        };
+
+        return c.json({
+          ok: true,
+          ids,
+          thread: threadInfo,
+          activeSession: activeSession ? {
+            threadId: activeSession.threadId,
+            cwd: activeSession.cwd,
+            status: activeSession.status,
+            sdkSessionId: activeSession.sdkSessionId,
+            resumeFromSessionId: activeSession.resumeFromSessionId,
+            currentTurnId: activeSession.currentTurnId,
+            hasQuery: !!activeSession.query,
+          } : null,
+          sessionFiles: {
+            threadSessionId: threadSessionFile,
+            activeSessionSdkId: activeSessionFile,
+            activeSessionResumeFromId: resumeSessionFile,
+          },
+          database: {
+            lineCount: dbLineCount,
+          },
+        });
+      } catch (error) {
+        console.error('[Server] Error getting debug info:', error);
+        return c.json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to get debug info',
         }, 500);
       }
     });
@@ -3216,6 +3359,24 @@ Format your response as plain text only:
       });
       // Also notify about console threads changes
       getQueryManager().notifyDataChanged('console_threads');
+    });
+
+    // Console session resumed with history (T3 Code approach)
+    sessionManager.on('console.session_resumed', (snapshot) => {
+      console.log('[Server] Broadcasting console.session_resumed event:', {
+        consoleId: snapshot.consoleId,
+        threadId: snapshot.threadId,
+        linesCount: snapshot.lines?.length || 0,
+      });
+      this.broadcastRaw({
+        type: 'event',
+        event: {
+          threadId: snapshot.threadId, // Must be inside event object, not at top level
+          type: 'console.session_resumed',
+          payload: { snapshot },
+          timestamp: new Date().toISOString(),
+        },
+      });
     });
 
     return new Promise<void>((resolve, reject) => {

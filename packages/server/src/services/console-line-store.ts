@@ -96,6 +96,11 @@ export class ConsoleLineStore {
 
   /**
    * Get recent lines for a console
+   *
+   * @returns Lines in chronological order (oldest → newest) for display
+   *
+   * Note: Query fetches DESC to get most recent lines efficiently,
+   * then reverses for chronological display order.
    */
   getRecentLines(consoleId: string, limit: number = 1000): ConsoleLinesResult {
     const rows = this.db.prepare(`
@@ -105,7 +110,7 @@ export class ConsoleLineStore {
       LIMIT ?
     `).all(consoleId, limit) as ConsoleLineRow[];
 
-    return this.rowsToResult(rows);
+    return this.rowsToResult(rows.reverse());
   }
 
   /**
@@ -357,14 +362,26 @@ export class ConsoleLineStore {
 
   // ==================== Private Helpers ====================
 
+  /**
+   * Convert database rows to result format
+   *
+   * Note: Calculates oldestSequence/newestSequence from actual sequence values,
+   * not array position, so it works regardless of row order (ASC or DESC).
+   */
   private rowsToResult(rows: ConsoleLineRow[]): ConsoleLinesResult {
     const lines = rows.map(row => this.rowToLine(row));
+
+    // Calculate oldest/newest from sequence numbers (not array position)
+    // This works regardless of whether rows are in ASC or DESC order
+    const sequences = rows.map(r => r.sequence);
+    const oldestSequence = sequences.length > 0 ? Math.min(...sequences) : 0;
+    const newestSequence = sequences.length > 0 ? Math.max(...sequences) : 0;
 
     return {
       lines,
       hasMore: rows.length > 0,  // Simplified - caller can check if limit reached
-      oldestSequence: rows[rows.length - 1]?.sequence ?? 0,
-      newestSequence: rows[0]?.sequence ?? 0,
+      oldestSequence,
+      newestSequence,
     };
   }
 

@@ -55,7 +55,7 @@ export interface ParsedConsoleLine {
   lineId: string;
   blockId: string;
   blockIndex: number;
-  type: 'output' | 'thinking' | 'tool_call' | 'tool_result';
+  type: 'user' | 'output' | 'thinking' | 'tool_call' | 'tool_result';
   content: string;
   timestamp: string;
   isStreaming: boolean;
@@ -82,12 +82,13 @@ export interface ParseStats {
  *
  * Examples:
  * - /Users/marlin/project → -Users-marlin-project
+ * - /Users/marlin/.acc-worktrees/foo → -Users-marlin--acc-worktrees-foo
  * - /tmp/test → -tmp-test
+ *
+ * Note: Claude SDK replaces both slashes (/) and dots (.) with dashes (-)
  */
 export function escapeProjectPath(projectPath: string): string {
-  return projectPath
-    .replace(/\//g, '-')
-    .replace(/^-/, ''); // Remove leading dash
+  return projectPath.replace(/[/.]/g, '-');
 }
 
 /**
@@ -155,7 +156,9 @@ export async function parseSessionFile(
         const { message } = event;
 
         // Each message can have multiple content blocks
-        message.content.forEach((block, blockIndex) => {
+        // Ensure content is an array before iterating
+        if (Array.isArray(message.content)) {
+          message.content.forEach((block, blockIndex) => {
           // Text block → output line
           if (block.type === 'text' && block.text) {
             lines.push({
@@ -217,10 +220,48 @@ export async function parseSessionFile(
             });
             stats.linesExtracted++;
           }
-        });
-      } else if (event.type === 'user') {
+          });
+        }
+      }
+      // User messages → prompt lines
+      else if (event.type === 'user' && event.message) {
         stats.userMessages++;
-        // User messages are not shown in console (only assistant output)
+        const { message } = event;
+
+        // Generate unique ID (fallback to uuid or timestamp if message.id is missing)
+        const uniqueId = message.id || event.uuid || event.timestamp;
+
+        // Extract text content from user message
+        // Content can be a string OR an array
+        if (typeof message.content === 'string') {
+          // Simple string content
+          lines.push({
+            lineId: `user-${uniqueId}-0`,
+            blockId: uniqueId,
+            blockIndex: 0,
+            type: 'user', // Match .jsonl event type
+            content: message.content,
+            timestamp: event.timestamp,
+            isStreaming: false,
+          });
+          stats.linesExtracted++;
+        } else if (Array.isArray(message.content)) {
+          // Array of content blocks
+          message.content.forEach((block, blockIndex) => {
+            if (block.type === 'text' && block.text) {
+              lines.push({
+                lineId: `user-${uniqueId}-${blockIndex}`,
+                blockId: uniqueId,
+                blockIndex,
+                type: 'user', // Match .jsonl event type
+                content: block.text,
+                timestamp: event.timestamp,
+                isStreaming: false,
+              });
+              stats.linesExtracted++;
+            }
+          });
+        }
       }
     } catch (err) {
       stats.errors++;
@@ -240,6 +281,103 @@ export async function parseSessionFile(
   });
 
   return { lines, stats };
+}
+
+/**
+ * Parse a session file into a formatted history string (T3 Code approach)
+ *
+ * This is the simple approach: parse .jsonl once, return complete formatted output.
+ * No database, no pagination, just a single string buffer.
+ *
+ * @param sessionFilePath - Absolute path to .jsonl file
+ * @returns Formatted history string ready to display in terminal
+ */
+export async function parseSessionToHistoryString(
+  sessionFilePath: string
+): Promise<string> {
+  const startTime = Date.now();
+  const lines: string[] = [];
+
+  // Check file exists
+  if (!fs.existsSync(sessionFilePath)) {
+    console.warn('[ClaudeSessionParser] Session file not found:', sessionFilePath);
+    return '';
+  }
+
+  // Read file line by line
+  const fileStream = fs.createReadStream(sessionFilePath);
+  const rl = readline.createInterface({
+    input: fileStream,
+    crlfDelay: Infinity,
+  });
+
+  for await (const line of rl) {
+    if (!line.trim()) continue;
+
+    try {
+      const event: ClaudeSessionEvent = JSON.parse(line);
+      const timestamp = new Date(event.timestamp).toLocaleTimeString();
+
+      // User messages → show as prompts with > prefix
+      if (event.type === 'user' && event.message) {
+        const { message } = event;
+
+        // Content can be a string OR an array
+        if (typeof message.content === 'string') {
+          // Simple string content
+          lines.push(`\x1b[90m[${timestamp}]\x1b[0m \x1b[36m>\x1b[0m ${message.content}`);
+        } else if (Array.isArray(message.content)) {
+          // Array of content blocks
+          message.content.forEach((block) => {
+            if (block.type === 'text' && block.text) {
+              // Format: [HH:MM:SS] > User prompt text
+              lines.push(`\x1b[90m[${timestamp}]\x1b[0m \x1b[36m>\x1b[0m ${block.text}`);
+            }
+          });
+        }
+      }
+      // Assistant messages → show output, thinking, tool calls
+      else if (event.type === 'assistant' && event.message) {
+        const { message } = event;
+
+        // Ensure content is an array before iterating
+        if (Array.isArray(message.content)) {
+          message.content.forEach((block) => {
+            // Text output
+            if (block.type === 'text' && block.text) {
+              lines.push(block.text);
+            }
+            // Thinking blocks
+            else if (block.type === 'thinking' && block.thinking) {
+              lines.push(`\x1b[90m[Thinking...]\x1b[0m`);
+              // Don't show full thinking content to keep history concise
+            }
+            // Tool use
+            else if (block.type === 'tool_use' && block.name) {
+              lines.push(`\x1b[90m[Using tool: ${block.name}]\x1b[0m`);
+            }
+            // Tool results are usually too verbose, skip them
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('[ClaudeSessionParser] Failed to parse line:', {
+        error: err instanceof Error ? err.message : String(err),
+        line: line.substring(0, 100),
+      });
+      // Continue parsing remaining lines
+    }
+  }
+
+  const parseTimeMs = Date.now() - startTime;
+  console.log('[ClaudeSessionParser] Parsed to history string:', {
+    file: path.basename(sessionFilePath),
+    lineCount: lines.length,
+    parseTimeMs,
+  });
+
+  // Join with newlines and return
+  return lines.join('\r\n');
 }
 
 /**
