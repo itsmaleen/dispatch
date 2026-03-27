@@ -1,0 +1,5 @@
+great now commit this fix as well
+
+---
+
+next let's update version to v0.1.2 everywhere
