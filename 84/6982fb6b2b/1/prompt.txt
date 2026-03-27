@@ -1,0 +1,13 @@
+how can I run something like claude --resume  but also list out data like the session ids?
+
+---
+
+how can I get a list WITH session id?
+
+---
+
+how can I ls -l with descending order of last updated/
+
+---
+
+command to get line count of a file
