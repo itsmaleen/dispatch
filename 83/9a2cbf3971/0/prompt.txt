@@ -1,0 +1,18 @@
+any way we could rename all the tags from v0.1 to v0.0. ? Is that something we can do after the fact?
+
+---
+
+yes please
+
+---
+
+let's just rename the tags and make sure it's 0.0.1 and upwards 
+no 0.0.0
+
+---
+
+yes
+
+---
+
+can you update the latest commit to 1) use the right latest version (from v0.1.2 to v0.0.3) in package.json and everywhere else 2) update the commit message to reflect this
