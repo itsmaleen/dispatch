@@ -3,7 +3,7 @@
   "checkpoint_id": "f5df676d931d",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 9,
+  "checkpoints_count": 10,
   "files_touched": [
     "packages/ui/electron/main.ts",
     "packages/ui/electron/shell-env.ts",
@@ -22,13 +22,19 @@
       "transcript": "/f5/df676d931d/1/full.jsonl",
       "content_hash": "/f5/df676d931d/1/content_hash.txt",
       "prompt": "/f5/df676d931d/1/prompt.txt"
+    },
+    {
+      "metadata": "/f5/df676d931d/2/metadata.json",
+      "transcript": "/f5/df676d931d/2/full.jsonl",
+      "content_hash": "/f5/df676d931d/2/content_hash.txt",
+      "prompt": "/f5/df676d931d/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 7059,
-    "cache_creation_tokens": 2025775,
-    "cache_read_tokens": 16575811,
-    "output_tokens": 47023,
-    "api_call_count": 211
+    "input_tokens": 17015,
+    "cache_creation_tokens": 11839828,
+    "cache_read_tokens": 121553796,
+    "output_tokens": 434941,
+    "api_call_count": 1372
   }
 }
