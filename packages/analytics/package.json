@@ -1,6 +1,6 @@
 {
   "name": "@merry/analytics",
-  "version": "0.1.1",
+  "version": "0.0.3",
   "description": "Anonymous telemetry for Merry",
   "type": "module",
   "main": "dist/index.js",

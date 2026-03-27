@@ -1,6 +1,6 @@
 {
   "name": "agent-command-center",
-  "version": "0.1.1",
+  "version": "0.0.3",
   "private": true,
   "description": "Orchestrate AI coding agents from a unified interface",
   "author": "Marlin & Molty",
