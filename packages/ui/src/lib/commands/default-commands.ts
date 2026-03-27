@@ -280,6 +280,8 @@ export function createDefaultCommands(): Command[] {
                         resume: true,
                         sessionId: session.sessionId,
                         projectPath: session.projectPath,
+                        worktreePath: session.worktreePath,
+                        worktreeBranch: session.worktreeBranch,
                       });
                     }
                   },
