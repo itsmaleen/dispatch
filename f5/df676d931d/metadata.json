@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "f5df676d931d",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/ui/electron/main.ts",
+    "packages/ui/electron/shell-env.ts",
+    "packages/ui/tsconfig.electron.json",
+    "scripts/sign-and-notarize-mac.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f5/df676d931d/0/metadata.json",
+      "transcript": "/f5/df676d931d/0/full.jsonl",
+      "content_hash": "/f5/df676d931d/0/content_hash.txt",
+      "prompt": "/f5/df676d931d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4050,
+    "cache_creation_tokens": 1182748,
+    "cache_read_tokens": 9117541,
+    "output_tokens": 27280,
+    "api_call_count": 120
+  }
+}

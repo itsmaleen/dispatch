@@ -1,0 +1,9 @@
+still getting an error
+@acc/ui:dev: dev:electron | App threw an error during load
+@acc/ui:dev: dev:electron | Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/Users/marlin/agent-command-center/packages/ui/dist-electron/shell-env' imported from /Users/marlin/agent-command-center/packages/ui/dist-electron/main.js           @acc/ui:dev: dev:electron |     at finalizeResolution (node:internal/modules/esm/resolve:279:11)                                                                  @acc/ui:dev: dev:electron |     at moduleResolve (node:internal/modules/esm/resolve:877:10)                                                                       @acc/ui:dev: dev:electron |     at defaultResolve (node:internal/modules/esm/resolve:1003:11)                                                                     @acc/ui:dev: dev:electron |     at #cachedDefaultResolve (node:internal/modules/esm/loader:719:20)
+@acc/ui:dev: dev:electron |     at #resolveAndMaybeBlockOnLoaderThread (node:internal/modules/esm/loader:736:38)
+@acc/ui:dev: dev:electron |     at ModuleLoader.resolveSync (node:internal/modules/esm/loader:765:52)
+@acc/ui:dev: dev:electron |     at #resolve (node:internal/modules/esm/loader:701:17)
+@acc/ui:dev: dev:electron |     at ModuleLoader.getOrCreateModuleJob (node:internal/modules/esm/loader:621:35)
+@acc/ui:dev: dev:electron |     at ModuleJob.syncLink (node:internal/modules/esm/module_job:160:33)
+@acc/ui:dev: dev:electron |     at ModuleJob.link (node:internal/modules/esm/module_job:245:17)

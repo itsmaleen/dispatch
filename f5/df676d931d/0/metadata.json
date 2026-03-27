@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "f5df676d931d",
+  "session_id": "038dd56d-e970-4e89-b03f-7a170a53d1d2",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-27T19:44:53.097252Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/ui/electron/main.ts",
+    "packages/ui/electron/shell-env.ts",
+    "packages/ui/tsconfig.electron.json",
+    "scripts/sign-and-notarize-mac.sh"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b11907e510f8",
+  "token_usage": {
+    "input_tokens": 4050,
+    "cache_creation_tokens": 1182748,
+    "cache_read_tokens": 9117541,
+    "output_tokens": 27280,
+    "api_call_count": 120
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-27T19:44:52.691997Z",
+    "agent_lines": 143,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 143,
+    "agent_percentage": 100
+  }
+}
