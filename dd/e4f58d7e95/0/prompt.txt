@@ -1,0 +1,1 @@
+on initial load (auto reload) of an agent console, seeing the right worktree branch / cwd of a console but not when opened from command palette search agent console
