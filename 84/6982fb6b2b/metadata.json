@@ -3,7 +3,7 @@
   "checkpoint_id": "846982fb6b2b",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 53,
+  "checkpoints_count": 6,
   "files_touched": [
     ".plans/console-history-ordering-issue.md",
     ".plans/console-history-t3code-approach.md",

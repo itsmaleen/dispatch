@@ -3,17 +3,14 @@
   "checkpoint_id": "846982fb6b2b",
   "session_id": "6bafbeea-d7b3-4c07-988b-2d438e21bed3",
   "strategy": "manual-commit",
-  "created_at": "2026-03-27T07:11:03.635098Z",
+  "created_at": "2026-03-27T07:11:37.265927Z",
   "branch": "main",
-  "checkpoints_count": 48,
+  "checkpoints_count": 1,
   "files_touched": [
-    "packages/contracts/src/agent-console.ts",
-    "packages/server/src/adapters/session-manager.ts",
-    "packages/server/src/persistence/sqlite-store.ts",
-    "packages/server/src/server.ts",
-    "packages/server/src/services/claude-session-parser.ts",
-    "packages/server/src/services/console-line-store.ts",
-    "packages/ui/src/components/workspace/Workspace.tsx"
+    ".plans/console-history-ordering-issue.md",
+    ".plans/console-history-t3code-approach.md",
+    ".plans/worktree-detection-issues.md",
+    "packages/server/src/services/test-parser.ts"
   ],
   "agent": "Claude Code",
   "turn_id": "327b05771aa5",
@@ -28,12 +25,12 @@
     "turn_count": 93
   },
   "initial_attribution": {
-    "calculated_at": "2026-03-27T07:10:41.731524Z",
-    "agent_lines": 389,
-    "human_added": 29,
-    "human_modified": 215,
+    "calculated_at": "2026-03-27T07:11:16.240436Z",
+    "agent_lines": 1008,
+    "human_added": 0,
+    "human_modified": 0,
     "human_removed": 0,
-    "total_committed": 633,
-    "agent_percentage": 61.45339652448657
+    "total_committed": 1008,
+    "agent_percentage": 100
   }
 }
