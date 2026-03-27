@@ -16,6 +16,12 @@ import { spawn, type ChildProcess } from "child_process";
 import * as crypto from "crypto";
 import * as os from "os";
 import { fileURLToPath } from "url";
+import { syncShellEnvironment } from "./shell-env.js";
+
+// CRITICAL: Sync shell environment BEFORE any other code
+// This populates process.env.PATH with the user's full shell PATH,
+// which is needed to find binaries like 'claude' when launched from Spotlight/Finder
+syncShellEnvironment();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

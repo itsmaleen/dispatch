@@ -32,8 +32,8 @@ npx turbo build --force
 echo "🔐 Signing and notarizing DMG..."
 cd packages/ui && bun run build:electron:sign
 
-# Get version from package.json
-VERSION=$(node -p "require('./packages/ui/package.json').version")
+# Get version from package.json (we're already in packages/ui directory)
+VERSION=$(node -p "require('./package.json').version")
 ARCH=$(uname -m)
 if [ "$ARCH" = "x86_64" ]; then
     ARCH="x64"

@@ -10,6 +10,6 @@
     "declaration": false,
     "esModuleInterop": true
   },
-  "include": ["electron/main.ts"],
+  "include": ["electron/main.ts", "electron/shell-env.ts"],
   "exclude": ["node_modules", "electron/preload.ts"]
 }
